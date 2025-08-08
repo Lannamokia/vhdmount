@@ -129,39 +129,6 @@ namespace VHDMounter
         }
     }
 
-    // 服务安装器
-    [System.ComponentModel.RunInstaller(true)]
-    public partial class VHDMounterServiceInstaller : System.Configuration.Install.Installer
-    {
-        private ServiceProcessInstaller serviceProcessInstaller;
-        private ServiceInstaller serviceInstaller;
-
-        public VHDMounterServiceInstaller()
-        {
-            InitializeComponent();
-        }
-
-        private void InitializeComponent()
-        {
-            serviceProcessInstaller = new ServiceProcessInstaller();
-            serviceInstaller = new ServiceInstaller();
-
-            // 服务进程安装器设置
-            serviceProcessInstaller.Account = ServiceAccount.LocalSystem;
-            serviceProcessInstaller.Username = null;
-            serviceProcessInstaller.Password = null;
-
-            // 服务安装器设置
-            serviceInstaller.ServiceName = "VHDMounterService";
-            serviceInstaller.DisplayName = "VHD Mounter Service";
-            serviceInstaller.Description = "VHD文件自动挂载服务（用户登录时启动）";
-            serviceInstaller.StartType = ServiceStartMode.Manual;
-
-            // 添加安装器
-            Installers.AddRange(new System.Configuration.Install.Installer[] {
-                serviceProcessInstaller,
-                serviceInstaller
-            });
-        }
-    }
+    // 注意：服务安装现在通过 install_service.bat 和 sc 命令进行管理
+    // 不再需要 System.Configuration.Install.Installer
 }
