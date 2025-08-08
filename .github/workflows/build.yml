@@ -61,12 +61,19 @@ jobs:
       run: dotnet build VHDMounter.csproj --configuration ${{ env.BUILD_CONFIGURATION }} --no-restore --verbosity minimal
       
     - name: Test
-      run: dotnet test VHDMounter.csproj --configuration ${{ env.BUILD_CONFIGURATION }} --no-build --verbosity normal --logger trx --results-directory TestResults
+      run: |
+        if (Test-Path "*Tests*.csproj") {
+          dotnet test VHDMounter.csproj --configuration ${{ env.BUILD_CONFIGURATION }} --no-build --verbosity normal --logger trx --results-directory TestResults
+        } else {
+          Write-Host "No test projects found, skipping tests"
+          New-Item -ItemType Directory -Force -Path TestResults
+          Write-Host "Created empty TestResults directory"
+        }
       continue-on-error: true
       
     - name: Publish Test Results
       uses: dorny/test-reporter@v1
-      if: always()
+      if: always() && hashFiles('TestResults/*.trx') != ''
       with:
         name: Test Results
         path: TestResults/*.trx
