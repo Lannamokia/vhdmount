@@ -55,13 +55,13 @@ jobs:
           ${{ runner.os }}-nuget-
         
     - name: Restore dependencies
-      run: dotnet restore --verbosity minimal
+      run: dotnet restore VHDMounter.csproj --verbosity minimal
       
     - name: Build
-      run: dotnet build --configuration ${{ env.BUILD_CONFIGURATION }} --no-restore --verbosity minimal
+      run: dotnet build VHDMounter.csproj --configuration ${{ env.BUILD_CONFIGURATION }} --no-restore --verbosity minimal
       
     - name: Test
-      run: dotnet test --configuration ${{ env.BUILD_CONFIGURATION }} --no-build --verbosity normal --logger trx --results-directory TestResults
+      run: dotnet test VHDMounter.csproj --configuration ${{ env.BUILD_CONFIGURATION }} --no-build --verbosity normal --logger trx --results-directory TestResults
       continue-on-error: true
       
     - name: Publish Test Results
