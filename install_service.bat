@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 echo ========================================
 echo VHD Mounter Windows服务安装工具
 echo ========================================
@@ -38,14 +38,13 @@ exit /b 1
 
 :install
 echo.
-echo 正在安装VHD Mounter服务（用户登录时启动）...
-sc create VHDMounterService binPath= "%~dp0VHDMounter.exe --service" start= demand DisplayName= "VHD Mounter Service"
+echo 正在安装VHD Mounter服务（开机自动启动）...
+sc create VHDMounterService binPath= "%~dp0VHDMounter.exe --service" start= auto DisplayName= "VHD Mounter Service"
 if %errorLevel% == 0 (
     echo 服务安装成功！
-    sc description VHDMounterService "VHD文件自动挂载服务（用户登录时启动）"
+    sc description VHDMounterService "VHD文件自动挂载服务（开机自动启动，服务拉起窗口）"
     sc failure VHDMounterService reset= 86400 actions= restart/60000/restart/60000/restart/60000
-    reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v "VHDMounterServiceStarter" /t REG_SZ /d "cmd /c sc start VHDMounterService" /f
-    echo 服务配置完成！已设置用户登录时自动启动！
+    echo 服务配置完成！已设置开机自动启动服务，服务将自动拉起窗口！
     echo.
     set /p startNow=是否立即启动服务？ (Y/N): 
     if /i "%startNow%"=="Y" (
@@ -62,9 +61,8 @@ echo.
 echo 正在卸载VHD Mounter服务...
 sc stop VHDMounterService
 sc delete VHDMounterService
-reg delete "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v "VHDMounterServiceStarter" /f >nul 2>&1
 if %errorLevel% == 0 (
-    echo 服务卸载成功！已移除用户登录启动项！
+    echo 服务卸载成功！
 ) else (
     echo 服务卸载完成！
 )

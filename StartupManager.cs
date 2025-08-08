@@ -12,9 +12,7 @@ namespace VHDMounter
     {
         private const string SERVICE_NAME = "VHDMounterService";
         private const string SERVICE_DISPLAY_NAME = "VHD Mounter Service";
-        private const string SERVICE_DESCRIPTION = "VHD文件自动挂载服务";
-        private const string REGISTRY_RUN_KEY = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
-        private const string REGISTRY_ENTRY_NAME = "VHDMounterServiceStarter";
+        private const string SERVICE_DESCRIPTION = "VHD文件自动挂载服务（开机自动启动，服务拉起窗口）";
 
         public static bool IsRegisteredForStartup()
         {
@@ -32,17 +30,7 @@ namespace VHDMounter
                     }
                 }
                 
-                // 检查用户登录启动项是否存在
-                bool loginStartupExists = false;
-                using (var key = Registry.CurrentUser.OpenSubKey(REGISTRY_RUN_KEY, false))
-                {
-                    if (key != null)
-                    {
-                        loginStartupExists = key.GetValue(REGISTRY_ENTRY_NAME) != null;
-                    }
-                }
-                
-                return serviceExists && loginStartupExists;
+                return serviceExists;
             }
             catch
             {
@@ -64,8 +52,8 @@ namespace VHDMounter
                     exePath = exePath.Replace(".dll", ".exe");
                 }
 
-                // 创建Windows服务（用户登录时启动）
-                var createCommand = $"sc create {SERVICE_NAME} binPath= \"{exePath} --service\" start= demand DisplayName= \"{SERVICE_DISPLAY_NAME}\"";
+                // 创建Windows服务（开机自动启动）
+                var createCommand = $"sc create {SERVICE_NAME} binPath= \"{exePath} --service\" start= auto DisplayName= \"{SERVICE_DISPLAY_NAME}\"";
                 var createResult = RunCommand(createCommand);
                 
                 if (createResult)
@@ -78,8 +66,7 @@ namespace VHDMounter
                     var failureCommand = $"sc failure {SERVICE_NAME} reset= 86400 actions= restart/60000/restart/60000/restart/60000";
                     RunCommand(failureCommand);
                     
-                    // 添加用户登录时启动服务的注册表项
-                    RegisterUserLoginStartup();
+
                     
                     return true;
                 }
@@ -105,8 +92,7 @@ namespace VHDMounter
                 var deleteCommand = $"sc delete {SERVICE_NAME}";
                 var deleteResult = RunCommand(deleteCommand);
                 
-                // 移除用户登录启动项
-                UnregisterUserLoginStartup();
+
                 
                 return deleteResult;
             }
@@ -173,50 +159,6 @@ namespace VHDMounter
             }
         }
         
-        private static bool RegisterUserLoginStartup()
-        {
-            try
-            {
-                // 创建启动服务的命令
-                var startServiceCommand = $"sc start {SERVICE_NAME}";
-                
-                using (var key = Registry.CurrentUser.OpenSubKey(REGISTRY_RUN_KEY, true))
-                {
-                    if (key != null)
-                    {
-                        // 注册用户登录时启动服务的命令
-                        key.SetValue(REGISTRY_ENTRY_NAME, $"cmd /c {startServiceCommand}");
-                        return true;
-                    }
-                }
-                return false;
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"注册用户登录启动失败: {ex.Message}");
-                return false;
-            }
-        }
-        
-        private static bool UnregisterUserLoginStartup()
-        {
-            try
-            {
-                using (var key = Registry.CurrentUser.OpenSubKey(REGISTRY_RUN_KEY, true))
-                {
-                    if (key != null)
-                    {
-                        key.DeleteValue(REGISTRY_ENTRY_NAME, false);
-                        return true;
-                    }
-                }
-                return false;
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"移除用户登录启动失败: {ex.Message}");
-                return false;
-            }
-        }
+
     }
 }

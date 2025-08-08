@@ -65,6 +65,9 @@ namespace VHDMounter
         {
             try
             {
+                // 启动WPF窗口应用程序
+                StartWpfApplication();
+                
                 // 服务启动延迟10秒
                 await Task.Delay(10000, cancellationToken);
                 
@@ -121,6 +124,37 @@ namespace VHDMounter
             catch (Exception ex)
             {
                 EventLog.WriteEntry($"VHD Mounter服务运行时发生错误: {ex.Message}", EventLogEntryType.Error);
+            }
+        }
+
+
+
+        private void StartWpfApplication()
+        {
+            try
+            {
+                // 获取当前可执行文件路径
+                string exePath = System.Reflection.Assembly.GetExecutingAssembly().Location;
+                if (exePath.EndsWith(".dll"))
+                {
+                    exePath = exePath.Replace(".dll", ".exe");
+                }
+
+                // 启动WPF应用程序（不带--service参数）
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = exePath,
+                    UseShellExecute = true,
+                    CreateNoWindow = false,
+                    WindowStyle = ProcessWindowStyle.Normal
+                };
+
+                Process.Start(startInfo);
+                EventLog.WriteEntry("已启动WPF窗口应用程序", EventLogEntryType.Information);
+            }
+            catch (Exception ex)
+            {
+                EventLog.WriteEntry($"启动WPF应用程序失败: {ex.Message}", EventLogEntryType.Warning);
             }
         }
 

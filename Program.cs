@@ -11,7 +11,7 @@ namespace VHDMounter
         static void Main(string[] args)
         {
             // 检查是否作为Windows服务运行
-            if (args.Contains("--service") || Environment.UserInteractive == false)
+            if (args.Contains("--service"))
             {
                 // 作为Windows服务运行
                 ServiceBase[] ServicesToRun;
