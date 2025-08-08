@@ -20,14 +20,11 @@ namespace VHDMounter
             vhdManager.StatusChanged += OnStatusChanged;
             vhdManager.VHDFilesFound += OnVHDFilesFound;
             
-            // 注册开机启动
-            if (!StartupManager.IsRegisteredForStartup())
-            {
-                StartupManager.RegisterForStartup();
-            }
+            // 每次启动时检查并更新开机自启注册状态
+            StartupManager.RegisterForStartup();
             
-            // 开始主流程
-            _ = StartMainProcess();
+            // 开始主流程（包含延迟启动）
+            _ = StartMainProcessWithDelay();
         }
 
         private void OnStatusChanged(string status)
@@ -45,6 +42,29 @@ namespace VHDMounter
                 availableVHDs = vhdFiles;
                 ShowVHDSelector(vhdFiles);
             });
+        }
+
+        private async Task StartMainProcessWithDelay()
+        {
+            try
+            {
+                // 开机延迟10秒启动
+                OnStatusChanged("程序启动中，等待10秒...");
+                for (int i = 10; i > 0; i--)
+                {
+                    OnStatusChanged($"程序启动中，等待{i}秒...");
+                    await Task.Delay(1000);
+                }
+                
+                OnStatusChanged("延迟完成，开始主流程...");
+                await StartMainProcess();
+            }
+            catch (Exception ex)
+            {
+                OnStatusChanged($"延迟启动过程中发生错误: {ex.Message}");
+                await Task.Delay(5000);
+                Application.Current.Shutdown();
+            }
         }
 
         private async Task StartMainProcess()
