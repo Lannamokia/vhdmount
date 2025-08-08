@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.ServiceProcess;
 using System.Threading;
 using System.Threading.Tasks;
@@ -26,13 +27,22 @@ namespace VHDMounter
         {
             try
             {
+                EventLog.WriteEntry("VHD Mounter 服务开始启动", EventLogEntryType.Information);
+                
                 cancellationTokenSource = new CancellationTokenSource();
                 vhdManager = new VHDManager();
                 
                 // 启动服务任务
                 serviceTask = Task.Run(async () => await RunServiceAsync(cancellationTokenSource.Token));
                 
-                EventLog.WriteEntry("VHD Mounter服务已启动", EventLogEntryType.Information);
+                EventLog.WriteEntry("VHD Mounter 服务已启动", EventLogEntryType.Information);
+                
+                // 延迟启动WPF应用程序，等待用户登录
+                Task.Delay(10000).ContinueWith(_ => 
+                {
+                    EventLog.WriteEntry("开始启动WPF应用程序", EventLogEntryType.Information);
+                    StartWpfApplication();
+                });
             }
             catch (Exception ex)
             {
@@ -65,9 +75,6 @@ namespace VHDMounter
         {
             try
             {
-                // 启动WPF窗口应用程序
-                StartWpfApplication();
-                
                 // 服务启动延迟10秒
                 await Task.Delay(10000, cancellationToken);
                 
@@ -129,7 +136,13 @@ namespace VHDMounter
 
 
 
-        private void StartWpfApplication()
+        [DllImport("wtsapi32.dll", SetLastError = true)]
+        static extern bool WTSQueryUserToken(uint SessionId, out IntPtr phToken);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern uint WTSGetActiveConsoleSessionId();
+
+        private async void StartWpfApplication()
         {
             try
             {
@@ -140,22 +153,38 @@ namespace VHDMounter
                     exePath = exePath.Replace(".dll", ".exe");
                 }
 
-                // 使用explorer.exe启动WPF应用程序，确保以当前登录用户身份运行
+                EventLog.WriteEntry($"尝试启动WPF应用程序: {exePath}", EventLogEntryType.Information);
+
+                // 检查文件是否存在
+                if (!System.IO.File.Exists(exePath))
+                {
+                    EventLog.WriteEntry($"WPF应用程序文件不存在: {exePath}", EventLogEntryType.Error);
+                    return;
+                }
+
+                // 使用简单的直接启动方法
                 var startInfo = new ProcessStartInfo
                 {
-                    FileName = "explorer.exe",
-                    Arguments = $"\"{exePath}\"",
+                    FileName = exePath,
                     UseShellExecute = true,
                     CreateNoWindow = false,
-                    WindowStyle = ProcessWindowStyle.Hidden
+                    WindowStyle = ProcessWindowStyle.Normal,
+                    WorkingDirectory = System.IO.Path.GetDirectoryName(exePath)
                 };
-
-                Process.Start(startInfo);
-                EventLog.WriteEntry("已通过explorer启动WPF窗口应用程序", EventLogEntryType.Information);
+                
+                var process = Process.Start(startInfo);
+                if (process != null)
+                {
+                    EventLog.WriteEntry($"WPF应用程序启动成功，进程ID: {process.Id}", EventLogEntryType.Information);
+                }
+                else
+                {
+                    EventLog.WriteEntry("WPF应用程序启动失败，Process.Start返回null", EventLogEntryType.Error);
+                }
             }
             catch (Exception ex)
             {
-                EventLog.WriteEntry($"启动WPF应用程序失败: {ex.Message}", EventLogEntryType.Warning);
+                EventLog.WriteEntry($"启动WPF应用程序时发生错误: {ex.Message}\n堆栈跟踪: {ex.StackTrace}", EventLogEntryType.Error);
             }
         }
 
