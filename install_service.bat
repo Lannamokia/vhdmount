@@ -1,30 +1,30 @@
 @echo off
 echo ========================================
-echo VHD Mounter Windows����װ����
+echo VHD Mounter Windows服务安装脚本
 echo ========================================
 echo.
 
-:: ������ԱȨ��
+:: 检查管理员权限
 net session >nul 2>&1
 if %errorLevel% == 0 (
-    echo ��⵽����ԱȨ�ޣ�����ִ��...
+    echo 检测到管理员权限，继续执行...
 ) else (
-    echo ������Ҫ����ԱȨ�޲��ܰ�װWindows����
-    echo ���Ҽ�������������ļ���ѡ��"�Թ���Ա��������"
+    echo 此脚本需要管理员权限才能安装Windows服务
+    echo 请右键点击此批处理文件，选择"以管理员身份运行"
     pause
     exit /b 1
 )
 
 echo.
-echo ѡ�������
-echo 1. ��װVHD Mounter����
-echo 2. ж��VHD Mounter����
-echo 3. ����VHD Mounter����
-echo 4. ֹͣVHD Mounter����
-echo 5. �鿴����״̬
-echo 6. �˳�
+echo 选择操作：
+echo 1. 安装VHD Mounter服务
+echo 2. 卸载VHD Mounter服务
+echo 3. 启动VHD Mounter服务
+echo 4. 停止VHD Mounter服务
+echo 5. 查看服务状态
+echo 6. 退出
 echo.
-set /p choice=������ѡ�� (1-6): 
+set /p choice=请输入选择 (1-6): 
 
 if "%choice%"=="1" goto install
 if "%choice%"=="2" goto uninstall
@@ -32,77 +32,76 @@ if "%choice%"=="3" goto start
 if "%choice%"=="4" goto stop
 if "%choice%"=="5" goto status
 if "%choice%"=="6" goto exit
-echo ��Чѡ�����������нű�
+echo 无效选择，请重新运行脚本
 pause
 exit /b 1
 
 :install
 echo.
-echo ���ڰ�װVHD Mounter���񣨿����Զ�������...
+echo 正在安装VHD Mounter服务（支持自动启动桌面应用）...
 sc create VHDMounterService binPath= "%~dp0VHDMounter.exe --service" start= auto DisplayName= "VHD Mounter Service" type= own
 if %errorLevel% == 0 (
-    echo ����װ�ɹ���
-    sc description VHDMounterService "VHD�ļ��Զ����ط��񣨿����Զ��������������𴰿ڣ�"
+    echo 服务安装成功！
+    sc description VHDMounterService "VHD文件自动挂载服务（支持自动启动桌面应用程序窗口）"
     sc failure VHDMounterService reset= 86400 actions= restart/60000/restart/60000/restart/60000
-    echo ����������ɣ������ÿ����Զ��������񣬷����Զ����𴰿ڣ�
-    echo ���������������Ի�����Ȩ��...
+    echo 服务配置完成！现在可以自动启动桌面应用程序了。
     echo.
-    set /p startNow=�Ƿ������������� (Y/N): 
+    set /p startNow=是否立即启动服务？ (Y/N): 
     if /i "%startNow%"=="Y" (
         sc start VHDMounterService
-        echo ����������ɣ�
+        echo 服务启动完成！
     )
 ) else (
-    echo ����װʧ�ܣ�
+    echo 服务安装失败！
 )
 goto end
 
 :uninstall
 echo.
-echo ����ж��VHD Mounter����...
+echo 正在卸载VHD Mounter服务...
 sc stop VHDMounterService
 sc delete VHDMounterService
 if %errorLevel% == 0 (
-    echo ����ж�سɹ���
+    echo 服务卸载成功！
 ) else (
-    echo ����ж����ɣ�
+    echo 服务卸载完成！
 )
 goto end
 
 :start
 echo.
-echo ��������VHD Mounter����...
+echo 正在启动VHD Mounter服务...
 sc start VHDMounterService
 if %errorLevel% == 0 (
-    echo ���������ɹ���
+    echo 服务启动成功！
 ) else (
-    echo ��������ʧ�ܣ�
+    echo 服务启动失败！
 )
 goto end
 
 :stop
 echo.
-echo ����ֹͣVHD Mounter����...
+echo 正在停止VHD Mounter服务...
 sc stop VHDMounterService
 if %errorLevel% == 0 (
-    echo ����ֹͣ�ɹ���
+    echo 服务停止成功！
 ) else (
-    echo ����ֹͣʧ�ܣ�
+    echo 服务停止失败！
 )
 goto end
 
 :status
 echo.
-echo VHD Mounter����״̬��
+echo VHD Mounter服务状态：
 sc query VHDMounterService
 goto end
 
 :exit
-echo �˳���װ����
+echo 退出安装脚本
 exit /b 0
 
 :end
 echo.
-echo ������ɣ�
+echo 操作完成！
 pause
 exit /b 0
