@@ -18,23 +18,19 @@ namespace VHDMounter
         public MainWindow()
         {
             InitializeComponent();
+            
+            // 初始化VHD管理器
             vhdManager = new VHDManager();
             vhdManager.StatusChanged += OnStatusChanged;
             vhdManager.VHDFilesFound += OnVHDFilesFound;
-            
-            // 检查管理员权限
-            if (!IsRunningAsAdministrator())
-            {
-                OnStatusChanged("检测到需要管理员权限，正在请求提权...");
-                RequestAdministratorPrivileges();
-                return;
-            }
             
             // 检查是否已安装Windows服务
             if (!StartupManager.IsRegisteredForStartup())
             {
                 OnStatusChanged("提示：如需开机自启，请以管理员权限运行install_service.bat安装Windows服务");
             }
+            
+            OnStatusChanged("应用程序已启动，开始初始化...");
             
             // 开始主流程（包含延迟启动）
             _ = StartMainProcessWithDelay();
@@ -150,6 +146,14 @@ namespace VHDMounter
                     VHDSelector.Visibility = Visibility.Collapsed;
                     ProgressBar.Visibility = Visibility.Visible;
                 });
+
+                // 检查管理员权限，VHD挂载需要管理员权限
+                if (!IsRunningAsAdministrator())
+                {
+                    OnStatusChanged("VHD挂载需要管理员权限，正在请求提权...");
+                    RequestAdministratorPrivileges();
+                    return;
+                }
 
                 // 挂载VHD
                 bool mounted = await vhdManager.MountVHD(vhdPath);
