@@ -177,20 +177,59 @@ exit";
             StatusChanged?.Invoke("正在搜索package文件夹...");
             
             if (!Directory.Exists(TARGET_DRIVE))
+            {
+                StatusChanged?.Invoke($"目标驱动器 {TARGET_DRIVE} 不存在");
                 return null;
+            }
 
             return await Task.Run(() =>
             {
                 try
                 {
-                    var directories = Directory.GetDirectories(TARGET_DRIVE, "*", SearchOption.AllDirectories)
-                        .Where(d => Path.GetFileName(d).ToLower() == "package")
-                        .FirstOrDefault();
+                    StatusChanged?.Invoke($"开始在 {TARGET_DRIVE} 中搜索package文件夹...");
                     
-                    return directories;
+                    // 首先检查根目录
+                    var rootDirs = Directory.GetDirectories(TARGET_DRIVE)
+                        .Select(d => new { Path = d, Name = Path.GetFileName(d) })
+                        .ToList();
+                    
+                    StatusChanged?.Invoke($"根目录下找到 {rootDirs.Count} 个文件夹:");
+                    foreach (var dir in rootDirs)
+                    {
+                        StatusChanged?.Invoke($"  - {dir.Name}");
+                        Debug.WriteLine($"根目录文件夹: {dir.Name}");
+                    }
+                    
+                    // 检查根目录中是否有package文件夹（不区分大小写）
+                    var packageInRoot = rootDirs.FirstOrDefault(d => 
+                        string.Equals(d.Name, "package", StringComparison.OrdinalIgnoreCase));
+                    
+                    if (packageInRoot != null)
+                    {
+                        StatusChanged?.Invoke($"在根目录找到package文件夹: {packageInRoot.Path}");
+                        return packageInRoot.Path;
+                    }
+                    
+                    // 如果根目录没有，递归搜索所有子目录
+                    StatusChanged?.Invoke("根目录未找到package文件夹，开始递归搜索...");
+                    
+                    var allDirectories = Directory.GetDirectories(TARGET_DRIVE, "*", SearchOption.AllDirectories)
+                        .Where(d => string.Equals(Path.GetFileName(d), "package", StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                    
+                    StatusChanged?.Invoke($"递归搜索找到 {allDirectories.Count} 个package文件夹");
+                    foreach (var dir in allDirectories)
+                    {
+                        StatusChanged?.Invoke($"  找到: {dir}");
+                        Debug.WriteLine($"找到package文件夹: {dir}");
+                    }
+                    
+                    return allDirectories.FirstOrDefault();
                 }
-                catch
+                catch (Exception ex)
                 {
+                    StatusChanged?.Invoke($"搜索package文件夹时出错: {ex.Message}");
+                    Debug.WriteLine($"FindPackageFolder错误: {ex}");
                     return null;
                 }
             });
