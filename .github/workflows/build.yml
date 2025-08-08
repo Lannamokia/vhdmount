@@ -7,72 +7,150 @@ on:
     branches: [ main, master ]
   release:
     types: [ published ]
+  workflow_dispatch:
+
+env:
+  DOTNET_VERSION: '6.0.x'
+  BUILD_CONFIGURATION: 'Release'
 
 jobs:
   build:
     runs-on: windows-latest
     
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
       
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: '6.0.x'
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+        
+    - name: Get version
+      id: version
+      run: |
+        $version = "1.0.0"
+        if ($env:GITHUB_REF -like "refs/tags/*") {
+          $version = $env:GITHUB_REF -replace "refs/tags/v?", ""
+        } elseif ($env:GITHUB_EVENT_NAME -eq "pull_request") {
+          $version = "$version-pr${{ github.event.number }}"
+        } else {
+          $shortSha = $env:GITHUB_SHA.Substring(0, 7)
+          $version = "$version-$shortSha"
+        }
+        echo "version=$version" >> $env:GITHUB_OUTPUT
+        echo "Version: $version"
+        
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
         
     - name: Restore dependencies
-      run: dotnet restore
+      run: dotnet restore --verbosity minimal
       
     - name: Build
-      run: dotnet build --configuration Release --no-restore
+      run: dotnet build --configuration ${{ env.BUILD_CONFIGURATION }} --no-restore --verbosity minimal
       
     - name: Test
-      run: dotnet test --no-build --verbosity normal
+      run: dotnet test --configuration ${{ env.BUILD_CONFIGURATION }} --no-build --verbosity normal --logger trx --results-directory TestResults
       continue-on-error: true
       
+    - name: Publish Test Results
+      uses: dorny/test-reporter@v1
+      if: always()
+      with:
+        name: Test Results
+        path: TestResults/*.trx
+        reporter: dotnet-trx
+        fail-on-error: false
+      
     - name: Publish Windows x64
-      run: dotnet publish --configuration Release --runtime win-x64 --self-contained true --output ./publish/win-x64
+      run: |
+        dotnet publish VHDMounter.csproj `
+          --configuration ${{ env.BUILD_CONFIGURATION }} `
+          --runtime win-x64 `
+          --self-contained true `
+          --output ./publish/win-x64 `
+          -p:PublishSingleFile=true `
+          -p:IncludeNativeLibrariesForSelfExtract=true `
+          -p:Version=${{ steps.version.outputs.version }}
       
     - name: Publish Windows x86
-      run: dotnet publish --configuration Release --runtime win-x86 --self-contained true --output ./publish/win-x86
+      run: |
+        dotnet publish VHDMounter.csproj `
+          --configuration ${{ env.BUILD_CONFIGURATION }} `
+          --runtime win-x86 `
+          --self-contained true `
+          --output ./publish/win-x86 `
+          -p:PublishSingleFile=true `
+          -p:IncludeNativeLibrariesForSelfExtract=true `
+          -p:Version=${{ steps.version.outputs.version }}
       
     - name: Upload Windows x64 artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: VHDMounter-win-x64
+        name: VHDMounter-win-x64-${{ steps.version.outputs.version }}
         path: ./publish/win-x64/
+        retention-days: 30
         
     - name: Upload Windows x86 artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: VHDMounter-win-x86
+        name: VHDMounter-win-x86-${{ steps.version.outputs.version }}
         path: ./publish/win-x86/
+        retention-days: 30
         
     - name: Create Release Assets
       if: github.event_name == 'release'
       run: |
-        Compress-Archive -Path ./publish/win-x64/* -DestinationPath VHDMounter-win-x64.zip
-        Compress-Archive -Path ./publish/win-x86/* -DestinationPath VHDMounter-win-x86.zip
+        $version = "${{ steps.version.outputs.version }}"
+        Compress-Archive -Path ./publish/win-x64/* -DestinationPath "VHDMounter-v$version-win-x64.zip" -Force
+        Compress-Archive -Path ./publish/win-x86/* -DestinationPath "VHDMounter-v$version-win-x86.zip" -Force
+        
+        # Create checksums
+        $x64Hash = (Get-FileHash "VHDMounter-v$version-win-x64.zip" -Algorithm SHA256).Hash
+        $x86Hash = (Get-FileHash "VHDMounter-v$version-win-x86.zip" -Algorithm SHA256).Hash
+        
+        @"
+        # VHD Mounter v$version - Checksums
+        
+        ## SHA256 Checksums
+        
+        - **VHDMounter-v$version-win-x64.zip**: `$x64Hash`
+        - **VHDMounter-v$version-win-x86.zip**: `$x86Hash`
+        
+        ## Installation
+        
+        1. Download the appropriate version for your system (x64 or x86)
+        2. Extract the ZIP file
+        3. Run `run_as_admin.bat` to start the application with administrator privileges
+        
+        ## Requirements
+        
+        - Windows 10/11
+        - Administrator privileges (required for VHD mounting)
+        - .NET 6.0 Runtime (included in self-contained builds)
+        "@ | Out-File -FilePath "CHECKSUMS.md" -Encoding UTF8
         
     - name: Upload Release Assets
       if: github.event_name == 'release'
-      uses: actions/upload-release-asset@v1
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          VHDMounter-v${{ steps.version.outputs.version }}-win-x64.zip
+          VHDMounter-v${{ steps.version.outputs.version }}-win-x86.zip
+          CHECKSUMS.md
+        generate_release_notes: true
+        draft: false
+        prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ github.event.release.upload_url }}
-        asset_path: ./VHDMounter-win-x64.zip
-        asset_name: VHDMounter-win-x64.zip
-        asset_content_type: application/zip
-        
-    - name: Upload Release Assets x86
-      if: github.event_name == 'release'
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ github.event.release.upload_url }}
-        asset_path: ./VHDMounter-win-x86.zip
-        asset_name: VHDMounter-win-x86.zip
-        asset_content_type: application/zip

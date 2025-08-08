@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net6.0</TargetFramework>
+    <StartupObject>VHDMounter.DebugProgram</StartupObject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="VHDDebugger.cs" />
+    <Compile Include="DebugProgram.cs" />
+  </ItemGroup>
+
+</Project>

@@ -53,13 +53,23 @@ namespace VHDMounter
             {
                 isProcessing = true;
                 
+                // 调试：测试特定文件
+                var testFile = @"C:\SDEZ_1.56.00_20250317134137.vhd";
+                if (System.IO.File.Exists(testFile))
+                {
+                    bool isValid = vhdManager.IsVHDFileValid(testFile);
+                    OnStatusChanged($"测试文件 {testFile}: {(isValid ? "符合条件" : "不符合条件")}");
+                    await Task.Delay(2000);
+                }
+                
                 // 扫描VHD文件
                 var vhdFiles = await vhdManager.ScanForVHDFiles();
                 
                 if (vhdFiles.Count == 0)
                 {
                     OnStatusChanged("未找到符合条件的VHD文件");
-                    await Task.Delay(3000);
+                    OnStatusChanged("请检查文件名是否包含SDEZ、SDHD或SDDT关键词");
+                    await Task.Delay(5000);
                     Application.Current.Shutdown();
                     return;
                 }

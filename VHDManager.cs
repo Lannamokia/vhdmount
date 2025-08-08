@@ -16,6 +16,34 @@ namespace VHDMounter
 
         public event Action<string> StatusChanged;
         public event Action<List<string>> VHDFilesFound;
+        
+        // 调试方法：检查特定文件是否符合条件
+        public bool IsVHDFileValid(string filePath)
+        {
+            try
+            {
+                if (!File.Exists(filePath))
+                {
+                    Debug.WriteLine($"文件不存在: {filePath}");
+                    return false;
+                }
+                
+                var fileName = Path.GetFileName(filePath).ToUpper();
+                var isValid = TARGET_KEYWORDS.Any(keyword => fileName.Contains(keyword));
+                
+                Debug.WriteLine($"检查文件: {filePath}");
+                Debug.WriteLine($"文件名: {fileName}");
+                Debug.WriteLine($"是否包含关键词: {isValid}");
+                Debug.WriteLine($"关键词: {string.Join(", ", TARGET_KEYWORDS)}");
+                
+                return isValid;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"检查文件时出错: {ex.Message}");
+                return false;
+            }
+        }
 
         public async Task<List<string>> ScanForVHDFiles()
         {
@@ -30,17 +58,32 @@ namespace VHDMounter
                 {
                     try
                     {
-                        var files = Directory.GetFiles(drive.RootDirectory.FullName, "*.vhd", SearchOption.AllDirectories)
+                        StatusChanged?.Invoke($"正在扫描驱动器 {drive.Name} 根目录...");
+                        
+                        // 只扫描根目录
+                        var rootFiles = Directory.GetFiles(drive.RootDirectory.FullName, "*.vhd", SearchOption.TopDirectoryOnly)
                             .Where(f => TARGET_KEYWORDS.Any(keyword => Path.GetFileName(f).ToUpper().Contains(keyword)))
                             .ToList();
                         
-                        vhdFiles.AddRange(files);
+                        vhdFiles.AddRange(rootFiles);
+                        Debug.WriteLine($"在 {drive.Name} 根目录找到 {rootFiles.Count} 个符合条件的VHD文件");
+                        
+                        foreach (var file in rootFiles)
+                        {
+                            Debug.WriteLine($"  找到: {Path.GetFileName(file)}");
+                        }
                     }
                     catch (Exception ex)
                     {
-                        // 忽略无法访问的目录
                         Debug.WriteLine($"扫描驱动器 {drive.Name} 时出错: {ex.Message}");
+                        StatusChanged?.Invoke($"扫描驱动器 {drive.Name} 时出错: {ex.Message}");
                     }
+                }
+                
+                StatusChanged?.Invoke($"扫描完成，共找到 {vhdFiles.Count} 个VHD文件");
+                foreach (var file in vhdFiles)
+                {
+                    Debug.WriteLine($"找到VHD文件: {file}");
                 }
             });
 
