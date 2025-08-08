@@ -1,0 +1,78 @@
+name: Build VHD Mounter
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  release:
+    types: [ published ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '6.0.x'
+        
+    - name: Restore dependencies
+      run: dotnet restore
+      
+    - name: Build
+      run: dotnet build --configuration Release --no-restore
+      
+    - name: Test
+      run: dotnet test --no-build --verbosity normal
+      continue-on-error: true
+      
+    - name: Publish Windows x64
+      run: dotnet publish --configuration Release --runtime win-x64 --self-contained true --output ./publish/win-x64
+      
+    - name: Publish Windows x86
+      run: dotnet publish --configuration Release --runtime win-x86 --self-contained true --output ./publish/win-x86
+      
+    - name: Upload Windows x64 artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: VHDMounter-win-x64
+        path: ./publish/win-x64/
+        
+    - name: Upload Windows x86 artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: VHDMounter-win-x86
+        path: ./publish/win-x86/
+        
+    - name: Create Release Assets
+      if: github.event_name == 'release'
+      run: |
+        Compress-Archive -Path ./publish/win-x64/* -DestinationPath VHDMounter-win-x64.zip
+        Compress-Archive -Path ./publish/win-x86/* -DestinationPath VHDMounter-win-x86.zip
+        
+    - name: Upload Release Assets
+      if: github.event_name == 'release'
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ github.event.release.upload_url }}
+        asset_path: ./VHDMounter-win-x64.zip
+        asset_name: VHDMounter-win-x64.zip
+        asset_content_type: application/zip
+        
+    - name: Upload Release Assets x86
+      if: github.event_name == 'release'
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ github.event.release.upload_url }}
+        asset_path: ./VHDMounter-win-x86.zip
+        asset_name: VHDMounter-win-x86.zip
+        asset_content_type: application/zip
