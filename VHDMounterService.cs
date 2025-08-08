@@ -140,17 +140,18 @@ namespace VHDMounter
                     exePath = exePath.Replace(".dll", ".exe");
                 }
 
-                // 启动WPF应用程序（不带--service参数）
+                // 使用explorer.exe启动WPF应用程序，确保以当前登录用户身份运行
                 var startInfo = new ProcessStartInfo
                 {
-                    FileName = exePath,
+                    FileName = "explorer.exe",
+                    Arguments = $"\"{exePath}\"",
                     UseShellExecute = true,
                     CreateNoWindow = false,
-                    WindowStyle = ProcessWindowStyle.Normal
+                    WindowStyle = ProcessWindowStyle.Hidden
                 };
 
                 Process.Start(startInfo);
-                EventLog.WriteEntry("已启动WPF窗口应用程序", EventLogEntryType.Information);
+                EventLog.WriteEntry("已通过explorer启动WPF窗口应用程序", EventLogEntryType.Information);
             }
             catch (Exception ex)
             {

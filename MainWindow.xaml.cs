@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
+using System.Security.Principal;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
@@ -19,6 +21,14 @@ namespace VHDMounter
             vhdManager = new VHDManager();
             vhdManager.StatusChanged += OnStatusChanged;
             vhdManager.VHDFilesFound += OnVHDFilesFound;
+            
+            // 检查管理员权限
+            if (!IsRunningAsAdministrator())
+            {
+                OnStatusChanged("检测到需要管理员权限，正在请求提权...");
+                RequestAdministratorPrivileges();
+                return;
+            }
             
             // 检查是否已安装Windows服务
             if (!StartupManager.IsRegisteredForStartup())
@@ -238,6 +248,49 @@ namespace VHDMounter
             catch { }
             
             base.OnClosed(e);
+        }
+
+        private bool IsRunningAsAdministrator()
+        {
+            try
+            {
+                var identity = WindowsIdentity.GetCurrent();
+                var principal = new WindowsPrincipal(identity);
+                return principal.IsInRole(WindowsBuiltInRole.Administrator);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private void RequestAdministratorPrivileges()
+        {
+            try
+            {
+                var exePath = Process.GetCurrentProcess().MainModule?.FileName;
+                if (string.IsNullOrEmpty(exePath))
+                    return;
+
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = exePath,
+                    UseShellExecute = true,
+                    Verb = "runas", // 请求管理员权限
+                    WindowStyle = ProcessWindowStyle.Normal
+                };
+
+                // 启动新的管理员进程
+                Process.Start(startInfo);
+                
+                // 关闭当前进程
+                Application.Current.Shutdown();
+            }
+            catch (Exception ex)
+            {
+                OnStatusChanged($"请求管理员权限失败: {ex.Message}");
+                OnStatusChanged("程序需要管理员权限才能正常运行，请手动以管理员身份运行。");
+            }
         }
     }
 }
