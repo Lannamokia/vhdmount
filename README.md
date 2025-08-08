@@ -65,12 +65,56 @@ dotnet publish --configuration Release --self-contained true --runtime win-x64
 4. **进程监控**：程序会监控包含sinmai、chusanapp或mu3关键词的进程
 5. **自动重启**：如果目标进程停止运行，程序会自动重启start.bat
 
+## Windows服务模式
+
+本程序支持作为Windows服务运行，实现真正的开机自启动：
+
+### 服务安装
+
+1. **自动安装**：运行 `install_service.bat`（需要管理员权限）
+2. **重新安装**：如果遇到问题，运行 `reinstall_service.bat`
+3. **测试服务**：运行 `test_service_launch.bat` 验证服务是否正常工作
+
+### 服务功能
+
+- **开机自启动**：Windows服务会在系统启动时自动运行
+- **自动启动GUI**：服务会自动启动WPF桌面应用程序
+- **后台VHD管理**：服务在后台处理VHD挂载和进程监控
+- **用户会话支持**：支持在用户登录后启动桌面界面
+
 ## 故障排除
+
+### 常见问题
 
 1. **挂载失败**：确保以管理员身份运行程序
 2. **找不到VHD文件**：检查文件名是否包含必要的关键词
 3. **start.bat启动失败**：确保package文件夹中存在start.bat文件
 4. **进程监控异常**：检查目标程序是否正常运行
+
+### 服务相关问题
+
+5. **服务无法启动WPF应用程序**：
+   - 确保用户已登录到桌面
+   - 运行 `reinstall_service.bat` 重新配置服务权限
+   - 检查Windows事件查看器中的错误信息
+   - 使用 `test_service_launch.bat` 测试服务功能
+
+6. **WPF应用程序窗口不显示**：
+   - 检查任务管理器中是否有VHDMounter.exe进程
+   - 确保防病毒软件没有阻止程序运行
+   - 尝试手动运行VHDMounter.exe（不带--service参数）
+
+7. **服务启动失败**：
+   - 确保VHDMounter.exe文件存在
+   - 检查服务是否以正确的权限安装
+   - 查看Windows事件查看器中的详细错误信息
+
+### 调试步骤
+
+1. **检查服务状态**：`sc query VHDMounterService`
+2. **查看服务日志**：打开Windows事件查看器，查看应用程序日志
+3. **手动测试**：直接运行VHDMounter.exe验证程序本身是否正常
+4. **重新安装服务**：使用 `reinstall_service.bat` 重新配置服务
 
 ## 技术实现
 
