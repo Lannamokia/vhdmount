@@ -41,7 +41,7 @@ jobs:
           $version = "$version-pr${{ github.event.number }}"
         } else {
           $shortSha = $env:GITHUB_SHA.Substring(0, 7)
-          $version = "$version-$shortSha"
+          $version = "$version-alpha$shortSha"
         }
         echo "version=$version" >> $env:GITHUB_OUTPUT
         echo "Version: $version"
