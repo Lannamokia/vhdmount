@@ -90,6 +90,9 @@ jobs:
           -p:PublishSingleFile=true `
           -p:IncludeNativeLibrariesForSelfExtract=true `
           -p:Version=${{ steps.version.outputs.version }}
+        
+        # Copy additional files
+        Copy-Item "install_service.bat" "./publish/win-x64/" -Force
       
     - name: Publish Windows x86
       run: |
@@ -101,6 +104,9 @@ jobs:
           -p:PublishSingleFile=true `
           -p:IncludeNativeLibrariesForSelfExtract=true `
           -p:Version=${{ steps.version.outputs.version }}
+        
+        # Copy additional files
+        Copy-Item "install_service.bat" "./publish/win-x86/" -Force
       
     - name: Upload Windows x64 artifacts
       uses: actions/upload-artifact@v4
@@ -139,7 +145,8 @@ jobs:
         
         1. Download the appropriate version for your system (x64 or x86)
         2. Extract the ZIP file
-        3. Run `run_as_admin.bat` to start the application with administrator privileges
+        3. Run `install_service.bat` as administrator to install the Windows service (recommended)
+        4. Alternatively, run `run_as_admin.bat` to start the application with administrator privileges
         
         ## Requirements
         

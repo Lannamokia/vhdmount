@@ -20,8 +20,11 @@ namespace VHDMounter
             vhdManager.StatusChanged += OnStatusChanged;
             vhdManager.VHDFilesFound += OnVHDFilesFound;
             
-            // 每次启动时检查并更新开机自启注册状态
-            StartupManager.RegisterForStartup();
+            // 检查是否已安装Windows服务
+            if (!StartupManager.IsRegisteredForStartup())
+            {
+                OnStatusChanged("提示：如需开机自启，请以管理员权限运行install_service.bat安装Windows服务");
+            }
             
             // 开始主流程（包含延迟启动）
             _ = StartMainProcessWithDelay();
