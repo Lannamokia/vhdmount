@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
+using Microsoft.Win32;
 
 namespace VHDMounter
 {
@@ -20,8 +21,8 @@ namespace VHDMounter
             vhdManager.StatusChanged += OnStatusChanged;
             vhdManager.VHDFilesFound += OnVHDFilesFound;
             
-            // 每次启动时检查并更新开机自启注册状态
-            StartupManager.RegisterForStartup();
+            // 注册关机事件监听
+            SystemEvents.SessionEnding += OnSessionEnding;
             
             // 开始主流程（包含延迟启动）
             _ = StartMainProcessWithDelay();
@@ -63,7 +64,7 @@ namespace VHDMounter
             {
                 OnStatusChanged($"延迟启动过程中发生错误: {ex.Message}");
                 await Task.Delay(5000);
-                Application.Current.Shutdown();
+                await SafeShutdown();
             }
         }
 
@@ -90,7 +91,7 @@ namespace VHDMounter
                     OnStatusChanged("未找到符合条件的VHD文件");
                     OnStatusChanged("请检查文件名是否包含SDEZ、SDHD或SDDT关键词");
                     await Task.Delay(5000);
-                    Application.Current.Shutdown();
+                    await SafeShutdown();
                     return;
                 }
                 
@@ -144,7 +145,7 @@ namespace VHDMounter
                 {
                     OnStatusChanged("VHD挂载失败");
                     await Task.Delay(3000);
-                    Application.Current.Shutdown();
+                    await SafeShutdown();
                     return;
                 }
 
@@ -154,7 +155,7 @@ namespace VHDMounter
                 {
                     OnStatusChanged("未找到package文件夹");
                     await Task.Delay(3000);
-                    Application.Current.Shutdown();
+                    await SafeShutdown();
                     return;
                 }
 
@@ -164,7 +165,7 @@ namespace VHDMounter
                 {
                     OnStatusChanged("启动start.bat失败");
                     await Task.Delay(3000);
-                    Application.Current.Shutdown();
+                    await SafeShutdown();
                     return;
                 }
 
@@ -184,7 +185,7 @@ namespace VHDMounter
             {
                 OnStatusChanged($"处理过程中发生错误: {ex.Message}");
                 await Task.Delay(5000);
-                Application.Current.Shutdown();
+                await SafeShutdown();
             }
         }
 
@@ -215,14 +216,14 @@ namespace VHDMounter
                     break;
                     
                 case Key.Escape:
-                    Application.Current.Shutdown();
+                    _ = SafeShutdown();
                     break;
             }
         }
 
-        private void CloseButton_Click(object sender, RoutedEventArgs e)
+        private async void CloseButton_Click(object sender, RoutedEventArgs e)
         {
-            Application.Current.Shutdown();
+            await SafeShutdown();
         }
 
         protected override void OnClosed(EventArgs e)
@@ -230,11 +231,46 @@ namespace VHDMounter
             // 程序关闭时卸载VHD
             try
             {
-                _ = vhdManager.UnmountDrive();
+                _ = vhdManager.UnmountVHD();
             }
             catch { }
             
+            // 取消注册关机事件
+            SystemEvents.SessionEnding -= OnSessionEnding;
+            
             base.OnClosed(e);
+        }
+
+        private async void OnSessionEnding(object sender, SessionEndingEventArgs e)
+        {
+            try
+            {
+                // 收到关机信号，解除VHD挂载
+                OnStatusChanged("检测到系统关机，正在解除VHD挂载...");
+                await vhdManager.UnmountVHD();
+                OnStatusChanged("VHD解除挂载完成，程序即将退出");
+            }
+            catch (Exception ex)
+            {
+                OnStatusChanged($"关机时解除VHD挂载失败: {ex.Message}");
+            }
+        }
+
+        private async Task SafeShutdown()
+        {
+            try
+            {
+                // 确保在退出前解除VHD挂载
+                await vhdManager.UnmountVHD();
+            }
+            catch (Exception ex)
+            {
+                OnStatusChanged($"退出时解除VHD挂载失败: {ex.Message}");
+            }
+            finally
+            {
+                Application.Current.Shutdown();
+            }
         }
     }
 }

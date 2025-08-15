@@ -96,8 +96,8 @@ namespace VHDMounter
             
             try
             {
-                // 先卸载M盘（如果已挂载）
-                await UnmountDrive();
+                // 先分离现有VHD（如果已挂载）
+                await UnmountVHD();
 
                 // 使用diskpart挂载VHD
                 var diskpartScript = $@"select vdisk file=""{vhdPath}""
@@ -301,6 +301,45 @@ exit";
                 }
                 
                 await Task.Delay(1000); // 每秒检查一次
+            }
+        }
+
+        public async Task<bool> UnmountVHD()
+        {
+            StatusChanged?.Invoke("正在解除VHD挂载...");
+            
+            try
+            {
+                // 直接分离VHD文件，不移除驱动器字母
+                var diskpartScript = "select vdisk file=*\ndetach vdisk\nexit";
+                var tempScript = Path.GetTempFileName();
+                await File.WriteAllTextAsync(tempScript, diskpartScript);
+                
+                var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "diskpart",
+                        Arguments = $"/s \"{tempScript}\"",
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
+                    }
+                };
+                
+                process.Start();
+                await process.WaitForExitAsync();
+                
+                File.Delete(tempScript);
+                
+                StatusChanged?.Invoke("VHD解除挂载完成");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                StatusChanged?.Invoke($"解除VHD挂载失败: {ex.Message}");
+                return false;
             }
         }
     }
