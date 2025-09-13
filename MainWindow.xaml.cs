@@ -149,18 +149,32 @@ namespace VHDMounter
                     return;
                 }
 
-                // 查找package文件夹
-                string packagePath = await vhdManager.FindPackageFolder();
-                if (string.IsNullOrEmpty(packagePath))
+                // 根据文件名选择目标目录（SDHD -> bin，否则 -> package），忽略大小写
+                bool isSDHD = System.IO.Path.GetFileName(vhdPath)
+                    .IndexOf("SDHD", StringComparison.OrdinalIgnoreCase) >= 0;
+
+                string targetFolder;
+                if (isSDHD)
                 {
-                    OnStatusChanged("未找到package文件夹");
+                    OnStatusChanged("检测到 SDHD 文件，正在搜索 bin 目录...");
+                    targetFolder = await vhdManager.FindFolder("bin");
+                }
+                else
+                {
+                    OnStatusChanged("正在搜索 package 目录...");
+                    targetFolder = await vhdManager.FindPackageFolder();
+                }
+
+                if (string.IsNullOrEmpty(targetFolder))
+                {
+                    OnStatusChanged(isSDHD ? "未找到bin目录" : "未找到package文件夹");
                     await Task.Delay(3000);
                     await SafeShutdown();
                     return;
                 }
 
                 // 启动start.bat
-                bool started = await vhdManager.StartBatchFile(packagePath);
+                bool started = await vhdManager.StartBatchFile(targetFolder);
                 if (!started)
                 {
                     OnStatusChanged("启动start.bat失败");
@@ -179,7 +193,7 @@ namespace VHDMounter
                 });
 
                 // 开始监控和重启循环
-                await vhdManager.MonitorAndRestart(packagePath);
+                await vhdManager.MonitorAndRestart(targetFolder);
             }
             catch (Exception ex)
             {
