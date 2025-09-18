@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("VHDDebugger")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+5452eb4266917c54d6c73985ed38b00260ba38eb")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+e323921ce23653b589a0a85a07f7f8851e75d249")]
 [assembly: System.Reflection.AssemblyProductAttribute("VHDDebugger")]
 [assembly: System.Reflection.AssemblyTitleAttribute("VHDDebugger")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
