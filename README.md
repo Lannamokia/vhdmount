@@ -18,7 +18,7 @@
 - **键盘操作**：支持方向键选择、回车确认、ESC退出
 
 ### 🔄 自动化运行
-- **程序启动**：自动查找并启动package文件夹中的start.bat
+- **程序启动**：根据文件名关键词自动选择启动目录（SDHD → bin，其余 → package），并执行 start.bat（目录名忽略大小写）
 - **进程监控**：持续监控 `sinmai`、`chusanapp`、`mu3` 相关进程
 - **智能重启**：目标进程异常退出时自动重新启动
 
@@ -70,8 +70,8 @@ dotnet publish --configuration Release --self-contained true --runtime win-x64
 
 3. **自动挂载与启动**
    - VHD文件挂载到M盘
-   - 自动搜索package文件夹
-   - 启动start.bat文件
+   - 自动搜索启动目录：SDHD → bin，其余 → package（忽略大小写）
+   - 在上述目录执行 start.bat 文件
 
 4. **后台监控**
    - 程序最小化到系统托盘
@@ -115,7 +115,8 @@ VHDMounter.exe --debug
 - `ScanForVHDFiles()` - VHD文件扫描
 - `MountVHD()` - VHD挂载操作
 - `UnmountVHD()` - VHD卸载操作
-- `FindPackageFolder()` - Package文件夹定位
+- `FindFolder(folderName)` - 通用目录定位（忽略大小写）
+- `FindPackageFolder()` - Package文件夹定位（对 `FindFolder("package")` 的封装）
 - `StartBatchFile()` - 批处理文件启动
 - `IsTargetProcessRunning()` - 进程状态检查
 
@@ -144,7 +145,7 @@ A: 检查VHD文件名是否包含SDEZ、SDHD或SDDT关键词，且文件位于�
 A: 检查M盘是否被其他程序占用，程序会自动尝试清理但可能需要手动处理。
 
 **Q: start.bat启动失败**
-A: 确认package文件夹中存在start.bat文件，且文件具有执行权限。
+A: 确认对应启动目录中存在 start.bat 文件（SDHD: bin；其他关键词: package），且目录名大小写不影响搜索和定位。
 
 **Q: 进程监控不工作**
 A: 检查目标程序是否正常运行，进程名是否包含预定义的关键词。

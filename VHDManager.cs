@@ -406,9 +406,9 @@ exit";
             }
         }
 
-        public async Task<string> FindPackageFolder()
+        public async Task<string> FindFolder(string folderName)
         {
-            StatusChanged?.Invoke("正在搜索package文件夹...");
+            StatusChanged?.Invoke($"正在搜索{folderName}文件夹...");
             
             if (!Directory.Exists(TARGET_DRIVE))
             {
@@ -420,7 +420,7 @@ exit";
             {
                 try
                 {
-                    StatusChanged?.Invoke($"开始在 {TARGET_DRIVE} 中搜索package文件夹...");
+                    StatusChanged?.Invoke($"开始在 {TARGET_DRIVE} 中搜索{folderName}文件夹...");
                     
                     // 首先检查根目录
                     var rootDirs = Directory.GetDirectories(TARGET_DRIVE)
@@ -434,39 +434,44 @@ exit";
                         Debug.WriteLine($"根目录文件夹: {dir.Name}");
                     }
                     
-                    // 检查根目录中是否有package文件夹（不区分大小写）
-                    var packageInRoot = rootDirs.FirstOrDefault(d => 
-                        string.Equals(d.Name, "package", StringComparison.OrdinalIgnoreCase));
+                    // 检查根目录中是否有目标文件夹（不区分大小写）
+                    var targetInRoot = rootDirs.FirstOrDefault(d => 
+                        string.Equals(d.Name, folderName, StringComparison.OrdinalIgnoreCase));
                     
-                    if (packageInRoot != null)
+                    if (targetInRoot != null)
                     {
-                        StatusChanged?.Invoke($"在根目录找到package文件夹: {packageInRoot.Path}");
-                        return packageInRoot.Path;
+                        StatusChanged?.Invoke($"在根目录找到{folderName}文件夹: {targetInRoot.Path}");
+                        return targetInRoot.Path;
                     }
                     
-                    // 如果根目录没有，递归搜索所有子目录
-                    StatusChanged?.Invoke("根目录未找到package文件夹，开始递归搜索...");
+                    // 如果根目录没有，递归搜索所有子目录（不区分大小写）
+                    StatusChanged?.Invoke($"根目录未找到{folderName}文件夹，开始递归搜索...");
                     
                     var allDirectories = Directory.GetDirectories(TARGET_DRIVE, "*", SearchOption.AllDirectories)
-                        .Where(d => string.Equals(Path.GetFileName(d), "package", StringComparison.OrdinalIgnoreCase))
+                        .Where(d => string.Equals(Path.GetFileName(d), folderName, StringComparison.OrdinalIgnoreCase))
                         .ToList();
                     
-                    StatusChanged?.Invoke($"递归搜索找到 {allDirectories.Count} 个package文件夹");
+                    StatusChanged?.Invoke($"递归搜索找到 {allDirectories.Count} 个{folderName}文件夹");
                     foreach (var dir in allDirectories)
                     {
                         StatusChanged?.Invoke($"  找到: {dir}");
-                        Debug.WriteLine($"找到package文件夹: {dir}");
+                        Debug.WriteLine($"找到{folderName}文件夹: {dir}");
                     }
                     
                     return allDirectories.FirstOrDefault();
                 }
                 catch (Exception ex)
                 {
-                    StatusChanged?.Invoke($"搜索package文件夹时出错: {ex.Message}");
-                    Debug.WriteLine($"FindPackageFolder错误: {ex}");
+                    StatusChanged?.Invoke($"搜索{folderName}文件夹时出错: {ex.Message}");
+                    Debug.WriteLine($"FindFolder错误: {ex}");
                     return null;
                 }
             });
+        }
+
+        public async Task<string> FindPackageFolder()
+        {
+            return await FindFolder("package");
         }
 
         public async Task<bool> StartBatchFile(string packagePath)
