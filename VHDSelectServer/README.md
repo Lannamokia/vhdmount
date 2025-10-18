@@ -1,6 +1,7 @@
 # VHD选择服务器 - 跨平台版本
 
 一个现代化的跨平台VHD关键词管理服务器，提供Web GUI界面和HTTP API接口。
+<img width="1280" height="1754" alt="image" src="https://github.com/user-attachments/assets/c1126381-d13e-4e88-a8da-99f86d778bef" />
 
 ## ✨ 特性
 
