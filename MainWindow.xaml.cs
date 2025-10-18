@@ -74,19 +74,44 @@ namespace VHDMounter
             {
                 isProcessing = true;
                 
-                // 调试：测试特定文件
-                var testFile = @"C:\SDEZ_1.56.00_20250317134137.vhd";
-                if (System.IO.File.Exists(testFile))
+                // 尝试远程获取VHD选择
+                OnStatusChanged("正在检查远程VHD选择配置...");
+                string remoteSelectedKeyword = await vhdManager.GetRemoteVHDSelection();
+                
+                // 检查是否存在NX_INS USB设备
+                OnStatusChanged("正在检查NX_INS USB设备...");
+                var nxInsUSB = vhdManager.FindNXInsUSBDrive();
+                List<string> usbVhdFiles = new List<string>();
+                
+                if (nxInsUSB != null)
                 {
-                    bool isValid = vhdManager.IsVHDFileValid(testFile);
-                    OnStatusChanged($"测试文件 {testFile}: {(isValid ? "符合条件" : "不符合条件")}");
-                    await Task.Delay(2000);
+                    OnStatusChanged($"找到NX_INS USB设备: {nxInsUSB.Name}");
+                    // 扫描USB设备中的VHD文件
+                    usbVhdFiles = vhdManager.ScanUSBForVHDFiles(nxInsUSB);
+                    OnStatusChanged($"在USB设备中找到 {usbVhdFiles.Count} 个VHD文件");
+                }
+                else
+                {
+                    OnStatusChanged("未找到NX_INS USB设备，将使用本地VHD文件");
                 }
                 
-                // 扫描VHD文件
-                var vhdFiles = await vhdManager.ScanForVHDFiles();
+                // 扫描本地VHD文件
+                var localVhdFiles = await vhdManager.ScanForVHDFiles();
                 
-                if (vhdFiles.Count == 0)
+                // 如果找到USB设备和VHD文件，替换本地文件
+                if (nxInsUSB != null && usbVhdFiles.Count > 0 && localVhdFiles.Count > 0)
+                {
+                    OnStatusChanged("开始替换本地VHD文件...");
+                    bool replaced = await vhdManager.ReplaceLocalVHDFiles(usbVhdFiles, localVhdFiles);
+                    if (replaced)
+                    {
+                        OnStatusChanged("本地VHD文件已替换，重新扫描本地文件...");
+                        // 重新扫描本地文件
+                        localVhdFiles = await vhdManager.ScanForVHDFiles();
+                    }
+                }
+                
+                if (localVhdFiles.Count == 0)
                 {
                     OnStatusChanged("未找到符合条件的VHD文件");
                     OnStatusChanged("请检查文件名是否包含SDEZ、SDHD或SDDT关键词");
@@ -97,16 +122,32 @@ namespace VHDMounter
                 
                 string selectedVHD;
                 
-                if (vhdFiles.Count == 1)
+                // 如果有远程选择的关键词，优先使用
+                if (!string.IsNullOrWhiteSpace(remoteSelectedKeyword))
                 {
-                    selectedVHD = vhdFiles[0];
+                    selectedVHD = vhdManager.FindVHDByKeyword(localVhdFiles, remoteSelectedKeyword);
+                    if (selectedVHD != null)
+                    {
+                        OnStatusChanged($"根据远程选择启动VHD: {System.IO.Path.GetFileName(selectedVHD)}");
+                        await ProcessSelectedVHD(selectedVHD);
+                        return;
+                    }
+                    else
+                    {
+                        OnStatusChanged($"远程选择的关键词 '{remoteSelectedKeyword}' 未找到对应VHD文件，将显示选择器");
+                    }
+                }
+                
+                if (localVhdFiles.Count == 1)
+                {
+                    selectedVHD = localVhdFiles[0];
                     await ProcessSelectedVHD(selectedVHD);
                 }
                 else
                 {
                     // 显示选择器
-                    availableVHDs = vhdFiles;
-                    ShowVHDSelector(vhdFiles);
+                    availableVHDs = localVhdFiles;
+                    ShowVHDSelector(localVhdFiles);
                 }
             }
             catch (Exception ex)

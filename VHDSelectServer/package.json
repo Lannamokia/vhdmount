@@ -1,0 +1,27 @@
+{
+  "name": "vhd-select-server",
+  "version": "1.0.0",
+  "description": "Cross-platform VHD selection server with web GUI",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "vhd",
+    "server",
+    "cross-platform",
+    "web-gui"
+  ],
+  "author": "VHD Select Server",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "body-parser": "^1.20.2"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

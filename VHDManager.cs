@@ -5,6 +5,10 @@ using System.IO;
 using System.Linq;
 using System.Management;
 using System.Threading.Tasks;
+using System.Text.RegularExpressions;
+using System.Net.Http;
+using System.Text.Json;
+using System.Text;
 
 namespace VHDMounter
 {
@@ -16,6 +20,9 @@ namespace VHDMounter
 
         public event Action<string> StatusChanged;
         public event Action<List<string>> VHDFilesFound;
+        
+        private static readonly HttpClient httpClient = new HttpClient();
+        private string configFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "vhdmonter_config.ini");
         
         // 调试方法：检查特定文件是否符合条件
         public bool IsVHDFileValid(string filePath)
@@ -43,6 +50,233 @@ namespace VHDMounter
                 Debug.WriteLine($"检查文件时出错: {ex.Message}");
                 return false;
             }
+        }
+
+        // 检查是否存在卷标为NX_INS的USB设备
+        public DriveInfo FindNXInsUSBDrive()
+        {
+            try
+            {
+                var usbDrives = DriveInfo.GetDrives().Where(d => d.IsReady && d.DriveType == DriveType.Removable);
+                foreach (var drive in usbDrives)
+                {
+                    try
+                    {
+                        if (drive.VolumeLabel == "NX_INS")
+                        {
+                            StatusChanged?.Invoke($"找到NX_INS USB设备: {drive.Name}");
+                            return drive;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"读取驱动器 {drive.Name} 卷标时出错: {ex.Message}");
+                    }
+                }
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"查找NX_INS USB设备时出错: {ex.Message}");
+                return null;
+            }
+        }
+
+        // 从USB设备中扫描VHD文件
+        public List<string> ScanUSBForVHDFiles(DriveInfo usbDrive)
+        {
+            StatusChanged?.Invoke($"正在扫描USB设备 {usbDrive.Name} 中的VHD文件...");
+            var vhdFiles = new List<string>();
+
+            try
+            {
+                var rootFiles = Directory.GetFiles(usbDrive.RootDirectory.FullName, "*.vhd", SearchOption.TopDirectoryOnly)
+                    .Where(f => TARGET_KEYWORDS.Any(keyword => Path.GetFileName(f).ToUpper().Contains(keyword)))
+                    .ToList();
+                
+                vhdFiles.AddRange(rootFiles);
+                StatusChanged?.Invoke($"在USB设备中找到 {vhdFiles.Count} 个VHD文件");
+                
+                foreach (var file in vhdFiles)
+                {
+                    Debug.WriteLine($"USB中找到VHD文件: {file}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"扫描USB设备 {usbDrive.Name} 时出错: {ex.Message}");
+                StatusChanged?.Invoke($"扫描USB设备时出错: {ex.Message}");
+            }
+
+            return vhdFiles;
+        }
+
+        // 替换本地VHD文件
+        public async Task<bool> ReplaceLocalVHDFiles(List<string> usbVhdFiles, List<string> localVhdFiles)
+        {
+            if (usbVhdFiles.Count == 0 || localVhdFiles.Count == 0)
+                return false;
+
+            bool anyReplaced = false;
+            StatusChanged?.Invoke("正在替换本地VHD文件...");
+
+            foreach (var usbFile in usbVhdFiles)
+            {
+                string usbFileName = Path.GetFileName(usbFile);
+                string usbKeyword = ExtractKeyword(usbFileName);
+                
+                if (string.IsNullOrEmpty(usbKeyword))
+                    continue;
+
+                // 查找对应关键词的本地文件
+                var matchingLocalFiles = localVhdFiles.Where(f => 
+                    ExtractKeyword(Path.GetFileName(f)) == usbKeyword).ToList();
+
+                if (matchingLocalFiles.Count > 0)
+                {
+                    foreach (var localFile in matchingLocalFiles)
+                    {
+                        try
+                        {
+                            // 直接删除本地文件
+                            StatusChanged?.Invoke($"正在删除本地文件: {Path.GetFileName(localFile)}");
+                            if (File.Exists(localFile))
+                                File.Delete(localFile);
+                            
+                            // 复制USB文件到本地
+                            StatusChanged?.Invoke($"正在用 {Path.GetFileName(usbFile)} 替换 {Path.GetFileName(localFile)}");
+                            File.Copy(usbFile, localFile);
+                            
+                            anyReplaced = true;
+                            StatusChanged?.Invoke($"替换完成: {Path.GetFileName(localFile)}");
+                        }
+                        catch (Exception ex)
+                        {
+                            StatusChanged?.Invoke($"替换文件时出错: {ex.Message}");
+                            Debug.WriteLine($"替换文件时出错: {ex.Message}");
+                        }
+                    }
+                }
+            }
+
+            return anyReplaced;
+        }
+
+        // 提取VHD文件名中的关键词部分
+        private string ExtractKeyword(string fileName)
+        {
+            foreach (var keyword in TARGET_KEYWORDS)
+            {
+                if (fileName.ToUpper().Contains(keyword))
+                    return keyword;
+            }
+            return string.Empty;
+        }
+        
+        // 读取配置文件
+        private Dictionary<string, string> ReadConfig()
+        {
+            var config = new Dictionary<string, string>();
+            
+            try
+            {
+                if (!File.Exists(configFilePath))
+                {
+                    StatusChanged?.Invoke("配置文件不存在，使用默认设置");
+                    return config;
+                }
+                
+                var lines = File.ReadAllLines(configFilePath);
+                foreach (var line in lines)
+                {
+                    if (string.IsNullOrWhiteSpace(line) || line.StartsWith(";") || line.StartsWith("["))
+                        continue;
+                        
+                    var parts = line.Split('=', 2);
+                    if (parts.Length == 2)
+                    {
+                        config[parts[0].Trim()] = parts[1].Trim();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                StatusChanged?.Invoke($"读取配置文件失败: {ex.Message}");
+            }
+            
+            return config;
+        }
+        
+        // 远程获取VHD选择
+        public async Task<string> GetRemoteVHDSelection()
+        {
+            try
+            {
+                var config = ReadConfig();
+                
+                if (!config.TryGetValue("EnableRemoteSelection", out var enableRemote) || 
+                    !bool.TryParse(enableRemote, out var isEnabled) || !isEnabled)
+                {
+                    StatusChanged?.Invoke("远程VHD选择功能已禁用");
+                    return null;
+                }
+                
+                if (!config.TryGetValue("BootImageSelectUrl", out var url) || string.IsNullOrWhiteSpace(url))
+                {
+                    StatusChanged?.Invoke("未配置BootImageSelectUrl");
+                    return null;
+                }
+                
+                StatusChanged?.Invoke($"正在从远程获取VHD选择: {url}");
+                
+                var response = await httpClient.GetAsync(url);
+                if (!response.IsSuccessStatusCode)
+                {
+                    StatusChanged?.Invoke($"远程请求失败: {response.StatusCode}");
+                    return null;
+                }
+                
+                var jsonContent = await response.Content.ReadAsStringAsync();
+                var jsonDoc = JsonDocument.Parse(jsonContent);
+                
+                if (jsonDoc.RootElement.TryGetProperty("BootImageSelected", out var bootImageElement))
+                {
+                    var selectedKeyword = bootImageElement.GetString();
+                    StatusChanged?.Invoke($"远程选择的VHD关键词: {selectedKeyword}");
+                    return selectedKeyword;
+                }
+                else
+                {
+                    StatusChanged?.Invoke("远程响应中未找到BootImageSelected字段");
+                    return null;
+                }
+            }
+            catch (Exception ex)
+            {
+                StatusChanged?.Invoke($"远程获取VHD选择失败: {ex.Message}");
+                return null;
+            }
+        }
+        
+        // 根据关键词查找对应的VHD文件
+        public string FindVHDByKeyword(List<string> vhdFiles, string keyword)
+        {
+            if (string.IsNullOrWhiteSpace(keyword) || vhdFiles == null || vhdFiles.Count == 0)
+                return null;
+                
+            var matchingFile = vhdFiles.FirstOrDefault(f => 
+                ExtractKeyword(Path.GetFileName(f)).Equals(keyword, StringComparison.OrdinalIgnoreCase));
+                
+            if (matchingFile != null)
+            {
+                StatusChanged?.Invoke($"找到匹配关键词 '{keyword}' 的VHD文件: {Path.GetFileName(matchingFile)}");
+            }
+            else
+            {
+                StatusChanged?.Invoke($"未找到匹配关键词 '{keyword}' 的VHD文件");
+            }
+            
+            return matchingFile;
         }
 
         public async Task<List<string>> ScanForVHDFiles()

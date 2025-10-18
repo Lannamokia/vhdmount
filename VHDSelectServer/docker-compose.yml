@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  vhd-select-server:
+    image: lty271104/vhd-select-server:latest
+    container_name: vhd-select-server
+    ports:
+      - "8080:8080"
+    volumes:
+      # 配置文件持久化映射
+      - ./config:/app/config
+      # 可选：映射整个数据目录
+      - vhd-data:/app/data
+    environment:
+      - NODE_ENV=production
+      - PORT=8080
+      - CONFIG_PATH=/app/config
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  vhd-data:
+    driver: local
