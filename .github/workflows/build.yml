@@ -90,6 +90,9 @@ jobs:
           -p:PublishSingleFile=true `
           -p:IncludeNativeLibrariesForSelfExtract=true `
           -p:Version=${{ steps.version.outputs.version }}
+        
+        # Copy configuration file
+        Copy-Item "vhdmonter_config.ini" "./publish/win-x64/" -Force
       
     - name: Publish Windows x86
       run: |
@@ -101,6 +104,9 @@ jobs:
           -p:PublishSingleFile=true `
           -p:IncludeNativeLibrariesForSelfExtract=true `
           -p:Version=${{ steps.version.outputs.version }}
+        
+        # Copy configuration file
+        Copy-Item "vhdmonter_config.ini" "./publish/win-x86/" -Force
       
     - name: Upload Windows x64 artifacts
       uses: actions/upload-artifact@v4
