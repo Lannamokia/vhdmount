@@ -77,6 +77,8 @@ namespace VHDMounter
                 // 尝试远程获取VHD选择
                 OnStatusChanged("正在检查远程VHD选择配置...");
                 string remoteSelectedKeyword = await vhdManager.GetRemoteVHDSelection();
+                OnStatusChanged($"远程VHD选择检查完成: {(string.IsNullOrWhiteSpace(remoteSelectedKeyword) ? "无远程选择" : $"选择关键词: {remoteSelectedKeyword}")}");
+                await Task.Delay(2000); // 暂停2秒显示结果
                 
                 // 检查是否存在NX_INS USB设备
                 OnStatusChanged("正在检查NX_INS USB设备...");
@@ -86,17 +88,24 @@ namespace VHDMounter
                 if (nxInsUSB != null)
                 {
                     OnStatusChanged($"找到NX_INS USB设备: {nxInsUSB.Name}");
+                    await Task.Delay(2000); // 暂停2秒显示结果
                     // 扫描USB设备中的VHD文件
+                    OnStatusChanged("正在扫描USB设备中的VHD文件...");
                     usbVhdFiles = vhdManager.ScanUSBForVHDFiles(nxInsUSB);
                     OnStatusChanged($"在USB设备中找到 {usbVhdFiles.Count} 个VHD文件");
+                    await Task.Delay(2000); // 暂停2秒显示结果
                 }
                 else
                 {
                     OnStatusChanged("未找到NX_INS USB设备，将使用本地VHD文件");
+                    await Task.Delay(2000); // 暂停2秒显示结果
                 }
                 
                 // 扫描本地VHD文件
+                OnStatusChanged("正在扫描本地VHD文件...");
                 var localVhdFiles = await vhdManager.ScanForVHDFiles();
+                OnStatusChanged($"本地VHD文件扫描完成，找到 {localVhdFiles.Count} 个文件");
+                await Task.Delay(2000); // 暂停2秒显示结果
                 
                 // 如果找到USB设备和VHD文件，替换本地文件
                 if (nxInsUSB != null && usbVhdFiles.Count > 0 && localVhdFiles.Count > 0)
@@ -108,7 +117,13 @@ namespace VHDMounter
                         OnStatusChanged("本地VHD文件已替换，重新扫描本地文件...");
                         // 重新扫描本地文件
                         localVhdFiles = await vhdManager.ScanForVHDFiles();
+                        OnStatusChanged($"重新扫描完成，找到 {localVhdFiles.Count} 个文件");
                     }
+                    else
+                    {
+                        OnStatusChanged("VHD文件替换失败或无需替换");
+                    }
+                    await Task.Delay(2000); // 暂停2秒显示结果
                 }
                 
                 if (localVhdFiles.Count == 0)
@@ -125,16 +140,19 @@ namespace VHDMounter
                 // 如果有远程选择的关键词，优先使用
                 if (!string.IsNullOrWhiteSpace(remoteSelectedKeyword))
                 {
+                    OnStatusChanged($"正在根据远程关键词 '{remoteSelectedKeyword}' 查找VHD文件...");
                     selectedVHD = vhdManager.FindVHDByKeyword(localVhdFiles, remoteSelectedKeyword);
                     if (selectedVHD != null)
                     {
                         OnStatusChanged($"根据远程选择启动VHD: {System.IO.Path.GetFileName(selectedVHD)}");
+                        await Task.Delay(2000); // 暂停2秒显示结果
                         await ProcessSelectedVHD(selectedVHD);
                         return;
                     }
                     else
                     {
                         OnStatusChanged($"远程选择的关键词 '{remoteSelectedKeyword}' 未找到对应VHD文件，将显示选择器");
+                        await Task.Delay(2000); // 暂停2秒显示结果
                     }
                 }
                 
@@ -181,6 +199,7 @@ namespace VHDMounter
                 });
 
                 // 挂载VHD
+                OnStatusChanged($"正在挂载VHD文件: {System.IO.Path.GetFileName(vhdPath)}");
                 bool mounted = await vhdManager.MountVHD(vhdPath);
                 if (!mounted)
                 {
@@ -189,6 +208,8 @@ namespace VHDMounter
                     await SafeShutdown();
                     return;
                 }
+                OnStatusChanged("VHD挂载成功");
+                await Task.Delay(2000); // 暂停2秒显示结果
 
                 // 根据文件名选择目标目录（SDHD -> bin，否则 -> package），忽略大小写
                 bool isSDHD = System.IO.Path.GetFileName(vhdPath)
@@ -213,8 +234,11 @@ namespace VHDMounter
                     await SafeShutdown();
                     return;
                 }
+                OnStatusChanged($"目标目录搜索完成: {targetFolder}");
+                await Task.Delay(2000); // 暂停2秒显示结果
 
                 // 启动start.bat
+                OnStatusChanged("正在启动start.bat文件...");
                 bool started = await vhdManager.StartBatchFile(targetFolder);
                 if (!started)
                 {
@@ -223,6 +247,8 @@ namespace VHDMounter
                     await SafeShutdown();
                     return;
                 }
+                OnStatusChanged("start.bat启动成功");
+                await Task.Delay(2000); // 暂停2秒显示结果
 
                 OnStatusChanged("程序启动成功，开始监控...");
                 
