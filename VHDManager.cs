@@ -574,12 +574,20 @@ exit";
                 // 第二步：为第一个分区分配盘符
                 StatusChanged?.Invoke("步骤2: 为第一个分区分配盘符M...");
                 
-                // 容错检查：如果M盘已经存在，可能是系统自动分配的
+                // 容错检查：如果M盘已经存在，先删除再重新分配
                 if (Directory.Exists(TARGET_DRIVE))
                 {
-                    StatusChanged?.Invoke("检测到M盘已自动分配，跳过手动分配步骤");
-                    StatusChanged?.Invoke("VHD挂载和盘符分配完成");
-                    return true;
+                    StatusChanged?.Invoke("检测到M盘已存在，正在删除原有盘符...");
+                    bool removed = await RemoveExistingDriveLetter(vhdPath);
+                    if (!removed)
+                    {
+                        StatusChanged?.Invoke("删除原有盘符失败，但继续尝试重新分配");
+                    }
+                    else
+                    {
+                        StatusChanged?.Invoke("原有盘符删除成功");
+                    }
+                    await Task.Delay(2000); // 等待系统更新
                 }
                 
                 bool driveAssigned = await AssignDriveLetterToFirstPartition(vhdPath);
@@ -807,20 +815,95 @@ exit";
         }
 
         /// <summary>
+        /// 删除VHD第一个分区的现有盘符
+        /// </summary>
+        private async Task<bool> RemoveExistingDriveLetter(string vhdPath)
+        {
+            try
+            {
+                StatusChanged?.Invoke("正在删除VHD第一个分区的现有盘符...");
+                
+                // 使用diskpart删除第一个分区的盘符
+                var removeScript = $@"select vdisk file=""{vhdPath}""
+list partition
+select partition 1
+remove letter=M
+exit";
+                
+                var tempScript = Path.GetTempFileName();
+                await File.WriteAllTextAsync(tempScript, removeScript);
+                
+                var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "diskpart",
+                        Arguments = $"/s \"{tempScript}\"",
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
+                    }
+                };
+                
+                process.Start();
+                
+                var waitTask = process.WaitForExitAsync();
+                var timeoutTask = Task.Delay(30000);
+                var completed = await Task.WhenAny(waitTask, timeoutTask);
+                
+                if (completed == timeoutTask)
+                {
+                    try { process.Kill(); } catch { }
+                    StatusChanged?.Invoke("删除盘符超时");
+                    if (File.Exists(tempScript))
+                        File.Delete(tempScript);
+                    return false;
+                }
+
+                string output = await process.StandardOutput.ReadToEndAsync();
+                string error = await process.StandardError.ReadToEndAsync();
+                
+                if (File.Exists(tempScript))
+                    File.Delete(tempScript);
+                
+                Debug.WriteLine($"删除盘符输出: {output}");
+                if (!string.IsNullOrWhiteSpace(error))
+                {
+                    Debug.WriteLine($"删除盘符错误: {error}");
+                }
+
+                // 等待盘符删除完成
+                await Task.Delay(2000);
+                
+                // 验证M盘是否已被删除
+                bool driveRemoved = !Directory.Exists(TARGET_DRIVE);
+                if (driveRemoved)
+                {
+                    StatusChanged?.Invoke("盘符M删除成功");
+                }
+                else
+                {
+                    StatusChanged?.Invoke("盘符M可能仍然存在，但继续处理");
+                }
+                
+                return driveRemoved;
+            }
+            catch (Exception ex)
+            {
+                StatusChanged?.Invoke($"删除盘符异常: {ex.Message}");
+                Debug.WriteLine($"RemoveExistingDriveLetter异常: {ex}");
+                return false;
+            }
+        }
+
+        /// <summary>
         /// 为VHD的第一个分区分配盘符M
         /// </summary>
         private async Task<bool> AssignDriveLetterToFirstPartition(string vhdPath)
         {
             try
             {
-                // 容错机制：检查M盘是否已经存在
-                if (Directory.Exists(TARGET_DRIVE))
-                {
-                    StatusChanged?.Invoke("检测到M盘已存在，跳过盘符分配");
-                    Debug.WriteLine("M盘已存在，无需重复分配");
-                    return true;
-                }
-
                 // 使用diskpart列出VHD的分区并为第一个分区分配盘符
                 var listScript = $@"select vdisk file=""{vhdPath}""
 list partition
@@ -901,14 +984,8 @@ exit";
         {
             try
             {
-                // 容错机制：检查M盘是否已经存在
-                if (Directory.Exists(TARGET_DRIVE))
-                {
-                    StatusChanged?.Invoke("备用方法检测到M盘已存在，跳过盘符分配");
-                    Debug.WriteLine("备用方法：M盘已存在，无需重复分配");
-                    return true;
-                }
-
+                StatusChanged?.Invoke("尝试备用盘符分配方法...");
+                
                 // 尝试为最后挂载的磁盘分配盘符
                 var assignScript = @"list disk
 select disk 1
