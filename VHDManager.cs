@@ -19,7 +19,6 @@ namespace VHDMounter
         private readonly string[] PROCESS_KEYWORDS = { "sinmai", "chusanapp", "mu3" };
 
         public event Action<string> StatusChanged;
-        public event Action<List<string>> VHDFilesFound;
         
         private static readonly HttpClient httpClient = new HttpClient();
         private string configFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "vhdmonter_config.ini");
@@ -117,6 +116,9 @@ namespace VHDMounter
             if (usbVhdFiles.Count == 0 || localVhdFiles.Count == 0)
                 return false;
 
+            // Win11兼容性诊断
+            DiagnoseWin11Issues();
+
             bool anyReplaced = false;
             StatusChanged?.Invoke("正在替换本地VHD文件...");
 
@@ -138,22 +140,78 @@ namespace VHDMounter
                     {
                         try
                         {
+                            // Win11兼容性检查和准备
+                            StatusChanged?.Invoke($"检查Win11兼容性: {Path.GetFileName(localFile)}");
+                            var localFileInfo = new FileInfo(localFile);
+                            var usbFileInfo = new FileInfo(usbFile);
+                            
+                            // 记录文件属性用于诊断
+                            Debug.WriteLine($"本地文件属性: {localFileInfo.Attributes}, 只读: {localFileInfo.IsReadOnly}");
+                            Debug.WriteLine($"USB文件属性: {usbFileInfo.Attributes}, 大小: {usbFileInfo.Length} bytes");
+                            Debug.WriteLine($"操作系统版本: {Environment.OSVersion}");
+                            
+                            // 检查文件是否被占用
+                            if (IsFileInUse(localFile))
+                            {
+                                StatusChanged?.Invoke($"文件被占用，无法删除: {Path.GetFileName(localFile)}");
+                                Debug.WriteLine($"文件被占用: {localFile}");
+                                continue;
+                            }
+                            
+                            // Win11兼容性处理
+                            if (!PrepareFileForReplacement(localFile))
+                            {
+                                StatusChanged?.Invoke($"无法准备文件进行替换: {Path.GetFileName(localFile)}");
+                                continue;
+                            }
+                            
                             // 直接删除本地文件
                             StatusChanged?.Invoke($"正在删除本地文件: {Path.GetFileName(localFile)}");
                             if (File.Exists(localFile))
                                 File.Delete(localFile);
                             
+                            // 等待文件系统完成删除操作
+                            int retryCount = 0;
+                            while (File.Exists(localFile) && retryCount < 10)
+                            {
+                                await Task.Delay(100);
+                                retryCount++;
+                            }
+                            
+                            if (File.Exists(localFile))
+                            {
+                                StatusChanged?.Invoke($"删除文件失败，文件仍然存在: {Path.GetFileName(localFile)}");
+                                continue;
+                            }
+                            
                             // 复制USB文件到本地
                             StatusChanged?.Invoke($"正在用 {Path.GetFileName(usbFile)} 替换 {Path.GetFileName(localFile)}");
                             File.Copy(usbFile, localFile);
                             
+                            // 验证复制结果
+                            var newFileInfo = new FileInfo(localFile);
+                            if (newFileInfo.Length != usbFileInfo.Length)
+                            {
+                                StatusChanged?.Invoke($"警告: 文件大小不匹配 - 原始: {usbFileInfo.Length}, 复制后: {newFileInfo.Length}");
+                            }
+                            
                             anyReplaced = true;
                             StatusChanged?.Invoke($"替换完成: {Path.GetFileName(localFile)}");
                         }
+                        catch (UnauthorizedAccessException ex)
+                        {
+                            StatusChanged?.Invoke($"权限不足，无法替换文件: {Path.GetFileName(localFile)} - {ex.Message}");
+                            Debug.WriteLine($"权限错误: {ex}");
+                        }
+                        catch (IOException ex)
+                        {
+                            StatusChanged?.Invoke($"文件IO错误: {Path.GetFileName(localFile)} - {ex.Message}");
+                            Debug.WriteLine($"IO错误: {ex}");
+                        }
                         catch (Exception ex)
                         {
-                            StatusChanged?.Invoke($"替换文件时出错: {ex.Message}");
-                            Debug.WriteLine($"替换文件时出错: {ex.Message}");
+                            StatusChanged?.Invoke($"替换文件时出错: {Path.GetFileName(localFile)} - {ex.Message}");
+                            Debug.WriteLine($"替换文件时出错: {ex}");
                         }
                     }
                 }
@@ -171,6 +229,123 @@ namespace VHDMounter
                     return keyword;
             }
             return string.Empty;
+        }
+        
+        // 检查文件是否被占用
+        private bool IsFileInUse(string filePath)
+        {
+            try
+            {
+                using (FileStream stream = File.Open(filePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                {
+                    return false;
+                }
+            }
+            catch (IOException)
+            {
+                return true;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return true;
+            }
+        }
+        
+        // Win11兼容性检查和修复
+        private bool PrepareFileForReplacement(string filePath)
+        {
+            try
+            {
+                var fileInfo = new FileInfo(filePath);
+                
+                // 检查文件是否存在
+                if (!fileInfo.Exists)
+                    return true;
+                
+                // 移除只读属性
+                if (fileInfo.IsReadOnly)
+                {
+                    StatusChanged?.Invoke($"移除只读属性: {fileInfo.Name}");
+                    fileInfo.IsReadOnly = false;
+                }
+                
+                // 移除隐藏和系统属性（Win11可能设置这些属性）
+                if ((fileInfo.Attributes & FileAttributes.Hidden) == FileAttributes.Hidden)
+                {
+                    StatusChanged?.Invoke($"移除隐藏属性: {fileInfo.Name}");
+                    fileInfo.Attributes &= ~FileAttributes.Hidden;
+                }
+                
+                if ((fileInfo.Attributes & FileAttributes.System) == FileAttributes.System)
+                {
+                    StatusChanged?.Invoke($"移除系统属性: {fileInfo.Name}");
+                    fileInfo.Attributes &= ~FileAttributes.System;
+                }
+                
+                // 检查是否有写入权限
+                try
+                {
+                    using (var stream = File.OpenWrite(filePath))
+                    {
+                        // 如果能打开写入流，说明有权限
+                    }
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    StatusChanged?.Invoke($"权限不足，无法写入文件: {fileInfo.Name}");
+                    return false;
+                }
+                
+                return true;
+            }
+            catch (Exception ex)
+            {
+                StatusChanged?.Invoke($"准备文件时出错: {ex.Message}");
+                Debug.WriteLine($"PrepareFileForReplacement错误: {ex}");
+                return false;
+            }
+        }
+        
+        // 检测Win11并提供诊断信息
+        private void DiagnoseWin11Issues()
+        {
+            try
+            {
+                var osVersion = Environment.OSVersion;
+                var isWin11 = osVersion.Version.Major >= 10 && osVersion.Version.Build >= 22000;
+                
+                StatusChanged?.Invoke($"操作系统: {osVersion.VersionString}");
+                Debug.WriteLine($"操作系统详细信息: {osVersion}");
+                Debug.WriteLine($"是否为Win11: {isWin11}");
+                
+                if (isWin11)
+                {
+                    StatusChanged?.Invoke("检测到Windows 11，启用兼容性模式");
+                    
+                    // 检查UAC状态
+                    try
+                    {
+                        var principal = new System.Security.Principal.WindowsPrincipal(System.Security.Principal.WindowsIdentity.GetCurrent());
+                        bool isAdmin = principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+                        
+                        StatusChanged?.Invoke($"管理员权限: {(isAdmin ? "是" : "否")}");
+                        Debug.WriteLine($"当前进程是否以管理员身份运行: {isAdmin}");
+                        
+                        if (!isAdmin)
+                        {
+                            StatusChanged?.Invoke("建议：以管理员身份运行程序以避免权限问题");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"检查管理员权限时出错: {ex}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Win11诊断时出错: {ex}");
+            }
         }
         
         // 读取配置文件
@@ -536,14 +711,14 @@ exit";
             return await FindFolder("package");
         }
 
-        public async Task<bool> StartBatchFile(string packagePath)
+        public Task<bool> StartBatchFile(string packagePath)
         {
             var startBatPath = Path.Combine(packagePath, "start.bat");
             
             if (!File.Exists(startBatPath))
             {
                 StatusChanged?.Invoke("未找到start.bat文件");
-                return false;
+                return Task.FromResult(false);
             }
 
             StatusChanged?.Invoke("正在启动start.bat...");
@@ -562,12 +737,12 @@ exit";
                 };
                 
                 process.Start();
-                return true;
+                return Task.FromResult(true);
             }
             catch (Exception ex)
             {
                 StatusChanged?.Invoke($"启动失败: {ex.Message}");
-                return false;
+                return Task.FromResult(false);
             }
         }
 

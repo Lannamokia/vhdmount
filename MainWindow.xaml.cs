@@ -19,7 +19,6 @@ namespace VHDMounter
             InitializeComponent();
             vhdManager = new VHDManager();
             vhdManager.StatusChanged += OnStatusChanged;
-            vhdManager.VHDFilesFound += OnVHDFilesFound;
             
             // 注册关机事件监听
             SystemEvents.SessionEnding += OnSessionEnding;
@@ -36,14 +35,7 @@ namespace VHDMounter
             });
         }
 
-        private void OnVHDFilesFound(List<string> vhdFiles)
-        {
-            Dispatcher.Invoke(() =>
-            {
-                availableVHDs = vhdFiles;
-                ShowVHDSelector(vhdFiles);
-            });
-        }
+
 
         private async Task StartMainProcessWithDelay()
         {
