@@ -330,10 +330,17 @@ namespace VHDMounter
             
             try
             {
-                // 先分离现有VHD（如果已挂载）
+                // 基本校验：文件必须存在
+                if (string.IsNullOrWhiteSpace(vhdPath) || !File.Exists(vhdPath))
+                {
+                    StatusChanged?.Invoke("挂载失败: VHD文件不存在或路径无效");
+                    return false;
+                }
+
+                // 先清理盘符并分离可能已挂载的VHD，避免冲突
+                await UnmountDrive();
                 await UnmountVHD();
 
-                // 使用diskpart挂载VHD
                 var diskpartScript = $@"select vdisk file=""{vhdPath}""
 attach vdisk
 assign letter=M
@@ -356,14 +363,44 @@ exit";
                 };
                 
                 process.Start();
-                await process.WaitForExitAsync();
+
+                // 设定挂载超时（60秒），防止卡死
+                var waitTask = process.WaitForExitAsync();
+                var timeoutTask = Task.Delay(60000);
+                var completed = await Task.WhenAny(waitTask, timeoutTask);
+                
+                if (completed == timeoutTask)
+                {
+                    try { process.Kill(); } catch { }
+                    StatusChanged?.Invoke("挂载超时（超过60秒），已中止diskpart进程");
+                    File.Delete(tempScript);
+                    return false;
+                }
+
+                string output = await process.StandardOutput.ReadToEndAsync();
+                string error = await process.StandardError.ReadToEndAsync();
                 
                 File.Delete(tempScript);
                 
-                // 等待挂载完成
+                // 等待系统完成卷挂载
                 await Task.Delay(2000);
                 
-                return Directory.Exists(TARGET_DRIVE);
+                bool mounted = Directory.Exists(TARGET_DRIVE);
+                if (!mounted)
+                {
+                    if (!string.IsNullOrWhiteSpace(error))
+                    {
+                        StatusChanged?.Invoke($"挂载失败：{error.Trim()}");
+                    }
+                    else
+                    {
+                        // 提供有限的DiskPart输出以辅助定位问题
+                        var trimmedOutput = output?.Length > 400 ? output.Substring(output.Length - 400) : output;
+                        StatusChanged?.Invoke($"挂载失败：未检测到M盘。DiskPart输出片段：{trimmedOutput}");
+                    }
+                }
+
+                return mounted;
             }
             catch (Exception ex)
             {
@@ -377,8 +414,13 @@ exit";
             try
             {
                 if (!Directory.Exists(TARGET_DRIVE))
+                {
+                    StatusChanged?.Invoke("M盘符已不存在，无需移除");
                     return true;
+                }
 
+                StatusChanged?.Invoke("正在移除M盘符...");
+                
                 var diskpartScript = "select volume M\nremove\nexit";
                 var tempScript = Path.GetTempFileName();
                 await File.WriteAllTextAsync(tempScript, diskpartScript);
@@ -390,18 +432,38 @@ exit";
                         FileName = "diskpart",
                         Arguments = $"/s \"{tempScript}\"",
                         UseShellExecute = false,
-                        CreateNoWindow = true
+                        CreateNoWindow = true,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
                     }
                 };
                 
                 process.Start();
-                await process.WaitForExitAsync();
                 
-                File.Delete(tempScript);
+                // 添加超时机制
+                var waitTask = process.WaitForExitAsync();
+                var timeoutTask = Task.Delay(20000); // 20秒超时
+                var completed = await Task.WhenAny(waitTask, timeoutTask);
+                
+                if (completed == timeoutTask)
+                {
+                    try { process.Kill(); } catch { }
+                    StatusChanged?.Invoke("移除M盘符超时，已中止diskpart进程");
+                    if (File.Exists(tempScript))
+                        File.Delete(tempScript);
+                    return false;
+                }
+                
+                if (File.Exists(tempScript))
+                    File.Delete(tempScript);
+                
+                StatusChanged?.Invoke("M盘符移除完成");
                 return true;
             }
-            catch
+            catch (Exception ex)
             {
+                StatusChanged?.Invoke($"移除M盘符失败: {ex.Message}");
+                Debug.WriteLine($"UnmountDrive异常: {ex}");
                 return false;
             }
         }
@@ -554,6 +616,8 @@ exit";
                 var tempScript = Path.GetTempFileName();
                 await File.WriteAllTextAsync(tempScript, diskpartScript);
                 
+                StatusChanged?.Invoke("正在执行VHD解除挂载脚本...");
+                
                 var process = new Process
                 {
                     StartInfo = new ProcessStartInfo
@@ -568,9 +632,40 @@ exit";
                 };
                 
                 process.Start();
-                await process.WaitForExitAsync();
                 
-                File.Delete(tempScript);
+                // 添加超时机制，防止解除挂载时卡住
+                var waitTask = process.WaitForExitAsync();
+                var timeoutTask = Task.Delay(30000); // 30秒超时
+                var completed = await Task.WhenAny(waitTask, timeoutTask);
+                
+                if (completed == timeoutTask)
+                {
+                    try { process.Kill(); } catch { }
+                    StatusChanged?.Invoke("解除VHD挂载超时（超过30秒），已中止diskpart进程");
+                    if (File.Exists(tempScript))
+                        File.Delete(tempScript);
+                    return false;
+                }
+                
+                // 获取进程输出用于调试
+                string output = "";
+                string error = "";
+                try
+                {
+                    output = await process.StandardOutput.ReadToEndAsync();
+                    error = await process.StandardError.ReadToEndAsync();
+                }
+                catch { }
+                
+                if (File.Exists(tempScript))
+                    File.Delete(tempScript);
+                
+                if (process.ExitCode != 0 && !string.IsNullOrWhiteSpace(error))
+                {
+                    StatusChanged?.Invoke($"解除VHD挂载警告: {error.Trim()}");
+                    Debug.WriteLine($"UnmountVHD输出: {output}");
+                    Debug.WriteLine($"UnmountVHD错误: {error}");
+                }
                 
                 StatusChanged?.Invoke("VHD解除挂载完成");
                 return true;
@@ -578,6 +673,7 @@ exit";
             catch (Exception ex)
             {
                 StatusChanged?.Invoke($"解除VHD挂载失败: {ex.Message}");
+                Debug.WriteLine($"UnmountVHD异常: {ex}");
                 return false;
             }
         }
