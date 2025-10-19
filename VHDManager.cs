@@ -516,13 +516,14 @@ namespace VHDMounter
                 await UnmountDrive();
                 await UnmountVHD();
 
-                var diskpartScript = $@"select vdisk file=""{vhdPath}""
+                // 第一步：仅挂载VHD，不分配盘符
+                StatusChanged?.Invoke("步骤1: 挂载VHD文件...");
+                var attachScript = $@"select vdisk file=""{vhdPath}""
 attach vdisk
-assign letter=M
 exit";
                 
                 var tempScript = Path.GetTempFileName();
-                await File.WriteAllTextAsync(tempScript, diskpartScript);
+                await File.WriteAllTextAsync(tempScript, attachScript);
                 
                 var process = new Process
                 {
@@ -547,39 +548,64 @@ exit";
                 if (completed == timeoutTask)
                 {
                     try { process.Kill(); } catch { }
-                    StatusChanged?.Invoke("挂载超时（超过60秒），已中止diskpart进程");
-                    File.Delete(tempScript);
+                    StatusChanged?.Invoke("VHD挂载超时（超过60秒），已中止diskpart进程");
+                    if (File.Exists(tempScript))
+                        File.Delete(tempScript);
                     return false;
                 }
 
-                string output = await process.StandardOutput.ReadToEndAsync();
-                string error = await process.StandardError.ReadToEndAsync();
+                string attachOutput = await process.StandardOutput.ReadToEndAsync();
+                string attachError = await process.StandardError.ReadToEndAsync();
                 
-                File.Delete(tempScript);
+                if (File.Exists(tempScript))
+                    File.Delete(tempScript);
                 
-                // 等待系统完成卷挂载
-                await Task.Delay(2000);
-                
-                bool mounted = Directory.Exists(TARGET_DRIVE);
-                if (!mounted)
+                if (process.ExitCode != 0)
                 {
-                    if (!string.IsNullOrWhiteSpace(error))
-                    {
-                        StatusChanged?.Invoke($"挂载失败：{error.Trim()}");
-                    }
-                    else
-                    {
-                        // 提供有限的DiskPart输出以辅助定位问题
-                        var trimmedOutput = output?.Length > 400 ? output.Substring(output.Length - 400) : output;
-                        StatusChanged?.Invoke($"挂载失败：未检测到M盘。DiskPart输出片段：{trimmedOutput}");
-                    }
+                    StatusChanged?.Invoke($"VHD挂载失败: {attachError.Trim()}");
+                    Debug.WriteLine($"VHD挂载输出: {attachOutput}");
+                    Debug.WriteLine($"VHD挂载错误: {attachError}");
+                    return false;
                 }
 
-                return mounted;
+                StatusChanged?.Invoke("VHD挂载成功，等待系统识别分区...");
+                await Task.Delay(3000); // 等待系统识别分区
+
+                // 第二步：为第一个分区分配盘符
+                StatusChanged?.Invoke("步骤2: 为第一个分区分配盘符M...");
+                
+                // 容错检查：如果M盘已经存在，可能是系统自动分配的
+                if (Directory.Exists(TARGET_DRIVE))
+                {
+                    StatusChanged?.Invoke("检测到M盘已自动分配，跳过手动分配步骤");
+                    StatusChanged?.Invoke("VHD挂载和盘符分配完成");
+                    return true;
+                }
+                
+                bool driveAssigned = await AssignDriveLetterToFirstPartition(vhdPath);
+                
+                if (!driveAssigned)
+                {
+                    StatusChanged?.Invoke("分配盘符失败，尝试备用方法...");
+                    // 备用方法：直接尝试分配盘符
+                    driveAssigned = await AssignDriveLetterDirect();
+                }
+
+                if (driveAssigned)
+                {
+                    StatusChanged?.Invoke("VHD挂载和盘符分配完成");
+                    return true;
+                }
+                else
+                {
+                    StatusChanged?.Invoke("盘符分配失败，但VHD已挂载");
+                    return false;
+                }
             }
             catch (Exception ex)
             {
                 StatusChanged?.Invoke($"挂载失败: {ex.Message}");
+                Debug.WriteLine($"MountVHD异常: {ex}");
                 return false;
             }
         }
@@ -777,6 +803,183 @@ exit";
                 }
                 
                 await Task.Delay(1000); // 每秒检查一次
+            }
+        }
+
+        /// <summary>
+        /// 为VHD的第一个分区分配盘符M
+        /// </summary>
+        private async Task<bool> AssignDriveLetterToFirstPartition(string vhdPath)
+        {
+            try
+            {
+                // 容错机制：检查M盘是否已经存在
+                if (Directory.Exists(TARGET_DRIVE))
+                {
+                    StatusChanged?.Invoke("检测到M盘已存在，跳过盘符分配");
+                    Debug.WriteLine("M盘已存在，无需重复分配");
+                    return true;
+                }
+
+                // 使用diskpart列出VHD的分区并为第一个分区分配盘符
+                var listScript = $@"select vdisk file=""{vhdPath}""
+list partition
+select partition 1
+assign letter=M
+exit";
+                
+                var tempScript = Path.GetTempFileName();
+                await File.WriteAllTextAsync(tempScript, listScript);
+                
+                var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "diskpart",
+                        Arguments = $"/s \"{tempScript}\"",
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
+                    }
+                };
+                
+                process.Start();
+                
+                var waitTask = process.WaitForExitAsync();
+                var timeoutTask = Task.Delay(30000);
+                var completed = await Task.WhenAny(waitTask, timeoutTask);
+                
+                if (completed == timeoutTask)
+                {
+                    try { process.Kill(); } catch { }
+                    StatusChanged?.Invoke("分配盘符超时");
+                    if (File.Exists(tempScript))
+                        File.Delete(tempScript);
+                    return false;
+                }
+
+                string output = await process.StandardOutput.ReadToEndAsync();
+                string error = await process.StandardError.ReadToEndAsync();
+                
+                if (File.Exists(tempScript))
+                    File.Delete(tempScript);
+                
+                Debug.WriteLine($"分区盘符分配输出: {output}");
+                if (!string.IsNullOrWhiteSpace(error))
+                {
+                    Debug.WriteLine($"分区盘符分配错误: {error}");
+                }
+
+                // 等待盘符分配完成
+                await Task.Delay(2000);
+                
+                bool driveExists = Directory.Exists(TARGET_DRIVE);
+                if (driveExists)
+                {
+                    StatusChanged?.Invoke("盘符M分配成功");
+                }
+                else
+                {
+                    StatusChanged?.Invoke("盘符M分配失败，M盘不存在");
+                }
+                
+                return driveExists;
+            }
+            catch (Exception ex)
+            {
+                StatusChanged?.Invoke($"分配盘符异常: {ex.Message}");
+                Debug.WriteLine($"AssignDriveLetterToFirstPartition异常: {ex}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 备用方法：直接尝试分配盘符（适用于单分区VHD）
+        /// </summary>
+        private async Task<bool> AssignDriveLetterDirect()
+        {
+            try
+            {
+                // 容错机制：检查M盘是否已经存在
+                if (Directory.Exists(TARGET_DRIVE))
+                {
+                    StatusChanged?.Invoke("备用方法检测到M盘已存在，跳过盘符分配");
+                    Debug.WriteLine("备用方法：M盘已存在，无需重复分配");
+                    return true;
+                }
+
+                // 尝试为最后挂载的磁盘分配盘符
+                var assignScript = @"list disk
+select disk 1
+list partition
+select partition 1
+assign letter=M
+exit";
+                
+                var tempScript = Path.GetTempFileName();
+                await File.WriteAllTextAsync(tempScript, assignScript);
+                
+                var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "diskpart",
+                        Arguments = $"/s \"{tempScript}\"",
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
+                    }
+                };
+                
+                process.Start();
+                
+                var waitTask = process.WaitForExitAsync();
+                var timeoutTask = Task.Delay(30000);
+                var completed = await Task.WhenAny(waitTask, timeoutTask);
+                
+                if (completed == timeoutTask)
+                {
+                    try { process.Kill(); } catch { }
+                    StatusChanged?.Invoke("备用盘符分配超时");
+                    if (File.Exists(tempScript))
+                        File.Delete(tempScript);
+                    return false;
+                }
+
+                string output = await process.StandardOutput.ReadToEndAsync();
+                string error = await process.StandardError.ReadToEndAsync();
+                
+                if (File.Exists(tempScript))
+                    File.Delete(tempScript);
+                
+                Debug.WriteLine($"备用盘符分配输出: {output}");
+                if (!string.IsNullOrWhiteSpace(error))
+                {
+                    Debug.WriteLine($"备用盘符分配错误: {error}");
+                }
+
+                // 等待盘符分配完成
+                await Task.Delay(2000);
+                
+                bool driveExists = Directory.Exists(TARGET_DRIVE);
+                if (driveExists)
+                {
+                    StatusChanged?.Invoke("备用方法盘符M分配成功");
+                }
+                else
+                {
+                    StatusChanged?.Invoke("备用方法盘符M分配也失败");
+                }
+                
+                return driveExists;
+            }
+            catch (Exception ex)
+            {
+                StatusChanged?.Invoke($"备用盘符分配异常: {ex.Message}");
+                Debug.WriteLine($"AssignDriveLetterDirect异常: {ex}");
+                return false;
             }
         }
 
