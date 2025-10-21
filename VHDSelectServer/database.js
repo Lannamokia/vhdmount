@@ -181,6 +181,84 @@ class Database {
         }
     }
 
+    // 获取管理员密码哈希
+    async getAdminPasswordHash() {
+        try {
+            const client = await this.pool.connect();
+            const result = await client.query(
+                'SELECT setting_value FROM admin_settings WHERE setting_key = $1',
+                ['admin_password_hash']
+            );
+            client.release();
+            
+            return result.rows[0]?.setting_value || null;
+        } catch (error) {
+            console.error('获取管理员密码失败:', error.message);
+            return null;
+        }
+    }
+
+    // 更新管理员密码哈希
+    async updateAdminPasswordHash(passwordHash) {
+        try {
+            const client = await this.pool.connect();
+            const result = await client.query(`
+                INSERT INTO admin_settings (setting_key, setting_value)
+                VALUES ($1, $2)
+                ON CONFLICT (setting_key)
+                DO UPDATE SET
+                    setting_value = EXCLUDED.setting_value,
+                    updated_at = CURRENT_TIMESTAMP
+                RETURNING *
+            `, ['admin_password_hash', passwordHash]);
+            client.release();
+            
+            return result.rows[0];
+        } catch (error) {
+            console.error('更新管理员密码失败:', error.message);
+            throw error;
+        }
+    }
+
+    // 获取设置值
+    async getSetting(key) {
+        try {
+            const client = await this.pool.connect();
+            const result = await client.query(
+                'SELECT setting_value FROM admin_settings WHERE setting_key = $1',
+                [key]
+            );
+            client.release();
+            
+            return result.rows[0]?.setting_value || null;
+        } catch (error) {
+            console.error(`获取设置 ${key} 失败:`, error.message);
+            return null;
+        }
+    }
+
+    // 更新设置值
+    async updateSetting(key, value) {
+        try {
+            const client = await this.pool.connect();
+            const result = await client.query(`
+                INSERT INTO admin_settings (setting_key, setting_value)
+                VALUES ($1, $2)
+                ON CONFLICT (setting_key)
+                DO UPDATE SET
+                    setting_value = EXCLUDED.setting_value,
+                    updated_at = CURRENT_TIMESTAMP
+                RETURNING *
+            `, [key, value]);
+            client.release();
+            
+            return result.rows[0];
+        } catch (error) {
+            console.error(`更新设置 ${key} 失败:`, error.message);
+            throw error;
+        }
+    }
+
     // 关闭数据库连接池
     async close() {
         try {

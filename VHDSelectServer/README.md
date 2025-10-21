@@ -132,6 +132,35 @@ GET /api/auth/check
 }
 ```
 
+#### 修改管理员密码
+```http
+POST /api/auth/change-password
+Content-Type: application/json
+Authorization: 需要登录
+
+{
+  "currentPassword": "admin123",
+  "newPassword": "newPassword123",
+  "confirmPassword": "newPassword123"
+}
+```
+
+**响应示例**:
+```json
+{
+  "success": true,
+  "message": "密码修改成功"
+}
+```
+
+**错误响应示例**:
+```json
+{
+  "success": false,
+  "message": "当前密码错误"
+}
+```
+
 ### 🖥️ VHD关键词接口
 
 #### 获取当前VHD关键词
@@ -459,6 +488,10 @@ VHDSelectServer/
 - **CORS支持**: 支持跨域请求
 - **错误处理**: 完善的错误处理和用户反馈
 - **格式标准化**: 自动转换为大写格式
+- **用户认证**: 基于会话的管理员认证系统
+- **密码安全**: bcrypt加密存储，支持在线修改管理员密码
+- **会话管理**: 24小时会话有效期，自动登出保护
+- **数据库安全**: 密码哈希持久化存储，支持密码策略验证
 
 ## 🐛 故障排除
 
@@ -487,6 +520,9 @@ python server.py 8081
 - ✅ 机台管理功能
 - ✅ 机台保护状态控制
 - ✅ 用户认证和会话管理
+- ✅ 管理员密码在线修改功能
+- ✅ bcrypt密码加密存储
+- ✅ 密码安全策略验证
 - ✅ 完整的RESTful API文档
 - ✅ 健康检查和监控
 - ✅ 数据持久化和备份

@@ -12,8 +12,8 @@ const database = require('./database');
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// 管理员密码配置 (默认密码: admin123)
-const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH || bcrypt.hashSync('admin123', 10);
+// 管理员密码配置 (默认密码: admin123) - 现在从数据库获取
+const DEFAULT_ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH || bcrypt.hashSync('admin123', 10);
 
 // 会话配置
 app.use(session({
@@ -99,8 +99,23 @@ app.post('/api/auth/login', async (req, res) => {
             });
         }
         
+        // 从数据库获取密码哈希
+        let adminPasswordHash = await database.getAdminPasswordHash();
+        
+        // 如果数据库中没有密码，使用默认密码
+        if (!adminPasswordHash) {
+            adminPasswordHash = DEFAULT_ADMIN_PASSWORD_HASH;
+            // 将默认密码保存到数据库
+            try {
+                await database.updateAdminPasswordHash(adminPasswordHash);
+                console.log('默认管理员密码已保存到数据库');
+            } catch (error) {
+                console.error('保存默认密码到数据库失败:', error.message);
+            }
+        }
+        
         // 验证密码
-        const isValidPassword = await bcrypt.compare(password, ADMIN_PASSWORD_HASH);
+        const isValidPassword = await bcrypt.compare(password, adminPasswordHash);
         
         if (isValidPassword) {
             req.session.isAuthenticated = true;
@@ -145,6 +160,76 @@ app.get('/api/auth/check', (req, res) => {
     res.json({
         isAuthenticated: !!(req.session && req.session.isAuthenticated)
     });
+});
+
+// 修改管理员密码
+app.post('/api/auth/change-password', requireAuth, async (req, res) => {
+    try {
+        const { currentPassword, newPassword, confirmPassword } = req.body;
+        
+        console.log(`[${new Date().toISOString()}] 密码修改请求`);
+        
+        // 验证输入
+        if (!currentPassword || !newPassword || !confirmPassword) {
+            return res.status(400).json({
+                success: false,
+                message: '请填写所有密码字段'
+            });
+        }
+        
+        if (newPassword !== confirmPassword) {
+            return res.status(400).json({
+                success: false,
+                message: '新密码和确认密码不匹配'
+            });
+        }
+        
+        if (newPassword.length < 6) {
+            return res.status(400).json({
+                success: false,
+                message: '新密码长度至少为6位'
+            });
+        }
+        
+        // 获取当前密码哈希
+        const currentPasswordHash = await database.getAdminPasswordHash();
+        if (!currentPasswordHash) {
+            return res.status(500).json({
+                success: false,
+                message: '无法获取当前密码信息'
+            });
+        }
+        
+        // 验证当前密码
+        const isCurrentPasswordValid = await bcrypt.compare(currentPassword, currentPasswordHash);
+        if (!isCurrentPasswordValid) {
+            console.log(`[${new Date().toISOString()}] 密码修改失败: 当前密码错误`);
+            return res.status(401).json({
+                success: false,
+                message: '当前密码错误'
+            });
+        }
+        
+        // 生成新密码哈希
+        const newPasswordHash = await bcrypt.hash(newPassword, 10);
+        
+        // 更新数据库中的密码
+        await database.updateAdminPasswordHash(newPasswordHash);
+        
+        console.log(`[${new Date().toISOString()}] 管理员密码修改成功`);
+        
+        res.json({
+            success: true,
+            message: '密码修改成功'
+        });
+        
+    } catch (error) {
+        console.error('密码修改错误:', error);
+        res.status(500).json({
+            success: false,
+            message: '服务器错误，密码修改失败'
+        });
+    }
 });
 
 // API路由
