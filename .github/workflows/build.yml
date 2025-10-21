@@ -34,7 +34,7 @@ jobs:
     - name: Get version
       id: version
       run: |
-        $version = "1.0.0"
+        $version = "1.2.0"
         if ($env:GITHUB_REF -like "refs/tags/*") {
           $version = $env:GITHUB_REF -replace "refs/tags/v?", ""
         } elseif ($env:GITHUB_EVENT_NAME -eq "pull_request") {
