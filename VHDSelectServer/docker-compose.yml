@@ -3,26 +3,57 @@ version: '3.8'
 services:
   vhd-select-server:
     image: lty271104/vhd-select-server:latest
-    container_name: vhd-select-server
     ports:
-      - "8080:8080"
+      - "8082:8080"
     volumes:
-      # 配置文件持久化映射
       - ./config:/app/config
-      # 可选：映射整个数据目录
-      - vhd-data:/app/data
+      - ./vhd-data:/app/vhd-data
+      # 内置数据库数据持久化
+      - vhd_db_data:/var/lib/postgresql/data
     environment:
+      # 应用配置
       - NODE_ENV=production
       - PORT=8080
       - CONFIG_PATH=/app/config
-    restart: unless-stopped
+      
+      # 数据库配置 - 使用内置数据库
+      - USE_EMBEDDED_DB=true
+      - DB_HOST=localhost
+      - DB_PORT=5432
+      - DB_NAME=vhd_select
+      - DB_USER=postgres
+      - DB_PASSWORD=vhd_select_password
+      
+      # 可选的数据库连接配置
+      - DB_MAX_CONNECTIONS=20
+      - DB_IDLE_TIMEOUT=30000
+      - DB_CONNECTION_TIMEOUT=5000
+      - DB_SSL=false
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/api/status"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 60s
+    restart: unless-stopped
+
+  # 外部数据库示例配置（可选）
+  # 如果要使用外部数据库，请取消注释以下配置并修改上面的环境变量
+  # postgres:
+  #   image: postgres:15-alpine
+  #   environment:
+  #     - POSTGRES_DB=vhd_select
+  #     - POSTGRES_USER=postgres
+  #     - POSTGRES_PASSWORD=vhd_select_password
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #     - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+  #   ports:
+  #     - "5432:5432"
+  #   restart: unless-stopped
 
 volumes:
-  vhd-data:
+  vhd_db_data:
     driver: local
+  # postgres_data:
+  #   driver: local

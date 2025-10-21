@@ -1,5 +1,67 @@
 # VHD Mounter - 智能SEGA街机游戏VHD挂载管理和运行保活工具
 
+> 🎮 **完整的街机游戏VHD管理解决方案**  
+> 包含本地VHD挂载工具和配套的Web服务器，提供集中化配置管理和远程控制功能
+
+## 📦 项目组成
+
+本项目包含两个核心组件：
+
+### 🖥️ VHD Mounter (主程序)
+智能VHD挂载和进程保活工具，支持本地和远程配置管理
+
+### 🌐 VHDSelectServer (配套服务器)
+基于Node.js的Web服务器，提供：
+- 🎯 **集中化VHD选择管理** - Web GUI界面和RESTful API
+- 🐳 **Docker化部署** - 支持内置/外部PostgreSQL数据库
+- 🔐 **用户认证系统** - 安全的会话管理
+- 🛡️ **机台保护功能** - 防止误操作的保护机制
+- 📊 **实时状态监控** - 健康检查和系统状态API
+
+## 📁 项目结构
+
+```
+vhdmount/
+├── 📁 VHDSelectServer/              # Web服务器子项目
+│   ├── 📄 server.js                 # 主服务器文件
+│   ├── 📄 database.js               # 数据库操作模块
+│   ├── 📄 package.json              # Node.js依赖配置
+│   ├── 📄 Dockerfile                # Docker镜像构建文件
+│   ├── 📄 docker-compose.yml        # Docker Compose配置
+│   ├── 📄 docker-compose.external-db.yml  # 外部数据库配置
+│   ├── 📄 docker-entrypoint.sh      # Docker启动脚本
+│   ├── 📄 init-db.sql               # 数据库初始化脚本
+│   ├── 📄 init-embedded-db.sh       # 内置数据库初始化
+│   ├── 📄 setup_postgresql.sql      # PostgreSQL设置脚本
+│   ├── 📄 README.md                 # VHDSelectServer详细文档
+│   ├── 📄 DOCKER_TROUBLESHOOTING.md # Docker故障排除指南
+│   ├── 📄 POSTGRESQL_SETUP.md       # PostgreSQL设置指南
+│   └── 📁 config/                   # 配置文件目录
+├── 📄 VHDMounter.exe                # 主程序可执行文件
+├── 📄 VHDMounter.csproj             # .NET项目文件
+├── 📄 MainWindow.xaml               # WPF主窗口界面
+├── 📄 MainWindow.xaml.cs            # 主窗口逻辑代码
+├── 📄 VHDManager.cs                 # VHD管理核心类
+├── 📄 Program.cs                    # 程序入口点
+├── 📄 vhdmonter_config.ini          # 客户端配置文件
+├── 📄 README.md                     # 项目主文档
+├── 📄 VHD_Mount_Fix_Guide.md        # VHD挂载故障排除指南
+├── 📄 build.bat                     # 构建脚本
+├── 📄 debug.bat                     # 调试脚本
+├── 📄 run_as_admin.bat              # 管理员运行脚本
+└── 📁 .github/workflows/            # GitHub Actions CI/CD配置
+    └── 📄 build.yml                 # 自动构建配置
+```
+
+### 目录说明
+
+- **VHDSelectServer/**: 独立的Web服务器子项目，提供集中化配置管理
+- **主程序文件**: VHD挂载和进程管理的核心Windows应用程序
+- **配置文件**: 客户端和服务器的配置管理文件
+- **文档**: 详细的使用指南和故障排除文档
+- **脚本**: 构建、调试和部署的辅助脚本
+- **CI/CD**: 自动化构建和部署配置
+
 ## ✨ 核心特性
 
 ### 🔍 智能扫描与识别
@@ -8,10 +70,19 @@
 - **快速定位**：优化的扫描算法，快速定位目标文件
 
 ### 🌐 智能网络配置管理
-- **远程关键词获取**：通过HTTP API自动获取启动关键词，实现集中化配置管理
+- **VHDSelectServer集成**：配套的Node.js Web服务器，提供完整的集中化配置管理解决方案
+- **RESTful API接口**：标准化的HTTP API，支持VHD关键词获取、设置和状态查询
+- **Web GUI管理界面**：直观的网页操作界面，支持实时VHD选择和机台保护设置
+- **多部署模式支持**：
+  - Docker单容器部署（内置PostgreSQL数据库）
+  - Docker Compose部署（外部PostgreSQL数据库）
+  - 本地开发模式部署
 - **配置文件驱动**：通过`vhdmonter_config.ini`灵活控制远程功能开关和服务器地址
 - **智能降级机制**：远程获取失败时自动回退到本地选择模式，确保程序稳定运行
-- **跨平台服务器支持**：配套VHDSelectServer提供Web GUI和API接口，支持Docker部署
+- **实时配置同步**：服务器端配置变更立即生效，无需重启客户端程序
+- **安全认证机制**：基于会话的用户认证，防止未授权访问和误操作
+- **机台保护功能**：支持设置机台保护状态，防止意外的VHD切换操作
+- **健康检查监控**：内置健康检查端点，支持服务状态监控和故障诊断
 
 ### 🔌 智能USB设备管理
 - **NX_INS设备识别**：自动检测卷标为"NX_INS"的USB设备，专为街机系统优化
@@ -41,6 +112,121 @@
 - **安全退出**：确保在系统关机前完成VHD卸载操作
 - **资源保护**：防止因异常退出导致的VHD资源占用
 
+## 🌐 VHDSelectServer - 集中化配置管理服务器
+
+VHDSelectServer是本项目的配套Web服务器，提供集中化的VHD选择管理和远程控制功能。
+
+### ✨ 主要特性
+
+#### 🎯 集中化VHD管理
+- **Web GUI界面**：直观的网页操作界面，支持VHD关键词选择
+- **RESTful API**：完整的API接口，支持程序化集成
+- **实时配置**：动态更新VHD选择配置，无需重启客户端
+
+#### 🐳 Docker化部署
+- **一键部署**：支持Docker和Docker Compose快速部署
+- **双数据库模式**：
+  - 内置PostgreSQL：单容器部署，适合小规模使用
+  - 外部PostgreSQL：分离式部署，适合生产环境
+- **健康检查**：内置健康检查机制，确保服务稳定运行
+
+#### 🔐 安全认证系统
+- **用户登录**：基于会话的用户认证机制
+- **权限控制**：防止未授权访问和误操作
+- **会话管理**：安全的会话超时和自动登出
+
+#### 🛡️ 机台保护功能
+- **保护状态**：可设置机台保护状态，防止误操作
+- **状态持久化**：保护状态自动保存到数据库
+- **API控制**：支持通过API查询和设置保护状态
+
+#### 📊 系统监控
+- **状态API**：实时系统状态查询接口
+- **健康检查**：服务健康状态监控
+- **版本信息**：API版本和系统信息查询
+
+### 🚀 快速部署
+
+#### Docker部署（推荐）
+
+**方式一：内置数据库（单容器）**
+```bash
+# 构建镜像
+docker build -t vhd-select-server ./VHDSelectServer
+
+# 运行容器
+docker run -d \
+  --name vhd-select-server \
+  -p 8080:8080 \
+  -v vhd_data:/app/data \
+  vhd-select-server
+```
+
+**方式二：外部数据库（Docker Compose）**
+```bash
+# 进入VHDSelectServer目录
+cd VHDSelectServer
+
+# 启动服务（包含PostgreSQL）
+docker-compose up -d
+
+# 查看服务状态
+docker-compose ps
+```
+
+#### 本地开发部署
+```bash
+# 进入VHDSelectServer目录
+cd VHDSelectServer
+
+# 安装依赖
+npm install
+
+# 启动服务
+npm start
+```
+
+### 🔧 配置说明
+
+#### 环境变量配置
+- `DB_TYPE`：数据库类型（embedded/external）
+- `DB_HOST`：数据库主机地址（外部数据库模式）
+- `DB_PORT`：数据库端口（默认5432）
+- `DB_NAME`：数据库名称（默认vhd_select）
+- `DB_USER`：数据库用户名（默认postgres）
+- `DB_PASSWORD`：数据库密码（默认postgres）
+- `PORT`：服务端口（默认8080）
+
+#### 客户端配置
+在主程序目录下的`vhdmonter_config.ini`文件中配置：
+```ini
+[RemoteSelection]
+EnableRemoteSelection=true
+BootImageSelectUrl=http://localhost:8080/api/boot-image-select
+```
+
+### 📡 API接口
+
+详细的API文档请参考 <mcfile name="README.md" path="VHDSelectServer/README.md"></mcfile>
+
+主要接口包括：
+- `GET /api/boot-image-select` - 获取当前VHD选择
+- `POST /api/set-vhd` - 设置VHD关键词
+- `GET /api/status` - 获取系统状态
+- `POST /api/auth/login` - 用户登录
+- `GET /api/machines` - 机台管理
+- `POST /api/protect` - 设置保护状态
+
+### 🌍 Web界面
+
+访问 `http://localhost:8080` 打开Web管理界面，功能包括：
+- VHD关键词选择和设置
+- 机台保护状态管理
+- 系统状态监控
+- 用户登录和会话管理
+
+默认登录密码：`admin123`
+
 ## 🚀 快速开始
 
 ### 系统要求
@@ -52,12 +238,14 @@
 
 ### 安装与运行
 
-#### 方式一：直接运行（推荐）
+#### VHD Mounter (主程序)
+
+**方式一：直接运行（推荐）**
 1. 下载最新版本的可执行文件
 2. 右键点击 → "以管理员身份运行"
 3. 程序将自动开始扫描和挂载流程
 
-#### 方式二：从源码编译
+**方式二：从源码编译**
 ```powershell
 # 克隆仓库
 git clone https://github.com/username/vhdmount.git
@@ -68,6 +256,41 @@ dotnet build --configuration Release
 
 # 发布独立应用
 dotnet publish --configuration Release --self-contained true --runtime win-x64
+```
+
+#### VHDSelectServer (配套服务器)
+
+**Docker部署（推荐）**
+```powershell
+# 进入VHDSelectServer目录
+cd VHDSelectServer
+
+# 方式一：单容器部署（内置数据库）
+docker build -t vhd-select-server .
+docker run -d --name vhd-select-server -p 8080:8080 -v vhd_data:/app/data vhd-select-server
+
+# 方式二：Docker Compose部署（外部数据库）
+docker-compose up -d
+```
+
+**本地开发部署**
+```powershell
+# 进入VHDSelectServer目录
+cd VHDSelectServer
+
+# 安装Node.js依赖
+npm install
+
+# 启动服务器
+npm start
+```
+
+**配置客户端连接**
+在主程序目录创建或编辑 `vhdmonter_config.ini`：
+```ini
+[RemoteSelection]
+EnableRemoteSelection=true
+BootImageSelectUrl=http://localhost:8080/api/boot-image-select
 ```
 
 ## 📖 使用指南
@@ -151,12 +374,43 @@ VHDMounter.exe --debug
 
 ## 🔧 技术架构
 
+### 整体架构
+
+本项目采用客户端-服务器架构，包含两个核心组件：
+
+```
+┌─────────────────────┐    HTTP API    ┌─────────────────────┐
+│   VHD Mounter       │◄──────────────►│  VHDSelectServer    │
+│   (Windows Client)  │                │   (Web Server)      │
+└─────────────────────┘                └─────────────────────┘
+│                                       │
+├─ VHD挂载管理                          ├─ 集中化配置管理
+├─ 进程监控保活                         ├─ Web GUI界面
+├─ USB设备检测                          ├─ RESTful API
+├─ 远程配置获取                         ├─ 用户认证系统
+└─ 本地文件操作                         └─ 数据库持久化
+```
+
 ### 核心技术栈
+
+#### VHD Mounter (客户端)
 - **UI框架**：WPF (.NET 6.0)
 - **VHD操作**：Windows DiskPart API
 - **进程管理**：System.Diagnostics
 - **系统集成**：Microsoft.Win32.SystemEvents
 - **异步编程**：async/await 模式
+- **HTTP客户端**：HttpClient (.NET 6.0)
+- **配置管理**：INI文件解析
+
+#### VHDSelectServer (服务端)
+- **运行时**：Node.js 18+
+- **Web框架**：Express.js
+- **数据库**：PostgreSQL 13+
+- **ORM**：原生SQL查询
+- **认证**：Express-session
+- **容器化**：Docker & Docker Compose
+- **前端**：原生HTML/CSS/JavaScript
+- **健康检查**：内置健康检查端点
 
 ### 关键组件
 
@@ -180,6 +434,46 @@ VHDMounter.exe --debug
 - 系统事件监听
 - 应用程序生命周期控制
 - 执行步骤状态显示和暂停控制
+
+#### VHDSelectServer 核心模块
+
+**server.js (主服务器)**
+- Express应用初始化和路由配置
+- 中间件管理（认证、CORS、静态文件）
+- API端点实现和错误处理
+- 服务器启动和健康检查
+
+**database.js (数据库层)**
+- PostgreSQL连接管理
+- 数据库初始化和表创建
+- SQL查询封装和事务处理
+- 连接池管理和错误恢复
+
+**认证中间件**
+- 会话验证和用户状态检查
+- 登录状态管理和权限控制
+- 安全头设置和CSRF防护
+
+**API路由模块**
+- `/api/auth/*` - 用户认证相关接口
+- `/api/boot-image-select` - VHD选择获取接口
+- `/api/set-vhd` - VHD关键词设置接口
+- `/api/machines/*` - 机台管理接口
+- `/api/protect` - 保护状态控制接口
+- `/api/status` - 系统状态查询接口
+
+### 集成机制
+
+#### 客户端-服务器通信
+- **HTTP协议**：基于RESTful API的标准HTTP通信
+- **JSON格式**：统一的数据交换格式
+- **错误处理**：完整的错误响应和降级机制
+- **超时控制**：网络请求超时和重试机制
+
+#### 配置同步
+- **实时更新**：服务器配置变更立即生效
+- **本地缓存**：客户端配置文件作为备用方案
+- **降级策略**：网络异常时自动切换到本地模式
 
 ### 安全机制
 - **权限检查**：启动时验证管理员权限

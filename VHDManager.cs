@@ -9,10 +9,11 @@ using System.Text.RegularExpressions;
 using System.Net.Http;
 using System.Text.Json;
 using System.Text;
+using System.Timers;
 
 namespace VHDMounter
 {
-    public class VHDManager
+    public class VHDManager : IDisposable
     {
         private const string TARGET_DRIVE = "M:";
         private readonly string[] TARGET_KEYWORDS = { "SDEZ", "SDHD", "SDDT" };
@@ -22,6 +23,146 @@ namespace VHDMounter
         
         private static readonly HttpClient httpClient = new HttpClient();
         private string configFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "vhdmonter_config.ini");
+        
+        // 保护检查相关字段
+        private Timer protectionTimer;
+        private string machineId;
+        private bool isProtectionCheckEnabled;
+        private string protectionCheckUrl;
+        private int protectionCheckInterval;
+        
+        // 构造函数
+        public VHDManager()
+        {
+            InitializeProtectionCheck();
+        }
+        
+        // 初始化保护检查功能
+        private void InitializeProtectionCheck()
+        {
+            try
+            {
+                var config = ReadConfig();
+                
+                // 读取Machine ID
+                machineId = config.TryGetValue("MachineId", out var id) ? id : "MACHINE_001";
+                
+                // 读取保护检查配置
+                isProtectionCheckEnabled = config.TryGetValue("EnableProtectionCheck", out var enableCheck) && 
+                                         bool.TryParse(enableCheck, out var enabled) && enabled;
+                
+                protectionCheckUrl = config.TryGetValue("ProtectionCheckUrl", out var url) ? url : "http://localhost:8080/api/protect";
+                
+                protectionCheckInterval = config.TryGetValue("ProtectionCheckInterval", out var interval) && 
+                                        int.TryParse(interval, out var intervalMs) ? intervalMs : 500;
+                
+                if (isProtectionCheckEnabled)
+                {
+                    StartProtectionCheck();
+                    StatusChanged?.Invoke($"保护检查已启用 - Machine ID: {machineId}, 检查间隔: {protectionCheckInterval}ms");
+                }
+                else
+                {
+                    StatusChanged?.Invoke("保护检查功能已禁用");
+                }
+            }
+            catch (Exception ex)
+            {
+                StatusChanged?.Invoke($"初始化保护检查失败: {ex.Message}");
+            }
+        }
+        
+        // 启动保护检查定时器
+        private void StartProtectionCheck()
+        {
+            if (protectionTimer != null)
+            {
+                protectionTimer.Stop();
+                protectionTimer.Dispose();
+            }
+            
+            protectionTimer = new Timer(protectionCheckInterval);
+            protectionTimer.Elapsed += async (sender, e) => await CheckProtectionStatus();
+            protectionTimer.AutoReset = true;
+            protectionTimer.Start();
+        }
+        
+        // 检查保护状态
+        private async Task CheckProtectionStatus()
+        {
+            try
+            {
+                if (!isProtectionCheckEnabled || string.IsNullOrWhiteSpace(protectionCheckUrl))
+                    return;
+                
+                var requestUrl = $"{protectionCheckUrl}?machineId={Uri.EscapeDataString(machineId)}";
+                var response = await httpClient.GetAsync(requestUrl);
+                
+                if (response.IsSuccessStatusCode)
+                {
+                    var jsonContent = await response.Content.ReadAsStringAsync();
+                    var jsonDoc = JsonDocument.Parse(jsonContent);
+                    
+                    if (jsonDoc.RootElement.TryGetProperty("protected", out var protectedElement) && 
+                        protectedElement.GetBoolean())
+                    {
+                        StatusChanged?.Invoke($"收到保护信号 - Machine ID: {machineId}，正在执行自动关机...");
+                        await ExecuteShutdown();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"保护状态检查失败: {ex.Message}");
+            }
+        }
+        
+        // 执行自动关机
+        private async Task ExecuteShutdown()
+        {
+            try
+            {
+                StatusChanged?.Invoke("正在执行自动关机...");
+                
+                // 停止保护检查定时器
+                if (protectionTimer != null)
+                {
+                    protectionTimer.Stop();
+                    protectionTimer.Dispose();
+                    protectionTimer = null;
+                }
+                
+                // 执行关机命令
+                var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "shutdown",
+                        Arguments = "/s /t 0",
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }
+                };
+                
+                process.Start();
+                await process.WaitForExitAsync();
+            }
+            catch (Exception ex)
+            {
+                StatusChanged?.Invoke($"自动关机执行失败: {ex.Message}");
+            }
+        }
+        
+        // 停止保护检查
+        public void StopProtectionCheck()
+        {
+            if (protectionTimer != null)
+            {
+                protectionTimer.Stop();
+                protectionTimer.Dispose();
+                protectionTimer = null;
+            }
+        }
         
         // 调试方法：检查特定文件是否符合条件
         public bool IsVHDFileValid(string filePath)
@@ -402,9 +543,11 @@ namespace VHDMounter
                     return null;
                 }
                 
-                StatusChanged?.Invoke($"正在从远程获取VHD选择: {url}");
+                // 添加Machine ID参数
+                var requestUrl = $"{url}?machineId={Uri.EscapeDataString(machineId)}";
+                StatusChanged?.Invoke($"正在从远程获取VHD选择: {requestUrl}");
                 
-                var response = await httpClient.GetAsync(url);
+                var response = await httpClient.GetAsync(requestUrl);
                 if (!response.IsSuccessStatusCode)
                 {
                     StatusChanged?.Invoke($"远程请求失败: {response.StatusCode}");
@@ -417,7 +560,7 @@ namespace VHDMounter
                 if (jsonDoc.RootElement.TryGetProperty("BootImageSelected", out var bootImageElement))
                 {
                     var selectedKeyword = bootImageElement.GetString();
-                    StatusChanged?.Invoke($"远程选择的VHD关键词: {selectedKeyword}");
+                    StatusChanged?.Invoke($"远程选择的VHD关键词: {selectedKeyword} (Machine ID: {machineId})");
                     return selectedKeyword;
                 }
                 else
@@ -1131,6 +1274,19 @@ exit";
                 Debug.WriteLine($"UnmountVHD异常: {ex}");
                 return false;
             }
+        }
+        
+        // IDisposable实现
+        public void Dispose()
+        {
+            StopProtectionCheck();
+            httpClient?.Dispose();
+        }
+        
+        // 析构函数
+        ~VHDManager()
+        {
+            Dispose();
         }
     }
 }

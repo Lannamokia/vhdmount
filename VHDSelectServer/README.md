@@ -27,37 +27,37 @@
 
 ### 方法1: Docker部署（推荐）
 
-1. **一键部署脚本（最简单）**
-   ```bash
-   # Windows
-   deploy.bat
-   
-   # Linux/macOS
-   chmod +x deploy.sh
-   ./deploy.sh
-   ```
+#### 选项1: 使用内置数据库（默认）
+```bash
+# 使用Docker Compose启动（内置PostgreSQL数据库）
+docker-compose up -d
 
-2. **使用Docker Compose**
-   ```bash
-   # 构建并启动服务
-   docker-compose up -d
-   
-   # 查看日志
-   docker-compose logs -f
-   
-   # 停止服务
-   docker-compose down
-   ```
+# 查看日志
+docker-compose logs -f
 
-3. **使用Docker命令**
-   ```bash
-   # 运行容器（配置持久化）
-   docker run -d \
-     --name vhd-select-server \
-     -p 8080:8080 \
-     -v $(pwd)/config:/app/config \
-     lty271104/vhd-select-server:latest
-   ```
+# 停止服务
+docker-compose down
+```
+
+#### 选项2: 使用外部数据库
+```bash
+# 使用外部数据库配置文件
+docker-compose -f docker-compose.external-db.yml up -d
+
+# 或者手动配置环境变量
+docker run -d \
+  --name vhd-select-server \
+  -p 8080:8080 \
+  -v $(pwd)/config:/app/config \
+  -v $(pwd)/vhd-data:/app/vhd-data \
+  -e USE_EMBEDDED_DB=false \
+  -e DB_HOST=your-db-host \
+  -e DB_PORT=5432 \
+  -e DB_NAME=vhd_select \
+  -e DB_USER=your-db-user \
+  -e DB_PASSWORD=your-db-password \
+  lty271104/vhd-select-server:latest
+```
 
 ### 方法2: Node.js版本
 
@@ -75,15 +75,6 @@
    npm start
    ```
 
-### 方法3: Python版本
-
-```bash
-# 直接运行Python服务器
-python server.py
-
-# 或指定端口
-python server.py 8080
-```
 
 ## 🌐 访问界面
 
@@ -94,24 +85,78 @@ python server.py 8080
 
 ## 📡 API接口
 
-### 获取当前VHD关键词
+VHD Select Server 提供完整的RESTful API接口，支持机台管理、VHD关键词设置和状态监控。
+
+### 🔐 认证接口
+
+#### 登录
 ```http
-GET /api/boot-image-select
+POST /api/auth/login
+Content-Type: application/json
+
+{
+  "password": "admin123"
+}
 ```
 
 **响应示例**:
 ```json
 {
   "success": true,
-  "BootImageSelected": "SDEZ",
-  "timestamp": "2025-10-19T03:05:33.486615"
+  "message": "登录成功"
 }
 ```
 
-### 设置VHD关键词
+#### 登出
+```http
+POST /api/auth/logout
+```
+
+**响应示例**:
+```json
+{
+  "success": true,
+  "message": "已登出"
+}
+```
+
+#### 检查认证状态
+```http
+GET /api/auth/check
+```
+
+**响应示例**:
+```json
+{
+  "isAuthenticated": true
+}
+```
+
+### 🖥️ VHD关键词接口
+
+#### 获取当前VHD关键词
+```http
+GET /api/boot-image-select?machineId=MACHINE001
+```
+
+**参数说明**:
+- `machineId` (必需): 机台唯一标识符
+
+**响应示例**:
+```json
+{
+  "success": true,
+  "BootImageSelected": "SDEZ",
+  "machineId": "MACHINE001",
+  "timestamp": "2025-10-21T11:39:43.809Z"
+}
+```
+
+#### 设置全局VHD关键词 🔒
 ```http
 POST /api/set-vhd
 Content-Type: application/json
+Authorization: 需要登录
 
 {
   "BootImageSelected": "NEW_KEYWORD"
@@ -127,7 +172,113 @@ Content-Type: application/json
 }
 ```
 
-### 服务器状态
+### 🛡️ 机台保护接口
+
+#### 获取机台保护状态
+```http
+GET /api/protect?machineId=MACHINE001
+```
+
+**参数说明**:
+- `machineId` (必需): 机台唯一标识符
+
+**响应示例**:
+```json
+{
+  "success": true,
+  "protected": false,
+  "machineId": "MACHINE001",
+  "timestamp": "2025-10-21T11:39:43.809Z"
+}
+```
+
+#### 设置机台保护状态 🔒
+```http
+POST /api/protect
+Content-Type: application/json
+Authorization: 需要登录
+
+{
+  "machineId": "MACHINE001",
+  "protected": true
+}
+```
+
+**响应示例**:
+```json
+{
+  "success": true,
+  "protected": true,
+  "machineId": "MACHINE001",
+  "message": "机台保护状态已更新"
+}
+```
+
+### 🏭 机台管理接口
+
+#### 获取所有机台信息 🔒
+```http
+GET /api/machines
+Authorization: 需要登录
+```
+
+**响应示例**:
+```json
+{
+  "success": true,
+  "machines": [
+    {
+      "machine_id": "MACHINE001",
+      "protected": false,
+      "vhd_keyword": "SDEZ",
+      "last_seen": "2025-10-21T11:39:43.809Z",
+      "created_at": "2025-10-21T10:00:00.000Z"
+    }
+  ],
+  "count": 1,
+  "timestamp": "2025-10-21T11:39:43.809Z"
+}
+```
+
+#### 设置特定机台的VHD关键词 🔒
+```http
+POST /api/machines/{machineId}/vhd
+Content-Type: application/json
+Authorization: 需要登录
+
+{
+  "vhdKeyword": "CUSTOM_VHD"
+}
+```
+
+**响应示例**:
+```json
+{
+  "success": true,
+  "machineId": "MACHINE001",
+  "vhdKeyword": "CUSTOM_VHD",
+  "message": "机台VHD关键词已更新"
+}
+```
+
+#### 删除机台 🔒
+```http
+DELETE /api/machines/{machineId}
+Authorization: 需要登录
+```
+
+**响应示例**:
+```json
+{
+  "success": true,
+  "machineId": "MACHINE001",
+  "message": "机台已删除"
+}
+```
+
+### 📊 系统状态接口
+
+#### 获取服务器状态
 ```http
 GET /api/status
 ```
@@ -138,10 +289,34 @@ GET /api/status
   "success": true,
   "status": "running",
   "BootImageSelected": "SDEZ",
-  "timestamp": "2025-10-19T03:05:33.486615",
-  "version": "1.0.0"
+  "uptime": 30.415774368,
+  "timestamp": "2025-10-21T11:39:43.809Z",
+  "version": "1.2.0"
 }
 ```
+
+### 📝 API使用说明
+
+**认证要求**:
+- 🔒 标记的接口需要先通过 `/api/auth/login` 登录
+- 登录后会话有效期为24小时
+- 默认管理员密码: `admin123`
+
+**错误响应格式**:
+```json
+{
+  "success": false,
+  "error": "错误描述",
+  "requireAuth": true  // 仅在需要认证时出现
+}
+```
+
+**状态码说明**:
+- `200`: 请求成功
+- `400`: 请求参数错误
+- `401`: 未认证或认证失败
+- `404`: 资源不存在
+- `500`: 服务器内部错误
 
 ## 🎯 使用说明
 
@@ -160,23 +335,83 @@ GET /api/status
 
 ### Docker相关
 
+#### 数据库配置选项
+
+**内置数据库模式（默认）**
+- 自动在容器内启动PostgreSQL数据库
+- 数据持久化到Docker卷
+- 零配置，开箱即用
+
+**外部数据库模式**
+- 连接到外部PostgreSQL数据库
+- 支持云数据库服务
+- 更好的扩展性和可维护性
+
 #### 环境变量
+
+**应用配置**
 - `PORT`: 服务端口（默认: 8080）
 - `CONFIG_PATH`: 配置文件目录路径（默认: /app/config）
 - `NODE_ENV`: 运行环境（默认: production）
 
+**数据库配置**
+- `USE_EMBEDDED_DB`: 是否使用内置数据库（默认: true）
+- `DB_HOST`: 数据库主机地址（默认: localhost）
+- `DB_PORT`: 数据库端口（默认: 5432）
+- `DB_NAME`: 数据库名称（默认: vhd_select）
+- `DB_USER`: 数据库用户名（默认: postgres）
+- `DB_PASSWORD`: 数据库密码（默认: vhd_select_password）
+- `DB_MAX_CONNECTIONS`: 最大连接数（默认: 20）
+- `DB_IDLE_TIMEOUT`: 空闲连接超时时间（默认: 30000ms）
+- `DB_CONNECTION_TIMEOUT`: 连接超时时间（默认: 5000ms）
+- `DB_SSL`: 是否启用SSL连接（默认: false）
+
 #### 数据卷
 - `/app/config`: 配置文件持久化目录
-- `/app/data`: 数据文件持久化目录（可选）
+- `/app/vhd-data`: VHD数据文件持久化目录
+- `/var/lib/postgresql/data`: 内置数据库数据持久化目录
 
 #### 健康检查
-- 端点: `http://localhost:8080/api/status`
+- 端点: `http://localhost:8080/api/health`
 - 间隔: 30秒
 - 超时: 10秒
 - 重试: 3次
+- 启动等待时间: 60秒
+
+#### 配置文件说明
+
+**docker-compose.yml**: 使用内置数据库的默认配置
+**docker-compose.external-db.yml**: 使用外部数据库的示例配置
 
 #### 故障排除
-如果Docker部署遇到问题，请参考 [Docker故障排除指南](DOCKER_TROUBLESHOOTING.md)
+
+**内置数据库问题**
+```bash
+# 检查数据库初始化日志
+docker-compose logs vhd-select-server | grep -i postgres
+
+# 重新初始化数据库
+docker-compose down -v
+docker-compose up -d
+```
+
+**外部数据库连接问题**
+```bash
+# 测试数据库连接
+docker run --rm -it postgres:15-alpine psql -h your-db-host -U your-db-user -d vhd_select
+
+# 检查网络连接
+docker-compose exec vhd-select-server ping your-db-host
+```
+
+**数据持久化问题**
+```bash
+# 检查数据卷
+docker volume ls | grep vhd
+
+# 备份数据
+docker run --rm -v vhd_db_data:/data -v $(pwd):/backup alpine tar czf /backup/vhd_backup.tar.gz /data
+```
 
 ### 命令行测试
 
@@ -245,6 +480,16 @@ python server.py 8081
 - 在管理员模式下运行（如需要）
 
 ## 📝 更新日志
+
+### v1.2.0
+- ✅ 完整Docker化支持（内置/外部数据库）
+- ✅ PostgreSQL数据库集成
+- ✅ 机台管理功能
+- ✅ 机台保护状态控制
+- ✅ 用户认证和会话管理
+- ✅ 完整的RESTful API文档
+- ✅ 健康检查和监控
+- ✅ 数据持久化和备份
 
 ### v1.0.0
 - ✅ 跨平台支持（Node.js + Python）
