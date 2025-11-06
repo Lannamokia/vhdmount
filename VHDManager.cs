@@ -325,19 +325,21 @@ namespace VHDMounter
                                 continue;
                             }
                             
-                            // 复制USB文件到本地
-                            StatusChanged?.Invoke($"正在用 {Path.GetFileName(usbFile)} 替换 {Path.GetFileName(localFile)}");
-                            File.Copy(usbFile, localFile);
+                            // 复制USB文件到本地（使用源文件名作为目标文件名）
+                            var destDir = Path.GetDirectoryName(localFile);
+                            var destPath = Path.Combine(destDir ?? string.Empty, Path.GetFileName(usbFile));
+                            StatusChanged?.Invoke($"正在以源文件名复制: {Path.GetFileName(usbFile)} -> {Path.GetFileName(destPath)}");
+                            File.Copy(usbFile, destPath, true);
                             
                             // 验证复制结果
-                            var newFileInfo = new FileInfo(localFile);
+                            var newFileInfo = new FileInfo(destPath);
                             if (newFileInfo.Length != usbFileInfo.Length)
                             {
                                 StatusChanged?.Invoke($"警告: 文件大小不匹配 - 原始: {usbFileInfo.Length}, 复制后: {newFileInfo.Length}");
                             }
                             
                             anyReplaced = true;
-                            StatusChanged?.Invoke($"替换完成: {Path.GetFileName(localFile)}");
+                            StatusChanged?.Invoke($"替换完成: {Path.GetFileName(destPath)}");
                         }
                         catch (UnauthorizedAccessException ex)
                         {

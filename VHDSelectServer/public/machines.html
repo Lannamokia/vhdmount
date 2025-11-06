@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>机台管理 · VHD Select Server</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="container header-inner">
+        <div class="brand">
+          <span class="logo">🧩</span>
+          <span class="title">机台管理</span>
+        </div>
+        <div class="header-actions">
+          <a class="btn btn-ghost" href="./">首页</a>
+          <button id="loginBtn" class="btn btn-primary">登录</button>
+          <button id="logoutBtn" class="btn btn-ghost" hidden>登出</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="container">
+      <section class="card" id="authMessage" hidden>
+        <div class="card-title">需要登录</div>
+        <div class="card-sub">请先登录后查看机台管理列表</div>
+      </section>
+
+      <section class="card" id="machinesPanel" hidden>
+        <div class="card-title">机台列表</div>
+        <div class="form-row" style="margin-bottom:10px">
+          <input id="searchInput" class="input" placeholder="按机台ID搜索 (模糊匹配)" />
+          <button id="searchBtn" class="btn">搜索</button>
+          <button id="refreshBtn" class="btn">刷新</button>
+        </div>
+        <div class="table-wrap">
+          <table class="table" id="machinesTable">
+            <thead>
+              <tr>
+                <th>机台ID</th>
+                <th>VHD关键词</th>
+                <th>保护</th>
+                <th>最近在线</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="machinesTbody">
+              <tr>
+                <td colspan="5" class="muted">加载中...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <!-- 登录弹窗 -->
+    <div id="loginModal" class="modal" hidden>
+      <div class="modal-backdrop"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <div class="modal-title">管理员登录</div>
+          <button class="icon-btn" id="loginClose">✖</button>
+        </div>
+        <div class="modal-body">
+          <input id="loginPassword" type="password" class="input" placeholder="管理员密码（默认：admin123）" />
+        </div>
+        <div class="modal-footer">
+          <button id="loginSubmit" class="btn btn-primary">登录</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast消息区域 -->
+    <div id="toast" class="toast" hidden></div>
+
+    <script src="./machines.js" defer></script>
+  </body>
+  </html>

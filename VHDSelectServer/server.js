@@ -322,28 +322,28 @@ app.get('/api/protect', async (req, res) => {
     
     try {
         // 从数据库获取机台信息
-        let machine = await database.getMachine(machineId);
+        const machine = await database.getMachine(machineId);
         
-        // 如果机台不存在，创建新的机台记录
+        // 如果机台不存在，直接返回错误，不自动创建
         if (!machine) {
-            machine = await database.upsertMachine(machineId, false, currentVhdKeyword);
-            console.log(`[${new Date().toISOString()}] 创建新机台: ${machineId}`);
+            return res.status(404).json({
+                success: false,
+                error: '机台不存在',
+                machineId
+            });
         }
         
         res.json({
             success: true,
-            protected: machine ? machine.protected : false,
-            machineId: machineId,
+            protected: machine.protected,
+            machineId,
             timestamp: new Date().toISOString()
         });
     } catch (error) {
         console.error('获取保护状态失败:', error.message);
-        // 降级到默认状态
-        res.json({
-            success: true,
-            protected: false,
-            machineId: machineId,
-            timestamp: new Date().toISOString()
+        return res.status(500).json({
+            success: false,
+            error: '获取保护状态失败'
         });
     }
 });
@@ -373,20 +373,18 @@ app.post('/api/protect', requireAuth, async (req, res) => {
         const machine = await database.updateMachineProtection(machineId, protected);
         
         if (!machine) {
-            // 如果机台不存在，创建新的机台记录
-            const newMachine = await database.upsertMachine(machineId, protected, currentVhdKeyword);
-            return res.json({
-                success: true,
-                protected: newMachine.protected,
-                machineId: machineId,
-                message: '机台保护状态已设置'
+            // 如果机台不存在，返回错误，不自动创建
+            return res.status(404).json({
+                success: false,
+                error: '机台不存在',
+                machineId
             });
         }
         
         res.json({
             success: true,
             protected: machine.protected,
-            machineId: machineId,
+            machineId,
             message: '机台保护状态已更新'
         });
     } catch (error) {

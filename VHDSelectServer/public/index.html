@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VHD选择服务器 · Web UI</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="container header-inner">
+        <div class="brand">
+          <span class="logo">🧩</span>
+          <span class="title">VHD Select Server</span>
+        </div>
+        <div class="header-actions">
+          <span id="serverStatus" class="status-pill">状态: 加载中...</span>
+          <a id="machinesLinkBtn" class="btn btn-ghost" href="./machines.html" hidden>机台管理</a>
+          <button id="loginBtn" class="btn btn-primary">登录</button>
+          <button id="logoutBtn" class="btn btn-ghost" hidden>登出</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="container">
+      <!-- 概览卡片 -->
+      <section class="grid grid-3" data-auth-only>
+        <div class="card">
+          <div class="card-title">当前VHD关键词</div>
+          <div class="card-value" id="currentKeyword">—</div>
+          <div class="card-sub" id="keywordHint">从服务器状态加载</div>
+        </div>
+        <div class="card">
+          <div class="card-title">服务器运行时长</div>
+          <div class="card-value" id="uptime">—</div>
+          <div class="card-sub" id="uptimeSub">自动刷新</div>
+        </div>
+        <div class="card">
+          <div class="card-title">版本</div>
+          <div class="card-value" id="version">—</div>
+          <div class="card-sub">WebUI Beta</div>
+        </div>
+      </section>
+
+      <!-- 设置全局VHD关键词（需登录） -->
+      <section class="card" data-auth-only>
+        <div class="card-title">设置全局VHD关键词</div>
+        <div class="form-row">
+          <input id="setVhdInput" type="text" class="input" placeholder="例如: SDEZ / SDHD / SDDT 或自定义" />
+          <button id="setVhdBtn" class="btn btn-primary">更新</button>
+        </div>
+        <div class="card-sub">更新后将保存到服务器配置</div>
+      </section>
+
+      <!-- 查询机台保护状态（公开，仅保护） -->
+      <section class="card">
+        <div class="card-title">查询机台保护状态</div>
+        <div class="form-row">
+          <input id="queryMachineId" type="text" class="input" placeholder="输入机台ID，例如: MACHINE001" />
+          <button id="queryBtn" class="btn">查询</button>
+        </div>
+        <div class="query-result" id="queryResult" hidden>
+          <div class="result-item">
+            <span class="label">保护状态</span>
+            <span class="value" id="queryProtected">—</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- 管理面板入口（需登录，跳转二级页面） -->
+      <section class="card" data-auth-only>
+        <div class="card-title">机台管理</div>
+        <div class="form-row">
+          <a class="btn btn-primary" href="./machines.html">打开机台管理页面</a>
+        </div>
+      </section>
+
+      <!-- 修改管理员密码（需登录） -->
+      <section class="card" data-auth-only>
+        <div class="card-title">修改管理员密码</div>
+        <div class="form-col">
+          <input id="pwdCurrent" type="password" class="input" placeholder="当前密码" />
+          <input id="pwdNew" type="password" class="input" placeholder="新密码（至少6位）" />
+          <input id="pwdConfirm" type="password" class="input" placeholder="确认新密码" />
+          <div class="form-row">
+            <button id="changePwdBtn" class="btn">修改密码</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="app-footer">
+      <div class="container footer-inner">
+        <span class="muted">© 2025 VHD Select Server</span>
+      </div>
+    </footer>
+
+    <!-- 登录弹窗 -->
+    <div id="loginModal" class="modal" hidden>
+      <div class="modal-backdrop"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <div class="modal-title">管理员登录</div>
+          <button class="icon-btn" id="loginClose">✖</button>
+        </div>
+        <div class="modal-body">
+          <input id="loginPassword" type="password" class="input" placeholder="管理员密码（默认：admin123）" />
+        </div>
+        <div class="modal-footer">
+          <button id="loginSubmit" class="btn btn-primary">登录</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast消息区域 -->
+    <div id="toast" class="toast" hidden></div>
+
+    <script src="./script.js" defer></script>
+  </body>
+  </html>
