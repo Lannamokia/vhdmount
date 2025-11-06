@@ -49,6 +49,9 @@ class Database {
             
             if (tableCheck.rows[0].exists) {
                 console.log('数据库表结构已存在');
+                // 确保新增列存在
+                await client.query('ALTER TABLE machines ADD COLUMN IF NOT EXISTS evhd_password TEXT');
+                console.log('已确保machines表包含evhd_password列');
             } else {
                 console.log('警告: machines表不存在，请确保数据库已正确初始化');
             }
@@ -144,6 +147,40 @@ class Database {
             return result.rows[0] || null;
         } catch (error) {
             console.error('更新机台VHD关键词失败:', error.message);
+            return null;
+        }
+    }
+
+    // 获取机台EVHD密码
+    async getMachineEvhdPassword(machineId) {
+        try {
+            const client = await this.pool.connect();
+            const result = await client.query(
+                'SELECT evhd_password FROM machines WHERE machine_id = $1',
+                [machineId]
+            );
+            client.release();
+            return result.rows[0]?.evhd_password || null;
+        } catch (error) {
+            console.error('获取机台EVHD密码失败:', error.message);
+            return null;
+        }
+    }
+
+    // 更新机台EVHD密码
+    async updateMachineEvhdPassword(machineId, evhdPassword) {
+        try {
+            const client = await this.pool.connect();
+            const result = await client.query(`
+                UPDATE machines 
+                SET evhd_password = $2, updated_at = CURRENT_TIMESTAMP
+                WHERE machine_id = $1
+                RETURNING *
+            `, [machineId, evhdPassword]);
+            client.release();
+            return result.rows[0] || null;
+        } catch (error) {
+            console.error('更新机台EVHD密码失败:', error.message);
             return null;
         }
     }

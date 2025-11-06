@@ -37,12 +37,19 @@
           <button id="searchBtn" class="btn">搜索</button>
           <button id="refreshBtn" class="btn">刷新</button>
         </div>
+        <div class="form-row" style="margin-bottom:10px">
+          <input id="addMachineId" class="input" style="width:180px" placeholder="机台ID (必填)" />
+          <input id="addVhdKeyword" class="input" style="width:160px" placeholder="初始VHD关键词 (默认 SDEZ)" />
+          <input id="addEvhdPassword" class="input" style="width:160px" type="password" placeholder="初始EVHD密码 (可选)" />
+          <button id="addMachineBtn" class="btn btn-primary">添加机台</button>
+        </div>
         <div class="table-wrap">
           <table class="table" id="machinesTable">
             <thead>
               <tr>
                 <th>机台ID</th>
                 <th>VHD关键词</th>
+                <th>EVHD密码</th>
                 <th>保护</th>
                 <th>最近在线</th>
                 <th>操作</th>

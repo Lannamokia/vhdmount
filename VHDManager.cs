@@ -16,7 +16,7 @@ namespace VHDMounter
     public class VHDManager : IDisposable
     {
         private const string TARGET_DRIVE = "M:";
-        private readonly string[] TARGET_KEYWORDS = { "SDEZ", "SDHD", "SDDT" };
+        private readonly string[] TARGET_KEYWORDS = { "SDEZ", "SDGB", "SDHJ", "SDDT", "SDHD" };
         private readonly string[] PROCESS_KEYWORDS = { "sinmai", "chusanapp", "mu3" };
 
         public event Action<string> StatusChanged;
@@ -30,6 +30,9 @@ namespace VHDMounter
         private bool isProtectionCheckEnabled;
         private string protectionCheckUrl;
         private int protectionCheckInterval;
+
+        // 加密EVHD挂载进程（需保持常驻直到主程序退出）
+        private Process evhdMountProcess;
         
         // 构造函数
         public VHDManager()
@@ -222,24 +225,28 @@ namespace VHDMounter
             }
         }
 
-        // 从USB设备中扫描VHD文件
+        // 从USB设备中扫描VHD/EVHD文件（仅根目录）
         public List<string> ScanUSBForVHDFiles(DriveInfo usbDrive)
         {
-            StatusChanged?.Invoke($"正在扫描USB设备 {usbDrive.Name} 中的VHD文件...");
+            StatusChanged?.Invoke($"正在扫描USB设备 {usbDrive.Name} 中的VHD/EVHD文件...");
             var vhdFiles = new List<string>();
 
             try
             {
-                var rootFiles = Directory.GetFiles(usbDrive.RootDirectory.FullName, "*.vhd", SearchOption.TopDirectoryOnly)
+                var rootVhd = Directory.GetFiles(usbDrive.RootDirectory.FullName, "*.vhd", SearchOption.TopDirectoryOnly)
                     .Where(f => TARGET_KEYWORDS.Any(keyword => Path.GetFileName(f).ToUpper().Contains(keyword)))
                     .ToList();
-                
-                vhdFiles.AddRange(rootFiles);
-                StatusChanged?.Invoke($"在USB设备中找到 {vhdFiles.Count} 个VHD文件");
+                var rootEvhd = Directory.GetFiles(usbDrive.RootDirectory.FullName, "*.evhd", SearchOption.TopDirectoryOnly)
+                    .Where(f => TARGET_KEYWORDS.Any(keyword => Path.GetFileName(f).ToUpper().Contains(keyword)))
+                    .ToList();
+
+                vhdFiles.AddRange(rootVhd);
+                vhdFiles.AddRange(rootEvhd);
+                StatusChanged?.Invoke($"在USB设备中找到 {vhdFiles.Count} 个VHD/EVHD文件");
                 
                 foreach (var file in vhdFiles)
                 {
-                    Debug.WriteLine($"USB中找到VHD文件: {file}");
+                    Debug.WriteLine($"USB中找到文件: {file}");
                 }
             }
             catch (Exception ex)
@@ -271,9 +278,16 @@ namespace VHDMounter
                 if (string.IsNullOrEmpty(usbKeyword))
                     continue;
 
-                // 查找对应关键词的本地文件
-                var matchingLocalFiles = localVhdFiles.Where(f => 
-                    ExtractKeyword(Path.GetFileName(f)) == usbKeyword).ToList();
+                // 查找对应关键词的本地文件（类型限制：同类型允许；跨类型仅允许EVHD替换VHD）
+                var usbExt = Path.GetExtension(usbFile).ToLowerInvariant();
+                var matchingLocalFiles = localVhdFiles.Where(f =>
+                {
+                    var localName = Path.GetFileName(f);
+                    var localExt = Path.GetExtension(f).ToLowerInvariant();
+                    var sameKeyword = ExtractKeyword(localName) == usbKeyword;
+                    var typeAllowed = localExt == usbExt || (usbExt == ".evhd" && localExt == ".vhd");
+                    return sameKeyword && typeAllowed;
+                }).ToList();
 
                 if (matchingLocalFiles.Count > 0)
                 {
@@ -577,6 +591,248 @@ namespace VHDMounter
                 return null;
             }
         }
+
+        // 远程获取EVHD密码（用于加密VHD挂载）
+        public async Task<string> GetEvhdPasswordFromServer()
+        {
+            try
+            {
+                var config = ReadConfig();
+                string url = null;
+                if (config.TryGetValue("EvhdPasswordUrl", out var evhdUrl) && !string.IsNullOrWhiteSpace(evhdUrl))
+                {
+                    url = evhdUrl;
+                }
+                else if (config.TryGetValue("BootImageSelectUrl", out var bootUrl) && !string.IsNullOrWhiteSpace(bootUrl))
+                {
+                    // 尝试基于BootImageSelectUrl推导
+                    url = bootUrl.Replace("boot-image-select", "evhd-password");
+                }
+                else
+                {
+                    StatusChanged?.Invoke("未配置EvhdPasswordUrl或BootImageSelectUrl");
+                    return null;
+                }
+
+                var secret = ComputeEvhdSecret();
+                var requestUrl = $"{url}?machineId={Uri.EscapeDataString(machineId)}&secret={Uri.EscapeDataString(secret)}";
+                StatusChanged?.Invoke($"正在从远程获取EVHD密码: {requestUrl}");
+                var response = await httpClient.GetAsync(requestUrl);
+                if (!response.IsSuccessStatusCode)
+                {
+                    StatusChanged?.Invoke($"获取EVHD密码失败: {response.StatusCode}");
+                    return null;
+                }
+                var jsonContent = await response.Content.ReadAsStringAsync();
+                var jsonDoc = JsonDocument.Parse(jsonContent);
+                if (jsonDoc.RootElement.TryGetProperty("evhdPassword", out var pwdElement))
+                {
+                    var cipherBase64 = pwdElement.GetString();
+                    if (string.IsNullOrWhiteSpace(cipherBase64))
+                        return null;
+                    var plain = DecryptEvhdPassword(cipherBase64, secret);
+                    return plain;
+                }
+                StatusChanged?.Invoke("远程响应中未找到evhdPassword字段");
+                return null;
+            }
+            catch (Exception ex)
+            {
+                StatusChanged?.Invoke($"远程获取EVHD密码失败: {ex.Message}");
+                return null;
+            }
+        }
+
+        // 计算EVHD secret = "evhd" + YYMMDDHH (UTC+8)
+        private string ComputeEvhdSecret()
+        {
+            var tzTime = DateTime.UtcNow.AddHours(8);
+            return "evhd" + tzTime.ToString("yyMMddHH");
+        }
+
+        // 使用AES-256-CBC和secret解密Base64密文
+        private string DecryptEvhdPassword(string base64Cipher, string secret)
+        {
+            try
+            {
+                var cipherBytes = Convert.FromBase64String(base64Cipher);
+                var key = Sha256(secret);
+                var ivHash = Sha256(secret + "_iv");
+                var iv = new byte[16];
+                Array.Copy(ivHash, iv, 16);
+
+                using (var aes = System.Security.Cryptography.Aes.Create())
+                {
+                    aes.KeySize = 256;
+                    aes.BlockSize = 128;
+                    aes.Mode = System.Security.Cryptography.CipherMode.CBC;
+                    aes.Padding = System.Security.Cryptography.PaddingMode.PKCS7;
+                    aes.Key = key;
+                    aes.IV = iv;
+
+                    using (var decryptor = aes.CreateDecryptor())
+                    {
+                        var plainBytes = decryptor.TransformFinalBlock(cipherBytes, 0, cipherBytes.Length);
+                        return System.Text.Encoding.UTF8.GetString(plainBytes);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                StatusChanged?.Invoke($"EVHD密码解密失败: {ex.Message}");
+                return null;
+            }
+        }
+
+        private byte[] Sha256(string text)
+        {
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+            {
+                return sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(text));
+            }
+        }
+
+        // 挂载EVHD到N盘，并从其中提取解密后的VHD再挂载
+        public async Task<bool> MountEVHDAndAttachDecryptedVHD(string evhdPath)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(evhdPath) || !File.Exists(evhdPath))
+                {
+                    StatusChanged?.Invoke("挂载失败: EVHD文件不存在或路径无效");
+                    return false;
+                }
+
+                // 获取密码
+                var password = await GetEvhdPasswordFromServer();
+                if (string.IsNullOrEmpty(password))
+                {
+                    StatusChanged?.Invoke("未能获取EVHD密码，挂载终止");
+                    return false;
+                }
+
+                // 调用加密挂载工具
+                StatusChanged?.Invoke("正在调用加密VHD挂载工具...");
+                var toolPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "encrypted-vhd-mount.exe");
+                var fileName = File.Exists(toolPath) ? toolPath : "encrypted-vhd-mount.exe";
+
+                var psi = new ProcessStartInfo
+                {
+                    FileName = fileName,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+                // 使用 ArgumentList 逐项传参，确保密码中的特殊符号与空格不会造成截断
+                psi.ArgumentList.Add("/p");
+                psi.ArgumentList.Add(password);
+                psi.ArgumentList.Add(evhdPath);
+                psi.ArgumentList.Add("N:");
+
+                var proc = new Process { StartInfo = psi };
+
+                proc.Start();
+                // 保存引用，确保工具在主程序生命周期内持续运行
+                evhdMountProcess = proc;
+
+                // 仅以检测到 N: 盘出现作为挂载成功依据（工具应保持常驻不退出）
+                var timeoutMs = 60000;
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                bool nReady = false;
+                var nRoot = "N:";
+                while (sw.ElapsedMilliseconds < timeoutMs)
+                {
+                    // 成功条件：仅检测到 N: 盘存在
+                    if (Directory.Exists(nRoot))
+                    {
+                        nReady = true;
+                        break;
+                    }
+
+                    await Task.Delay(500);
+                }
+
+                // 未检测到 N:，视为超时失败（不主动结束加密挂载进程）
+                if (!nReady)
+                {
+                    StatusChanged?.Invoke("EVHD挂载超时（超过60秒），未检测到N盘");
+                    return false;
+                }
+
+                // 在N盘根目录查找解密后的VHD（若刚出现，给它一点准备时间）
+                StatusChanged?.Invoke("已检测到N盘，继续挂载解密后的VHD...");
+                if (!Directory.Exists(nRoot))
+                {
+                    await Task.Delay(1000);
+                }
+                if (!Directory.Exists(nRoot))
+                {
+                    StatusChanged?.Invoke("未找到N盘，EVHD挂载可能失败");
+                    return false;
+                }
+
+                var keyword = ExtractKeyword(Path.GetFileName(evhdPath));
+                var decryptedVhds = Directory.GetFiles(nRoot, "*.vhd", SearchOption.TopDirectoryOnly)
+                    .Where(f => string.IsNullOrEmpty(keyword) || ExtractKeyword(Path.GetFileName(f)) == keyword)
+                    .ToList();
+
+                if (decryptedVhds.Count == 0)
+                {
+                    // 放宽匹配，随便拿一个
+                    decryptedVhds = Directory.GetFiles(nRoot, "*.vhd", SearchOption.TopDirectoryOnly).ToList();
+                }
+
+                if (decryptedVhds.Count == 0)
+                {
+                    StatusChanged?.Invoke("N盘中未找到解密后的VHD文件");
+                    return false;
+                }
+
+                var vhdToAttach = decryptedVhds[0];
+                StatusChanged?.Invoke($"找到解密后的VHD: {Path.GetFileName(vhdToAttach)}，准备挂载...");
+
+                // 使用现有MountVHD挂载到目标盘符
+                return await MountVHD(vhdToAttach);
+            }
+            catch (Exception ex)
+            {
+                StatusChanged?.Invoke($"挂载EVHD失败: {ex.Message}");
+                return false;
+            }
+        }
+
+        // 结束加密EVHD挂载进程（在主程序退出时调用）
+        public void StopEncryptedEvhdMount()
+        {
+            try
+            {
+                if (evhdMountProcess != null && !evhdMountProcess.HasExited)
+                {
+                    StatusChanged?.Invoke("正在结束加密VHD挂载工具...");
+                    try
+                    {
+                        // 尝试优雅结束
+                        if (!evhdMountProcess.CloseMainWindow())
+                        {
+                            evhdMountProcess.Kill();
+                        }
+                    }
+                    catch
+                    {
+                        try { evhdMountProcess.Kill(); } catch { }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                StatusChanged?.Invoke($"结束加密VHD挂载工具时发生异常: {ex.Message}");
+            }
+            finally
+            {
+                evhdMountProcess = null;
+            }
+        }
         
         // 根据关键词查找对应的VHD文件
         public string FindVHDByKeyword(List<string> vhdFiles, string keyword)
@@ -601,7 +857,7 @@ namespace VHDMounter
 
         public async Task<List<string>> ScanForVHDFiles()
         {
-            StatusChanged?.Invoke("正在扫描VHD文件...");
+            StatusChanged?.Invoke("正在扫描VHD/EVHD文件...");
             var vhdFiles = new List<string>();
 
             await Task.Run(() =>
@@ -614,15 +870,19 @@ namespace VHDMounter
                     {
                         StatusChanged?.Invoke($"正在扫描驱动器 {drive.Name} 根目录...");
                         
-                        // 只扫描根目录
-                        var rootFiles = Directory.GetFiles(drive.RootDirectory.FullName, "*.vhd", SearchOption.TopDirectoryOnly)
+                        // 只扫描根目录：同时包含VHD与EVHD
+                        var rootVhd = Directory.GetFiles(drive.RootDirectory.FullName, "*.vhd", SearchOption.TopDirectoryOnly)
+                            .Where(f => TARGET_KEYWORDS.Any(keyword => Path.GetFileName(f).ToUpper().Contains(keyword)))
+                            .ToList();
+                        var rootEvhd = Directory.GetFiles(drive.RootDirectory.FullName, "*.evhd", SearchOption.TopDirectoryOnly)
                             .Where(f => TARGET_KEYWORDS.Any(keyword => Path.GetFileName(f).ToUpper().Contains(keyword)))
                             .ToList();
                         
-                        vhdFiles.AddRange(rootFiles);
-                        Debug.WriteLine($"在 {drive.Name} 根目录找到 {rootFiles.Count} 个符合条件的VHD文件");
+                        vhdFiles.AddRange(rootVhd);
+                        vhdFiles.AddRange(rootEvhd);
+                        Debug.WriteLine($"在 {drive.Name} 根目录找到 {rootVhd.Count + rootEvhd.Count} 个符合条件的VHD/EVHD文件");
                         
-                        foreach (var file in rootFiles)
+                        foreach (var file in rootVhd.Concat(rootEvhd))
                         {
                             Debug.WriteLine($"  找到: {Path.GetFileName(file)}");
                         }
@@ -634,10 +894,10 @@ namespace VHDMounter
                     }
                 }
                 
-                StatusChanged?.Invoke($"扫描完成，共找到 {vhdFiles.Count} 个VHD文件");
+                StatusChanged?.Invoke($"扫描完成，共找到 {vhdFiles.Count} 个VHD/EVHD文件");
                 foreach (var file in vhdFiles)
                 {
-                    Debug.WriteLine($"找到VHD文件: {file}");
+                    Debug.WriteLine($"找到文件: {file}");
                 }
             });
 

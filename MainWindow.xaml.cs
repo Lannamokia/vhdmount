@@ -190,17 +190,21 @@ namespace VHDMounter
                     ProgressBar.Visibility = Visibility.Visible;
                 });
 
-                // 挂载VHD
-                OnStatusChanged($"正在挂载VHD文件: {System.IO.Path.GetFileName(vhdPath)}");
-                bool mounted = await vhdManager.MountVHD(vhdPath);
+                // 挂载VHD或EVHD
+                var ext = System.IO.Path.GetExtension(vhdPath)?.ToLowerInvariant();
+                bool isEvhd = ext == ".evhd";
+                OnStatusChanged($"正在挂载{(isEvhd ? "EVHD" : "VHD")}文件: {System.IO.Path.GetFileName(vhdPath)}");
+                bool mounted = isEvhd
+                    ? await vhdManager.MountEVHDAndAttachDecryptedVHD(vhdPath)
+                    : await vhdManager.MountVHD(vhdPath);
                 if (!mounted)
                 {
-                    OnStatusChanged("VHD挂载失败");
+                    OnStatusChanged("挂载失败");
                     await Task.Delay(3000);
                     await SafeShutdown();
                     return;
                 }
-                OnStatusChanged("VHD挂载成功");
+                OnStatusChanged("挂载成功");
                 await Task.Delay(2000); // 暂停2秒显示结果
 
                 // 根据文件名选择目标目录（SDHD -> bin，否则 -> package），忽略大小写
@@ -305,6 +309,7 @@ namespace VHDMounter
             try
             {
                 _ = vhdManager.UnmountVHD();
+                vhdManager.StopEncryptedEvhdMount();
             }
             catch { }
             
@@ -321,6 +326,7 @@ namespace VHDMounter
                 // 收到关机信号，解除VHD挂载
                 OnStatusChanged("检测到系统关机，正在解除VHD挂载...");
                 await vhdManager.UnmountVHD();
+                vhdManager.StopEncryptedEvhdMount();
                 OnStatusChanged("VHD解除挂载完成，程序即将退出");
             }
             catch (Exception ex)
@@ -335,6 +341,8 @@ namespace VHDMounter
             {
                 // 确保在退出前解除VHD挂载
                 await vhdManager.UnmountVHD();
+                // 然后结束加密EVHD挂载进程
+                vhdManager.StopEncryptedEvhdMount();
             }
             catch (Exception ex)
             {

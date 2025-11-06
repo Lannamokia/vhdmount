@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const session = require('express-session');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 require('dotenv').config();
 
 const database = require('./database');
@@ -66,6 +67,21 @@ function saveConfig() {
         fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
     } catch (error) {
         console.error('配置文件保存失败:', error.message);
+    }
+}
+
+// 使用secret进行AES-256-CBC加密
+function encryptWithSecret(secret, plaintext) {
+    try {
+        const key = crypto.createHash('sha256').update(secret).digest();
+        const iv = crypto.createHash('sha256').update(secret + '_iv').digest().subarray(0, 16);
+        const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+        let encrypted = cipher.update(plaintext, 'utf8', 'base64');
+        encrypted += cipher.final('base64');
+        return encrypted;
+    } catch (err) {
+        console.error('EVHD密码加密失败:', err.message);
+        return '';
     }
 }
 
@@ -417,6 +433,33 @@ app.get('/api/machines', requireAuth, async (req, res) => {
     }
 });
 
+// 获取机台EVHD密码（公开，客户端使用）
+app.get('/api/evhd-password', async (req, res) => {
+    const machineId = req.query.machineId;
+    const secret = req.query.secret;
+    console.log(`[${new Date().toISOString()}] API请求: GET /api/evhd-password, Machine ID: ${machineId}`);
+    if (!machineId) {
+        return res.status(400).json({ success: false, error: 'Machine ID是必需的' });
+    }
+    if (!secret || typeof secret !== 'string') {
+        return res.status(400).json({ success: false, error: 'secret是必需的' });
+    }
+    try {
+        // 确保机台存在
+        let machine = await database.getMachine(machineId);
+        if (!machine) {
+            machine = await database.upsertMachine(machineId, false, currentVhdKeyword);
+            console.log(`[${new Date().toISOString()}] 创建新机台: ${machineId}`);
+        }
+        const evhdPassword = await database.getMachineEvhdPassword(machineId);
+        const cipher = evhdPassword ? encryptWithSecret(secret, evhdPassword) : '';
+        res.json({ success: true, machineId, evhdPassword: cipher });
+    } catch (error) {
+        console.error('获取EVHD密码失败:', error.message);
+        res.status(500).json({ success: false, error: '获取EVHD密码失败' });
+    }
+});
+
 // 设置特定机台的VHD关键词
 app.post('/api/machines/:machineId/vhd', requireAuth, async (req, res) => {
     const { machineId } = req.params;
@@ -460,6 +503,28 @@ app.post('/api/machines/:machineId/vhd', requireAuth, async (req, res) => {
             success: false,
             error: '设置机台VHD关键词失败'
         });
+    }
+});
+
+// 设置特定机台的EVHD密码（需登录）
+app.post('/api/machines/:machineId/evhd-password', requireAuth, async (req, res) => {
+    const { machineId } = req.params;
+    const { evhdPassword } = req.body;
+    console.log(`[${new Date().toISOString()}] API请求: POST /api/machines/${machineId}/evhd-password`);
+    if (typeof evhdPassword !== 'string') {
+        return res.status(400).json({ success: false, error: 'EVHD密码必须是字符串' });
+    }
+    try {
+        let machine = await database.updateMachineEvhdPassword(machineId, evhdPassword);
+        if (!machine) {
+            // 如果机台不存在，创建后更新
+            await database.upsertMachine(machineId, false, currentVhdKeyword);
+            machine = await database.updateMachineEvhdPassword(machineId, evhdPassword);
+        }
+        res.json({ success: true, machineId, message: 'EVHD密码已更新' });
+    } catch (error) {
+        console.error('设置机台EVHD密码失败:', error.message);
+        res.status(500).json({ success: false, error: '设置机台EVHD密码失败' });
     }
 });
 
