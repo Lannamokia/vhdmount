@@ -19,6 +19,7 @@ namespace VHDMounter
             InitializeComponent();
             vhdManager = new VHDManager();
             vhdManager.StatusChanged += OnStatusChanged;
+            vhdManager.ReplaceProgressChanged += OnReplaceProgress;
             
             // 注册关机事件监听
             SystemEvents.SessionEnding += OnSessionEnding;
@@ -32,6 +33,26 @@ namespace VHDMounter
             Dispatcher.Invoke(() =>
             {
                 StatusText.Text = status;
+            });
+        }
+
+        private void OnReplaceProgress(FileReplaceProgress progress)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                // 聚合整体进度（当前文件在总数中的进度占比）
+                double aggregated = 0;
+                if (progress.TotalFiles > 0)
+                {
+                    aggregated = ((progress.FileIndex - 1) * 100.0 / progress.TotalFiles) + (progress.Percentage / progress.TotalFiles);
+                }
+
+                ProgressBar.IsIndeterminate = false;
+                ProgressBar.Minimum = 0;
+                ProgressBar.Maximum = 100;
+                ProgressBar.Value = Math.Max(0, Math.Min(100, aggregated));
+
+                StatusText.Text = $"正在复制 {progress.CurrentFileName} ({progress.FileIndex}/{progress.TotalFiles}) - {progress.Percentage:F1}%";
             });
         }
 
@@ -103,6 +124,14 @@ namespace VHDMounter
                 if (nxInsUSB != null && usbVhdFiles.Count > 0 && localVhdFiles.Count > 0)
                 {
                     OnStatusChanged("开始替换本地VHD文件...");
+                    Dispatcher.Invoke(() =>
+                    {
+                        ProgressBar.Visibility = Visibility.Visible;
+                        ProgressBar.IsIndeterminate = false;
+                        ProgressBar.Minimum = 0;
+                        ProgressBar.Maximum = 100;
+                        ProgressBar.Value = 0;
+                    });
                     bool replaced = await vhdManager.ReplaceLocalVHDFiles(usbVhdFiles, localVhdFiles);
                     if (replaced)
                     {
@@ -115,6 +144,12 @@ namespace VHDMounter
                     {
                         OnStatusChanged("VHD文件替换失败或无需替换");
                     }
+                    Dispatcher.Invoke(() =>
+                    {
+                        // 替换阶段结束，恢复不确定进度或清零
+                        ProgressBar.IsIndeterminate = true;
+                        ProgressBar.Value = 0;
+                    });
                     await Task.Delay(2000); // 暂停2秒显示结果
                 }
                 

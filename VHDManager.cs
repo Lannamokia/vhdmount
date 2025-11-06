@@ -13,6 +13,17 @@ using System.Timers;
 
 namespace VHDMounter
 {
+    // 文件替换进度模型
+    public class FileReplaceProgress
+    {
+        public string CurrentFileName { get; set; }
+        public int FileIndex { get; set; }
+        public int TotalFiles { get; set; }
+        public long BytesCopied { get; set; }
+        public long TotalBytes { get; set; }
+        public double Percentage { get; set; }
+    }
+
     public class VHDManager : IDisposable
     {
         private const string TARGET_DRIVE = "M:";
@@ -20,6 +31,7 @@ namespace VHDMounter
         private readonly string[] PROCESS_KEYWORDS = { "sinmai", "chusanapp", "mu3" };
 
         public event Action<string> StatusChanged;
+        public event Action<FileReplaceProgress> ReplaceProgressChanged;
         
         private static readonly HttpClient httpClient = new HttpClient();
         private string configFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "vhdmonter_config.ini");
@@ -269,16 +281,15 @@ namespace VHDMounter
 
             bool anyReplaced = false;
             StatusChanged?.Invoke("正在替换本地VHD文件...");
-
+            // 预扫描：构建可替换队列（排除占用或无法准备的项）
+            var copyQueue = new List<(string usbFile, string localFile, string destPath)>();
             foreach (var usbFile in usbVhdFiles)
             {
                 string usbFileName = Path.GetFileName(usbFile);
                 string usbKeyword = ExtractKeyword(usbFileName);
-                
                 if (string.IsNullOrEmpty(usbKeyword))
                     continue;
 
-                // 查找对应关键词的本地文件（类型限制：同类型允许；跨类型仅允许EVHD替换VHD）
                 var usbExt = Path.GetExtension(usbFile).ToLowerInvariant();
                 var matchingLocalFiles = localVhdFiles.Where(f =>
                 {
@@ -289,92 +300,152 @@ namespace VHDMounter
                     return sameKeyword && typeAllowed;
                 }).ToList();
 
-                if (matchingLocalFiles.Count > 0)
+                foreach (var localFile in matchingLocalFiles)
                 {
-                    foreach (var localFile in matchingLocalFiles)
+                    try
                     {
-                        try
+                        var localFileInfo = new FileInfo(localFile);
+                        var usbFileInfo = new FileInfo(usbFile);
+                        Debug.WriteLine($"本地文件属性: {localFileInfo.Attributes}, 只读: {localFileInfo.IsReadOnly}");
+                        Debug.WriteLine($"USB文件属性: {usbFileInfo.Attributes}, 大小: {usbFileInfo.Length} bytes");
+                        Debug.WriteLine($"操作系统版本: {Environment.OSVersion}");
+
+                        if (IsFileInUse(localFile))
                         {
-                            // Win11兼容性检查和准备
-                            StatusChanged?.Invoke($"检查Win11兼容性: {Path.GetFileName(localFile)}");
-                            var localFileInfo = new FileInfo(localFile);
-                            var usbFileInfo = new FileInfo(usbFile);
-                            
-                            // 记录文件属性用于诊断
-                            Debug.WriteLine($"本地文件属性: {localFileInfo.Attributes}, 只读: {localFileInfo.IsReadOnly}");
-                            Debug.WriteLine($"USB文件属性: {usbFileInfo.Attributes}, 大小: {usbFileInfo.Length} bytes");
-                            Debug.WriteLine($"操作系统版本: {Environment.OSVersion}");
-                            
-                            // 检查文件是否被占用
-                            if (IsFileInUse(localFile))
-                            {
-                                StatusChanged?.Invoke($"文件被占用，无法删除: {Path.GetFileName(localFile)}");
-                                Debug.WriteLine($"文件被占用: {localFile}");
-                                continue;
-                            }
-                            
-                            // Win11兼容性处理
-                            if (!PrepareFileForReplacement(localFile))
-                            {
-                                StatusChanged?.Invoke($"无法准备文件进行替换: {Path.GetFileName(localFile)}");
-                                continue;
-                            }
-                            
-                            // 直接删除本地文件
-                            StatusChanged?.Invoke($"正在删除本地文件: {Path.GetFileName(localFile)}");
-                            if (File.Exists(localFile))
-                                File.Delete(localFile);
-                            
-                            // 等待文件系统完成删除操作
-                            int retryCount = 0;
-                            while (File.Exists(localFile) && retryCount < 10)
-                            {
-                                await Task.Delay(100);
-                                retryCount++;
-                            }
-                            
-                            if (File.Exists(localFile))
-                            {
-                                StatusChanged?.Invoke($"删除文件失败，文件仍然存在: {Path.GetFileName(localFile)}");
-                                continue;
-                            }
-                            
-                            // 复制USB文件到本地（使用源文件名作为目标文件名）
-                            var destDir = Path.GetDirectoryName(localFile);
-                            var destPath = Path.Combine(destDir ?? string.Empty, Path.GetFileName(usbFile));
-                            StatusChanged?.Invoke($"正在以源文件名复制: {Path.GetFileName(usbFile)} -> {Path.GetFileName(destPath)}");
-                            File.Copy(usbFile, destPath, true);
-                            
-                            // 验证复制结果
-                            var newFileInfo = new FileInfo(destPath);
-                            if (newFileInfo.Length != usbFileInfo.Length)
-                            {
-                                StatusChanged?.Invoke($"警告: 文件大小不匹配 - 原始: {usbFileInfo.Length}, 复制后: {newFileInfo.Length}");
-                            }
-                            
-                            anyReplaced = true;
-                            StatusChanged?.Invoke($"替换完成: {Path.GetFileName(destPath)}");
+                            StatusChanged?.Invoke($"文件被占用，无法替换: {Path.GetFileName(localFile)}");
+                            continue;
                         }
-                        catch (UnauthorizedAccessException ex)
+
+                        StatusChanged?.Invoke($"检查Win11兼容性: {Path.GetFileName(localFile)}");
+                        if (!PrepareFileForReplacement(localFile))
                         {
-                            StatusChanged?.Invoke($"权限不足，无法替换文件: {Path.GetFileName(localFile)} - {ex.Message}");
-                            Debug.WriteLine($"权限错误: {ex}");
+                            StatusChanged?.Invoke($"无法准备文件进行替换: {Path.GetFileName(localFile)}");
+                            continue;
                         }
-                        catch (IOException ex)
-                        {
-                            StatusChanged?.Invoke($"文件IO错误: {Path.GetFileName(localFile)} - {ex.Message}");
-                            Debug.WriteLine($"IO错误: {ex}");
-                        }
-                        catch (Exception ex)
-                        {
-                            StatusChanged?.Invoke($"替换文件时出错: {Path.GetFileName(localFile)} - {ex.Message}");
-                            Debug.WriteLine($"替换文件时出错: {ex}");
-                        }
+
+                        var destDir = Path.GetDirectoryName(localFile);
+                        var destPath = Path.Combine(destDir ?? string.Empty, Path.GetFileName(usbFile));
+                        copyQueue.Add((usbFile, localFile, destPath));
+                    }
+                    catch (Exception ex)
+                    {
+                        StatusChanged?.Invoke($"预扫描处理失败: {Path.GetFileName(localFile)} - {ex.Message}");
                     }
                 }
             }
 
+            if (copyQueue.Count == 0)
+            {
+                StatusChanged?.Invoke("无可替换的文件或无需替换");
+                return false;
+            }
+
+            // 执行替换并上报进度
+            for (int i = 0; i < copyQueue.Count; i++)
+            {
+                var item = copyQueue[i];
+                try
+                {
+                    // 删除本地文件
+                    StatusChanged?.Invoke($"正在删除本地文件: {Path.GetFileName(item.localFile)}");
+                    if (File.Exists(item.localFile))
+                        File.Delete(item.localFile);
+
+                    int retryCount = 0;
+                    while (File.Exists(item.localFile) && retryCount < 10)
+                    {
+                        await Task.Delay(100);
+                        retryCount++;
+                    }
+
+                    if (File.Exists(item.localFile))
+                    {
+                        StatusChanged?.Invoke($"删除文件失败，文件仍然存在: {Path.GetFileName(item.localFile)}");
+                        continue;
+                    }
+
+                    // 复制（带进度）
+                    StatusChanged?.Invoke($"正在复制: {Path.GetFileName(item.usbFile)} -> {Path.GetFileName(item.destPath)}");
+                    await CopyFileWithProgressAsync(item.usbFile, item.destPath, i + 1, copyQueue.Count);
+
+                    // 验证大小
+                    var usbFileInfo = new FileInfo(item.usbFile);
+                    var newFileInfo = new FileInfo(item.destPath);
+                    if (newFileInfo.Length != usbFileInfo.Length)
+                    {
+                        StatusChanged?.Invoke($"警告: 文件大小不匹配 - 原始: {usbFileInfo.Length}, 复制后: {newFileInfo.Length}");
+                    }
+
+                    anyReplaced = true;
+                    StatusChanged?.Invoke($"替换完成: {Path.GetFileName(item.destPath)}");
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    StatusChanged?.Invoke($"权限不足，无法替换文件: {Path.GetFileName(item.localFile)} - {ex.Message}");
+                    Debug.WriteLine($"权限错误: {ex}");
+                }
+                catch (IOException ex)
+                {
+                    StatusChanged?.Invoke($"文件IO错误: {Path.GetFileName(item.localFile)} - {ex.Message}");
+                    Debug.WriteLine($"IO错误: {ex}");
+                }
+                catch (Exception ex)
+                {
+                    StatusChanged?.Invoke($"替换文件时出错: {Path.GetFileName(item.localFile)} - {ex.Message}");
+                    Debug.WriteLine($"替换文件时出错: {ex}");
+                }
+            }
+
             return anyReplaced;
+        }
+
+        // 带进度的文件复制
+        private async Task CopyFileWithProgressAsync(string sourcePath, string destPath, int fileIndex, int totalFiles)
+        {
+            var buffer = new byte[1024 * 1024]; // 1MB块
+            long totalBytes = 0;
+            long copiedBytes = 0;
+
+            try
+            {
+                using (var src = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                using (var dst = new FileStream(destPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                {
+                    totalBytes = src.Length;
+                    int read;
+                    while ((read = await src.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                    {
+                        await dst.WriteAsync(buffer, 0, read);
+                        copiedBytes += read;
+
+                        var progress = new FileReplaceProgress
+                        {
+                            CurrentFileName = Path.GetFileName(sourcePath),
+                            FileIndex = fileIndex,
+                            TotalFiles = totalFiles,
+                            BytesCopied = copiedBytes,
+                            TotalBytes = totalBytes,
+                            Percentage = totalBytes > 0 ? (copiedBytes * 100.0 / totalBytes) : 0
+                        };
+                        ReplaceProgressChanged?.Invoke(progress);
+                    }
+                }
+            }
+            catch
+            {
+                // 出错时也通知一次，避免UI卡住
+                var progress = new FileReplaceProgress
+                {
+                    CurrentFileName = Path.GetFileName(sourcePath),
+                    FileIndex = fileIndex,
+                    TotalFiles = totalFiles,
+                    BytesCopied = copiedBytes,
+                    TotalBytes = totalBytes,
+                    Percentage = totalBytes > 0 ? (copiedBytes * 100.0 / totalBytes) : 0
+                };
+                ReplaceProgressChanged?.Invoke(progress);
+                throw;
+            }
         }
 
         // 提取VHD文件名中的关键词部分
