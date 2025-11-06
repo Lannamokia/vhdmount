@@ -1,5 +1,7 @@
 # VHD Mounter - 智能SEGA街机游戏VHD挂载管理和运行保活工具
 
+当前版本：v1.2.1
+
 > 🎮 **完整的街机游戏VHD管理解决方案**  
 > 包含本地VHD挂载工具和配套的Web服务器，提供集中化配置管理和远程控制功能
 
@@ -99,6 +101,7 @@ vhdmount/
 ### 🎯 用户友好界面
 - **全屏选择**：多VHD文件时提供直观的全屏选择界面
 - **实时状态**：操作过程中显示详细的状态信息
+- **可视化进度条**：在文件替换阶段显示百分比进度，并同步当前文件/总数
 - **步骤暂停**：每个主要执行步骤完成后暂停2秒显示结果，便于用户查看执行状态
 - **键盘操作**：支持方向键选择、回车确认、ESC退出
 
@@ -305,6 +308,30 @@ EnableRemoteSelection=true
 BootImageSelectUrl=http://localhost:8080/api/boot-image-select
 ```
 
+## 📦 构建与发布
+
+### 客户端（VHD Mounter）
+- 发布独立应用（推荐）：
+  ```powershell
+  dotnet publish VHDMounter.csproj \
+    --configuration Release \
+    --runtime win-x64 \
+    --self-contained true
+  ```
+- 产物路径：`./VHDMounter/bin/Release/net6.0/win-x64/publish/`
+- 版本来源：`VHDMounter.csproj` 和 `app.manifest` 已设置为 `1.2.1`
+- 包命名建议：`VHDMounter-v1.2.1-win-x64.zip`
+- 运行建议：使用 `run_as_admin.bat` 或右键“以管理员身份运行”
+
+### 服务端（VHDSelectServer）
+- Docker 构建与运行（单容器）：
+  ```bash
+  docker build -t vhd-select-server ./VHDSelectServer
+  docker run -d --name vhd-select-server -p 8080:8080 vhd-select-server
+  ```
+- Docker Compose（外部数据库）：在 `VHDSelectServer` 目录执行 `docker-compose up -d`
+- 版本显示：访问 `/api/status`，返回 JSON 中的 `"version": "1.2.1"`
+
 ## 📖 使用指南
 
 ### 基本操作流程
@@ -364,6 +391,13 @@ BootImageSelectUrl=http://localhost:8080/api/boot-image-select
 | ↑↓ | 在选择界面中切换选项 |
 | Enter | 确认当前选择 |
 | Esc | 安全退出程序 |
+
+#### 文件替换进度条
+- 在执行“USB文件替换本地文件”阶段，进度条会从不确定模式切换为可量化模式，显示百分比。
+- 总进度按文件数量聚合：已完成文件数/总文件数 + 当前文件进度/总文件数。
+- 状态文本实时显示“当前文件 X/Y”和“已复制大小/总大小”，便于定位慢速文件。
+- 跳过或校验失败的文件会计入总数但不阻塞后续替换，进度照常推进。
+- 替换阶段结束后进度条恢复为不确定模式，用于后续挂载与启动步骤。
 
 ### 高级功能
 
@@ -447,6 +481,13 @@ VHDMounter.exe --debug
 - 应用程序生命周期控制
 - 执行步骤状态显示和暂停控制
 
+### EVHD/N 盘与 M 盘工作流
+- EVHD 挂载成功的信号：系统出现 `N:` 盘，表示运行时环境准备就绪。
+- 游戏 VHD 目标挂载盘符：`M:`，确保在 EVHD 就绪后再进行 `M:` 挂载与后续启动。
+- 挂载顺序：检测 `N:` 盘 → 清理旧挂载 → 挂载/分离 VHD 到 `M:` → 搜索启动目录并执行。
+- 盘符分配回退：若系统自动分配盘符失败，程序尝试强制分配；如仍失败，优先检查占用进程或磁盘策略。
+- 目录搜索策略：`SDHD` → `bin`，其他关键词 → `package`（目录名大小写不敏感）。
+
 #### VHDSelectServer 核心模块
 
 **server.js (主服务器)**
@@ -492,6 +533,14 @@ VHDMounter.exe --debug
 - **资源清理**：异常情况下的资源自动释放
 - **进程隔离**：独立进程启动，避免相互影响
 - **系统集成**：响应系统关机事件，确保数据安全
+
+## ⚠️ 已知限制
+- 仅扫描磁盘根目录下的 `.vhd` 文件；子目录中的文件不参与匹配。
+- 关键词匹配基于文件名包含 `SDEZ`、`SDHD`、`SDDT`；不解析镜像内部元数据。
+- `M:` 盘符被占用会导致挂载失败；建议确保该盘符空闲或调整目标盘符。
+- `diskpart` 操作可能被安全策略或杀软拦截；必须以管理员权限运行。
+- Docker 首次部署时数据库初始化需要时间；失败时请查看容器日志并重试。
+- 远程配置不可用时自动降级到本地模式；此时依赖本地 VHD 文件存在。
 
 ## 🐛 故障排除
 
@@ -581,9 +630,23 @@ dotnet test
 dotnet run --project VHDMounter.csproj
 ```
 
+## ⬆️ 升级指南（v1.2.1）
+- 客户端（VHD Mounter）：下载最新版本并替换旧 `VHDMounter.exe`；或在源码目录执行发布命令生成安装包。
+  ```powershell
+  dotnet publish VHDMounter.csproj --configuration Release --runtime win-x64 --self-contained true
+  ```
+- 服务端（VHDSelectServer）：更新容器或代码版本到 `1.2.1`，重启服务后访问 `/api/status` 验证 `"version": "1.2.1"`。
+- 验证：客户端主文档显示“当前版本：v1.2.1”；服务端状态接口返回 `1.2.1`。
+- 注意：不需要迁移客户端配置；使用外部数据库的部署保留原连接参数即可。
+- CI 提示：建议以 `v1.2.1` tag 触发 GitHub Actions 构建，产出 `VHDMounter-v1.2.1-win-x64.zip`。
+
 ## 📝 更新日志
 
 ### v1.2.1 (最新)
+- 📈 **文件替换阶段可视化进度条**：替换过程显示聚合百分比与当前文件/总数
+  - 进度条在替换阶段切换为可量化模式
+  - 状态文本同步显示“当前文件 X/Y”与字节级复制进度
+  - 跳过/失败文件计入总数但不阻塞流程，替换结束后恢复不确定模式
 - 🔧 **Docker密码修复**：修正了Docker容器中默认管理员密码问题
   - 修复了`init-db.sql`中错误的bcrypt哈希值
   - 确保默认密码`admin123`能够正常登录

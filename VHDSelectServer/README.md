@@ -320,7 +320,7 @@ GET /api/status
   "BootImageSelected": "SDEZ",
   "uptime": 30.415774368,
   "timestamp": "2025-10-21T11:39:43.809Z",
-  "version": "1.2.0"
+  "version": "1.2.1"
 }
 ```
 

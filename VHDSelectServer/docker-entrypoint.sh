@@ -78,11 +78,18 @@ init_embedded_db() {
     
     # 初始化数据库表结构
         log "初始化数据库表结构..."
-        if [ -f "/app/init-db.sql" ]; then
-            # 使用postgres用户通过本地socket连接执行初始化脚本
-            su-exec postgres psql -d "$DB_NAME" -f /app/init-db.sql
-            su-exec postgres psql -d "$DB_NAME" -c "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO $DB_USER;"
-            su-exec postgres psql -d "$DB_NAME" -c "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO $DB_USER;"
+        if [ -f "/app/scripts/init-db.sql" ]; then
+            # 使用应用数据库用户执行初始化脚本，确保表的所有权为 $DB_USER
+            PGPASSWORD="$DB_PASSWORD" psql -h localhost -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -f /app/scripts/init-db.sql
+            # 确保权限完整（所有权已由上述创建者继承，此处补充运行权限）
+            su-exec postgres psql -d "$DB_NAME" -c "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO $DB_USER;" || true
+            su-exec postgres psql -d "$DB_NAME" -c "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO $DB_USER;" || true
+            # 保障已有对象的所有权（适用于持久化数据卷复用场景）
+            su-exec postgres psql -d "$DB_NAME" -c "ALTER TABLE machines OWNER TO $DB_USER;" || true
+            su-exec postgres psql -d "$DB_NAME" -c "ALTER TABLE admin_settings OWNER TO $DB_USER;" || true
+            su-exec postgres psql -d "$DB_NAME" -c "ALTER SEQUENCE machines_id_seq OWNER TO $DB_USER;" || true
+            su-exec postgres psql -d "$DB_NAME" -c "ALTER SEQUENCE admin_settings_id_seq OWNER TO $DB_USER;" || true
+            su-exec postgres psql -d "$DB_NAME" -c "ALTER FUNCTION update_updated_at_column() OWNER TO $DB_USER;" || true
         fi
     
     log "内置数据库初始化完成"

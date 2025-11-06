@@ -566,7 +566,7 @@ app.get('/api/status', (req, res) => {
         BootImageSelected: currentVhdKeyword,
         uptime: process.uptime(),
         timestamp: new Date().toISOString(),
-        version: '1.2.0'
+        version: '1.2.1'
     });
 });
 

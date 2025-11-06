@@ -29,6 +29,8 @@ RUN mkdir -p /app/config /var/lib/postgresql/data /app/scripts
 COPY init-db.sql /app/scripts/
 COPY docker-entrypoint.sh /app/scripts/
 RUN chmod +x /app/scripts/docker-entrypoint.sh
+ # 修正Windows换行导致的解释器路径问题
+ RUN sed -i 's/\r$//' /app/scripts/docker-entrypoint.sh
 
 # 暴露端口
 EXPOSE 8080
@@ -60,5 +62,5 @@ RUN mkdir -p /var/lib/postgresql/data /run/postgresql && \
 # 更改应用文件所有权
 RUN chown -R nodejs:nodejs /app
 
-# 启动脚本
-CMD ["/app/scripts/docker-entrypoint.sh"]
+# 启动脚本（覆盖基础镜像的 ENTRYPOINT）
+ENTRYPOINT ["/app/scripts/docker-entrypoint.sh"]

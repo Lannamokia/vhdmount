@@ -1,6 +1,6 @@
 {
   "name": "vhd-select-server",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Cross-platform VHD selection server with web GUI",
   "main": "server.js",
   "scripts": {
