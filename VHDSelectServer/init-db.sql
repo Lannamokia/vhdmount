@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS machines (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 迁移兼容：确保现版本使用的 evhd_password 列存在且为 TEXT 类型
+ALTER TABLE machines ADD COLUMN IF NOT EXISTS evhd_password TEXT;
+
 -- 创建更新时间触发器函数
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
@@ -33,13 +36,7 @@ CREATE TRIGGER update_machines_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
--- 插入一些示例数据
-INSERT INTO machines (machine_id, protected, vhd_keyword) 
-VALUES 
-    ('MACHINE001', FALSE, 'SDEZ'),
-    ('MACHINE002', FALSE, 'PROD'),
-    ('MACHINE003', TRUE, 'TEST')
-ON CONFLICT (machine_id) DO NOTHING;
+-- 取消插入示例数据，保持初始为空，由运行时自动创建或通过接口写入
 
 -- 创建管理员密码表
 CREATE TABLE IF NOT EXISTS admin_settings (
