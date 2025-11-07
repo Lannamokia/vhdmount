@@ -460,6 +460,28 @@ app.get('/api/evhd-password', async (req, res) => {
     }
 });
 
+// 获取机台EVHD密码（明文，需登录）
+app.get('/api/evhd-password/plain', requireAuth, async (req, res) => {
+    const machineId = req.query.machineId;
+    console.log(`[${new Date().toISOString()}] API请求: GET /api/evhd-password/plain, Machine ID: ${machineId}`);
+    if (!machineId) {
+        return res.status(400).json({ success: false, error: 'Machine ID是必需的' });
+    }
+    try {
+        // 查询机台，不自动创建，不存在则返回404
+        const machine = await database.getMachine(machineId);
+        if (!machine) {
+            return res.status(404).json({ success: false, error: '机台不存在', machineId });
+        }
+        const evhdPassword = await database.getMachineEvhdPassword(machineId);
+        // 若未设置密码，返回空串，同时 success:true 以便前端统一处理
+        return res.json({ success: true, machineId, evhdPassword: evhdPassword || '' });
+    } catch (error) {
+        console.error('获取明文EVHD密码失败:', error.message);
+        return res.status(500).json({ success: false, error: '获取EVHD密码失败' });
+    }
+});
+
 // 设置特定机台的VHD关键词
 app.post('/api/machines/:machineId/vhd', requireAuth, async (req, res) => {
     const { machineId } = req.params;

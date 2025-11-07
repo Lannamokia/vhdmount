@@ -166,23 +166,22 @@ async function loadMachines() {
       });
       tr.querySelector('[data-act="evhd-query"]').addEventListener('click', async () => {
         try {
-          const secret = computeEvhdSecretTz8();
-          const data = await getJSON(`/api/evhd-password?machineId=${encodeURIComponent(m.machine_id)}&secret=${encodeURIComponent(secret)}`);
-          const cipher = data?.evhdPassword || '';
-          if (!cipher) { toast('未设置EVHD密码', false); return; }
-          try {
-            const plain = await decryptEvhdPassword(secret, cipher);
-            const copied = await copyToClipboard(plain);
-            if (copied) {
-              toast('EVHD密码已复制到剪贴板');
-            } else {
-              alert(`机台 ${m.machine_id} 的EVHD密码：\n${plain}\n\n复制失败，请手动复制。`);
-            }
-          } catch (decErr) {
-            console.error('解密失败', decErr);
-            toast('解密失败，请确认时间或密文', false);
+          // 改用受登录保护的明文查询API
+          const data = await getJSON(`/api/evhd-password/plain?machineId=${encodeURIComponent(m.machine_id)}`);
+          const plain = data?.evhdPassword || '';
+          if (!plain) { toast('未设置EVHD密码', false); return; }
+          const copied = await copyToClipboard(plain);
+          if (copied) {
+            toast('EVHD密码已复制到剪贴板');
+          } else {
+            alert(`机台 ${m.machine_id} 的EVHD密码：\n${plain}\n\n复制失败，请手动复制。`);
           }
         } catch (e) {
+          // 如果未登录，后端会返回401
+          if (e && /需要登录|401/.test(e.message)) {
+            toast('请先登录后再查询EVHD密码', false);
+            return;
+          }
           toast(e.message || '查询失败', false);
         }
       });
