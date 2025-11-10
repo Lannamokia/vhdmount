@@ -1,0 +1,85 @@
+name: VHDSelectServer Docker Build & Release
+
+on:
+  push:
+    paths:
+      - 'VHDSelectServer/**'
+      - '.github/workflows/docker-image.yml'
+  pull_request:
+    paths:
+      - 'VHDSelectServer/**'
+      - '.github/workflows/docker-image.yml'
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build_artifact:
+    name: Build image and upload artifact (on changes)
+    if: github.event_name != 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute image tag
+        id: vars
+        run: |
+          echo "image=vhd-select-server" >> $GITHUB_OUTPUT
+          echo "tag=ci-${GITHUB_SHA:0|7}" >> $GITHUB_OUTPUT
+
+      - name: Build Docker image
+        run: |
+          docker build -t ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.tag }} VHDSelectServer
+
+      - name: Export and compress image as tgz
+        run: |
+          docker save ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.tag }} | gzip > ${{ steps.vars.outputs.image }}-${{ steps.vars.outputs.tag }}.tgz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vhd-select-server-image-${{ steps.vars.outputs.tag }}
+          path: ${{ steps.vars.outputs.image }}-${{ steps.vars.outputs.tag }}.tgz
+
+  release_push:
+    name: Tag and push to DockerHub (on release)
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse version from tag
+        id: version
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          VER="${TAG#v}"
+          echo "version=$VER" >> $GITHUB_OUTPUT
+
+      - name: Build image with release tag
+        run: |
+          docker build -t lty271104/vhd-select-server:${{ steps.version.outputs.version }} VHDSelectServer
+
+      - name: DockerHub login
+        if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
+        run: |
+          echo "${DOCKERHUB_TOKEN}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
+
+      - name: Push to DockerHub
+        if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
+        run: |
+          docker push lty271104/vhd-select-server:${{ steps.version.outputs.version }}
+
+      - name: Export and compress image as tgz
+        run: |
+          docker save lty271104/vhd-select-server:${{ steps.version.outputs.version }} | gzip > vhd-select-server-${{ steps.version.outputs.version }}.tgz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vhd-select-server-image-${{ steps.version.outputs.version }}
+          path: vhd-select-server-${{ steps.version.outputs.version }}.tgz
