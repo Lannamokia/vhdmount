@@ -26,7 +26,7 @@ jobs:
         id: vars
         run: |
           echo "image=vhd-select-server" >> $GITHUB_OUTPUT
-          echo "tag=ci-${GITHUB_SHA:0|7}" >> $GITHUB_OUTPUT
+          echo "tag=ci-${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
 
       - name: Build Docker image
         run: |
