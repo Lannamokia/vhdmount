@@ -61,6 +61,10 @@ jobs:
         run: |
           docker build -t lty271104/vhd-select-server:${{ steps.version.outputs.version }} VHDSelectServer
 
+      - name: Tag image as latest
+        run: |
+          docker tag lty271104/vhd-select-server:${{ steps.version.outputs.version }} lty271104/vhd-select-server:latest
+
       - name: Validate DockerHub secrets
         run: |
           if [ -z "${{ secrets.DOCKERHUB_USERNAME }}" ] || [ -z "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
@@ -75,6 +79,7 @@ jobs:
       - name: Push to DockerHub
         run: |
           docker push lty271104/vhd-select-server:${{ steps.version.outputs.version }}
+          docker push lty271104/vhd-select-server:latest
 
       - name: Export and compress image as tgz
         run: |
