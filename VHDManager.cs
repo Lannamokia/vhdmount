@@ -404,6 +404,114 @@ namespace VHDMounter
             return anyReplaced;
         }
 
+        // 当本地列表为空时，将USB中的VHD/EVHD复制到指定盘符根目录（默认D:\）
+        public async Task<bool> CopyUsbFilesToDriveRoot(List<string> usbVhdFiles, string targetDriveLetter = "D")
+        {
+            try
+            {
+                if (usbVhdFiles == null || usbVhdFiles.Count == 0)
+                {
+                    StatusChanged?.Invoke("USB中未找到可复制的VHD/EVHD文件");
+                    return false;
+                }
+
+                // Win11兼容性诊断
+                DiagnoseWin11Issues();
+
+                var rootPath = targetDriveLetter + ":\\";
+                if (!System.IO.Directory.Exists(rootPath))
+                {
+                    StatusChanged?.Invoke($"目标盘 {targetDriveLetter}: 不存在，无法复制");
+                    return false;
+                }
+
+                StatusChanged?.Invoke($"正在将USB中的VHD/EVHD复制到 {rootPath} 根目录...");
+
+                // 构建复制队列（目标为根目录，按文件名放置）
+                var copyQueue = new List<(string usbFile, string destPath)>();
+                foreach (var usbFile in usbVhdFiles)
+                {
+                    try
+                    {
+                        var name = System.IO.Path.GetFileName(usbFile);
+                        var destPath = System.IO.Path.Combine(rootPath, name);
+
+                        // 若目标已存在，尝试准备并删除后覆盖
+                        if (System.IO.File.Exists(destPath))
+                        {
+                            if (!PrepareFileForReplacement(destPath))
+                            {
+                                StatusChanged?.Invoke($"无法准备现有文件进行覆盖: {name}");
+                                continue;
+                            }
+                            try
+                            {
+                                System.IO.File.Delete(destPath);
+                            }
+                            catch (Exception ex)
+                            {
+                                StatusChanged?.Invoke($"删除现有文件失败: {name} - {ex.Message}");
+                                continue;
+                            }
+                        }
+
+                        copyQueue.Add((usbFile, destPath));
+                    }
+                    catch (Exception ex)
+                    {
+                        StatusChanged?.Invoke($"预处理复制队列失败: {System.IO.Path.GetFileName(usbFile)} - {ex.Message}");
+                    }
+                }
+
+                if (copyQueue.Count == 0)
+                {
+                    StatusChanged?.Invoke("无可复制的文件");
+                    return false;
+                }
+
+                bool anyCopied = false;
+                for (int i = 0; i < copyQueue.Count; i++)
+                {
+                    var item = copyQueue[i];
+                    try
+                    {
+                        StatusChanged?.Invoke($"正在复制: {System.IO.Path.GetFileName(item.usbFile)} -> {System.IO.Path.GetFileName(item.destPath)}");
+                        await CopyFileWithProgressAsync(item.usbFile, item.destPath, i + 1, copyQueue.Count);
+
+                        // 验证大小
+                        var usbInfo = new System.IO.FileInfo(item.usbFile);
+                        var newInfo = new System.IO.FileInfo(item.destPath);
+                        if (newInfo.Length != usbInfo.Length)
+                        {
+                            StatusChanged?.Invoke($"警告: 文件大小不匹配 - 原始: {usbInfo.Length}, 复制后: {newInfo.Length}");
+                        }
+
+                        anyCopied = true;
+                        StatusChanged?.Invoke($"复制完成: {System.IO.Path.GetFileName(item.destPath)}");
+                    }
+                    catch (UnauthorizedAccessException ex)
+                    {
+                        StatusChanged?.Invoke($"权限不足，无法复制文件: {System.IO.Path.GetFileName(item.usbFile)} - {ex.Message}");
+                    }
+                    catch (System.IO.IOException ex)
+                    {
+                        StatusChanged?.Invoke($"文件IO错误: {System.IO.Path.GetFileName(item.usbFile)} - {ex.Message}");
+                    }
+                    catch (Exception ex)
+                    {
+                        StatusChanged?.Invoke($"复制文件时出错: {System.IO.Path.GetFileName(item.usbFile)} - {ex.Message}");
+                    }
+                }
+
+                return anyCopied;
+            }
+            catch (Exception ex)
+            {
+                StatusChanged?.Invoke($"复制USB文件到根目录失败: {ex.Message}");
+                return false;
+            }
+        }
+
         // 带进度的文件复制
         private async Task CopyFileWithProgressAsync(string sourcePath, string destPath, int fileIndex, int totalFiles)
         {

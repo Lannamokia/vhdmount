@@ -120,7 +120,7 @@ namespace VHDMounter
                 var localVhdFiles = await vhdManager.ScanForVHDFiles();
                 OnStatusChanged($"本地VHD文件扫描完成，找到 {localVhdFiles.Count} 个文件");
                 await Task.Delay(2000); // 暂停2秒显示结果
-                
+
                 // 如果找到USB设备和VHD文件，替换本地文件
                 if (nxInsUSB != null && usbVhdFiles.Count > 0 && localVhdFiles.Count > 0)
                 {
@@ -148,6 +148,39 @@ namespace VHDMounter
                     Dispatcher.Invoke(() =>
                     {
                         // 替换阶段结束，恢复不确定进度或清零
+                        ProgressBar.IsIndeterminate = true;
+                        ProgressBar.Value = 0;
+                    });
+                    await Task.Delay(2000); // 暂停2秒显示结果
+                }
+
+                // 当且仅当本地列表为空，且USB有结果时，直接复制到D:\ 根目录
+                if (localVhdFiles.Count == 0 && nxInsUSB != null && usbVhdFiles.Count > 0)
+                {
+                    OnStatusChanged("本地无VHD/EVHD，准备将USB文件复制到 D:\\ 根目录...");
+                    Dispatcher.Invoke(() =>
+                    {
+                        ProgressBar.Visibility = Visibility.Visible;
+                        ProgressBar.IsIndeterminate = false;
+                        ProgressBar.Minimum = 0;
+                        ProgressBar.Maximum = 100;
+                        ProgressBar.Value = 0;
+                    });
+
+                    bool copied = await vhdManager.CopyUsbFilesToDriveRoot(usbVhdFiles, "D");
+                    if (copied)
+                    {
+                        OnStatusChanged("复制完成，重新扫描本地VHD文件...");
+                        localVhdFiles = await vhdManager.ScanForVHDFiles();
+                        OnStatusChanged($"重新扫描完成，找到 {localVhdFiles.Count} 个文件");
+                    }
+                    else
+                    {
+                        OnStatusChanged("未能复制USB上的VHD/EVHD文件到D盘");
+                    }
+
+                    Dispatcher.Invoke(() =>
+                    {
                         ProgressBar.IsIndeterminate = true;
                         ProgressBar.Value = 0;
                     });
