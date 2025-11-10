@@ -24,6 +24,28 @@ async function del(url) {
   return data;
 }
 
+// 通用确认弹窗（替代原生confirm，避免环境差异）
+function showConfirmModal(message) {
+  return new Promise(resolve => {
+    const modal = document.getElementById('confirmModal');
+    const msgEl = document.getElementById('confirmMessage');
+    const okBtn = document.getElementById('confirmOk');
+    const cancelBtn = document.getElementById('confirmCancel');
+    const closeBtn = document.getElementById('confirmClose');
+    msgEl.textContent = message || '';
+    modal.hidden = false;
+    const cleanup = () => {
+      modal.hidden = true;
+      okBtn.onclick = null;
+      cancelBtn.onclick = null;
+      closeBtn.onclick = null;
+    };
+    okBtn.onclick = () => { cleanup(); resolve(true); };
+    cancelBtn.onclick = () => { cleanup(); resolve(false); };
+    closeBtn.onclick = () => { cleanup(); resolve(false); };
+  });
+}
+
 function toast(msg, ok = true) {
   const el = document.getElementById('toast');
   el.textContent = msg;
@@ -39,49 +61,7 @@ function toast(msg, ok = true) {
   }, 2500);
 }
 
-// ===== EVHD 密码查询与解密工具 =====
-function computeEvhdSecretTz8() {
-  const now = new Date();
-  // 转换到UTC+8小时
-  const tz8 = new Date(now.getTime() + (8 - now.getTimezoneOffset() / 60) * 60 * 60 * 1000);
-  const YY = String(tz8.getUTCFullYear()).slice(-2);
-  const MM = String(tz8.getUTCMonth() + 1).padStart(2, '0');
-  const DD = String(tz8.getUTCDate()).padStart(2, '0');
-  const HH = String(tz8.getUTCHours()).padStart(2, '0');
-  return `evhd${YY}${MM}${DD}${HH}`;
-}
-
-function strToUtf8Bytes(str) {
-  return new TextEncoder().encode(str);
-}
-
-async function sha256Bytes(dataBytes) {
-  const buf = await crypto.subtle.digest('SHA-256', dataBytes);
-  return new Uint8Array(buf);
-}
-
-function base64ToBytes(b64) {
-  const bin = atob(b64);
-  const arr = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-  return arr;
-}
-
-async function decryptEvhdPassword(secret, cipherB64) {
-  const keyHash = await sha256Bytes(strToUtf8Bytes(secret));
-  const ivHash = await sha256Bytes(strToUtf8Bytes(secret + '_iv'));
-  const iv = ivHash.slice(0, 16);
-  const key = await crypto.subtle.importKey(
-    'raw',
-    keyHash,
-    { name: 'AES-CBC' },
-    false,
-    ['decrypt']
-  );
-  const cipherBytes = base64ToBytes(cipherB64);
-  const plainBuf = await crypto.subtle.decrypt({ name: 'AES-CBC', iv }, key, cipherBytes);
-  return new TextDecoder().decode(plainBuf);
-}
+// 旧版EVHD解密工具已移除，统一改用RSA封装下发到客户端
 
 async function copyToClipboard(text) {
   try {
@@ -125,7 +105,7 @@ async function loadMachines() {
       machines = machines.filter(m => (m.machine_id || '').toLowerCase().includes(search));
     }
     if (!machines.length) {
-      tbody.innerHTML = '<tr><td colspan="5" class="muted">暂无机台数据</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9" class="muted">暂无机台数据</td></tr>';
       return;
     }
     tbody.innerHTML = '';
@@ -137,14 +117,19 @@ async function loadMachines() {
         <td>${m.evhd_password ? '已设置' : '未设置'}</td>
         <td>${m.protected ? '启用' : '关闭'}</td>
         <td>${m.last_seen ? new Date(m.last_seen).toLocaleString() : '—'}</td>
+        <td>${m.key_id || '—'}</td>
+        <td>${m.key_type || '—'}</td>
+        <td>${m.approved ? '已审批' : '未审批'}</td>
         <td class="actions">
           <input class="input" style="width:160px" placeholder="新VHD关键词" data-act="vhd-input" />
           <button class="btn" data-act="vhd-update">更新</button>
           <input class="input" style="width:160px" type="password" placeholder="EVHD密码" data-act="evhd-input" value="${m.evhd_password || ''}" />
           <button class="btn" data-act="evhd-update">更新EVHD密码</button>
-          <button class="btn" data-act="evhd-query">查询EVHD密码</button>
-          <button class="btn" data-act="protect-toggle">${m.protected ? '取消保护' : '保护'}</button>
-          <button class="btn" data-act="delete" style="color:#ffb4b4">删除</button>
+          <button class="btn" data-act="evhd-show">查询明文</button>
+          <button class="btn" data-act="approve-toggle">${m.approved ? '取消审批' : '审批通过'}</button>
+          <button class="btn" type="button" data-act="revoke">重置注册状态</button>
+          <button class="btn" type="button" data-act="protect-toggle">${m.protected ? '取消保护' : '保护'}</button>
+          <button class="btn" type="button" data-act="delete" style="color:#ffb4b4">删除</button>
         </td>
       `;
       tr.querySelector('[data-act="vhd-update"]').addEventListener('click', async () => {
@@ -164,41 +149,67 @@ async function loadMachines() {
           await loadMachines();
         } catch (e) { toast(e.message, false); }
       });
-      tr.querySelector('[data-act="evhd-query"]').addEventListener('click', async () => {
+      tr.querySelector('[data-act="evhd-show"]').addEventListener('click', async () => {
         try {
-          // 改用受登录保护的明文查询API
-          const data = await getJSON(`/api/evhd-password/plain?machineId=${encodeURIComponent(m.machine_id)}`);
-          const plain = data?.evhdPassword || '';
-          if (!plain) { toast('未设置EVHD密码', false); return; }
-          const copied = await copyToClipboard(plain);
-          if (copied) {
-            toast('EVHD密码已复制到剪贴板');
-          } else {
-            alert(`机台 ${m.machine_id} 的EVHD密码：\n${plain}\n\n复制失败，请手动复制。`);
-          }
-        } catch (e) {
-          // 如果未登录，后端会返回401
-          if (e && /需要登录|401/.test(e.message)) {
-            toast('请先登录后再查询EVHD密码', false);
-            return;
-          }
-          toast(e.message || '查询失败', false);
+          const resp = await getJSON(`/api/evhd-password/plain?machineId=${encodeURIComponent(m.machine_id)}`);
+          const pw = resp?.evhdPassword || '';
+          if (!pw) { toast('该机台未设置EVHD密码', false); return; }
+          const copied = await copyToClipboard(pw);
+          toast(copied ? '已复制EVHD明文到剪贴板' : `EVHD明文：${pw}`);
+        } catch (e) { toast(e.message || '查询明文失败', false); }
+      });
+      tr.querySelector('[data-act="approve-toggle"]').addEventListener('click', async () => {
+        try {
+          await postJSON(`/api/machines/${encodeURIComponent(m.machine_id)}/approve`, { approved: !m.approved });
+          toast('审批状态已更新');
+          await loadMachines();
+        } catch (e) { toast(e.message, false); }
+      });
+      const resetBtn = tr.querySelector('[data-act="revoke"]');
+      resetBtn.addEventListener('click', async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const ok = await showConfirmModal(`确认重置机台 ${m.machine_id} 的注册状态？\n这将删除密钥并重置审批为未审批。`);
+        if (!ok) return;
+        try {
+          resetBtn.disabled = true;
+          await postJSON(`/api/machines/${encodeURIComponent(m.machine_id)}/revoke`, {});
+          toast('已重置机台注册状态');
+          await loadMachines();
+        } catch (e) { toast(e.message, false); }
+        finally {
+          resetBtn.disabled = false;
         }
       });
-      tr.querySelector('[data-act="protect-toggle"]').addEventListener('click', async () => {
+      const protectBtn = tr.querySelector('[data-act="protect-toggle"]');
+      protectBtn.addEventListener('click', async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const label = m.protected ? '取消保护' : '保护';
+        const ok = await showConfirmModal(`确认${label}机台 ${m.machine_id}？`);
+        if (!ok) return;
         try {
+          protectBtn.disabled = true;
           await postJSON('/api/protect', { machineId: m.machine_id, protected: !m.protected });
           toast('保护状态已更新');
           await loadMachines();
         } catch (e) { toast(e.message, false); }
+        finally { protectBtn.disabled = false; }
       });
-      tr.querySelector('[data-act="delete"]').addEventListener('click', async () => {
-        if (!confirm(`确认删除机台 ${m.machine_id} ?`)) return;
+
+      const delBtn = tr.querySelector('[data-act="delete"]');
+      delBtn.addEventListener('click', async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const ok = await showConfirmModal(`确认删除机台 ${m.machine_id}？该操作不可恢复。`);
+        if (!ok) return;
         try {
+          delBtn.disabled = true;
           await del(`/api/machines/${encodeURIComponent(m.machine_id)}`);
           toast('机台已删除');
           await loadMachines();
         } catch (e) { toast(e.message, false); }
+        finally { delBtn.disabled = false; }
       });
       tbody.appendChild(tr);
     }
@@ -263,6 +274,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       try {
         // 通过设置VHD关键词的接口实现创建（后端不存在时会自动创建）
         await postJSON(`/api/machines/${encodeURIComponent(id)}/vhd`, { vhdKeyword: vhd });
+        // 初次创建时重置审批与吊销状态
+        await postJSON(`/api/machines/${encodeURIComponent(id)}/approve`, { approved: false }).catch(() => {});
         // 可选地设置初始EVHD密码
         if (evhd) {
           await postJSON(`/api/machines/${encodeURIComponent(id)}/evhd-password`, { evhdPassword: evhd });

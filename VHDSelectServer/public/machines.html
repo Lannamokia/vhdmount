@@ -52,12 +52,15 @@
                 <th>EVHD密码</th>
                 <th>保护</th>
                 <th>最近在线</th>
+                <th>密钥ID</th>
+                <th>密钥类型</th>
+                <th>审批</th>
                 <th>操作</th>
               </tr>
             </thead>
             <tbody id="machinesTbody">
               <tr>
-                <td colspan="5" class="muted">加载中...</td>
+                <td colspan="9" class="muted">加载中...</td>
               </tr>
             </tbody>
           </table>
@@ -78,6 +81,24 @@
         </div>
         <div class="modal-footer">
           <button id="loginSubmit" class="btn btn-primary">登录</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 通用确认弹窗 -->
+    <div id="confirmModal" class="modal" hidden>
+      <div class="modal-backdrop"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <div class="modal-title">确认操作</div>
+          <button class="icon-btn" id="confirmClose">✖</button>
+        </div>
+        <div class="modal-body">
+          <div id="confirmMessage" class="card-sub"></div>
+        </div>
+        <div class="modal-footer">
+          <button id="confirmCancel" class="btn btn-ghost">取消</button>
+          <button id="confirmOk" class="btn btn-primary">确认</button>
         </div>
       </div>
     </div>

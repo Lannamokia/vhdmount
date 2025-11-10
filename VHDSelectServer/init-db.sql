@@ -13,12 +13,27 @@ CREATE TABLE IF NOT EXISTS machines (
     protected BOOLEAN DEFAULT FALSE,
     vhd_keyword VARCHAR(255) DEFAULT 'SDEZ',
     evhd_password TEXT DEFAULT NULL,
+    -- 新增：密钥与审批相关字段
+    key_id VARCHAR(64) DEFAULT NULL,
+    key_type VARCHAR(32) DEFAULT NULL,
+    pubkey_pem TEXT DEFAULT NULL,
+    approved BOOLEAN DEFAULT FALSE,
+    approved_at TIMESTAMP DEFAULT NULL,
+    revoked BOOLEAN DEFAULT FALSE,
+    revoked_at TIMESTAMP DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 迁移兼容：确保现版本使用的 evhd_password 列存在且为 TEXT 类型
 ALTER TABLE machines ADD COLUMN IF NOT EXISTS evhd_password TEXT;
+ALTER TABLE machines ADD COLUMN IF NOT EXISTS key_id VARCHAR(64);
+ALTER TABLE machines ADD COLUMN IF NOT EXISTS key_type VARCHAR(32);
+ALTER TABLE machines ADD COLUMN IF NOT EXISTS pubkey_pem TEXT;
+ALTER TABLE machines ADD COLUMN IF NOT EXISTS approved BOOLEAN DEFAULT FALSE;
+ALTER TABLE machines ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP;
+ALTER TABLE machines ADD COLUMN IF NOT EXISTS revoked BOOLEAN DEFAULT FALSE;
+ALTER TABLE machines ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMP;
 
 -- 创建更新时间触发器函数
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -62,6 +77,7 @@ ON CONFLICT (setting_key) DO NOTHING;
 -- 创建索引以提高查询性能
 CREATE INDEX IF NOT EXISTS idx_machines_machine_id ON machines(machine_id);
 CREATE INDEX IF NOT EXISTS idx_machines_protected ON machines(protected);
+CREATE INDEX IF NOT EXISTS idx_machines_key_id ON machines(key_id);
 CREATE INDEX IF NOT EXISTS idx_admin_settings_key ON admin_settings(setting_key);
 
 -- 显示表结构

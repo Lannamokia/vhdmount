@@ -10,6 +10,8 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Text;
 using System.Timers;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 
 namespace VHDMounter
 {
@@ -32,6 +34,7 @@ namespace VHDMounter
 
         public event Action<string> StatusChanged;
         public event Action<FileReplaceProgress> ReplaceProgressChanged;
+        public event Action<bool, string> BlockingChanged;
         
         private static readonly HttpClient httpClient = new HttpClient();
         private string configFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "vhdmonter_config.ini");
@@ -42,6 +45,8 @@ namespace VHDMounter
         private bool isProtectionCheckEnabled;
         private string protectionCheckUrl;
         private int protectionCheckInterval;
+        private bool isBlocking = false;
+        private bool protectionWasRunning = false;
 
         // 加密EVHD挂载进程（需保持常驻直到主程序退出）
         private Process evhdMountProcess;
@@ -663,49 +668,109 @@ namespace VHDMounter
             }
         }
 
-        // 远程获取EVHD密码（用于加密VHD挂载）
+        // 远程获取EVHD密码（RSA封装信封，客户端用TPM私钥解密）
         public async Task<string> GetEvhdPasswordFromServer()
         {
             try
             {
                 var config = ReadConfig();
                 string url = null;
-                if (config.TryGetValue("EvhdPasswordUrl", out var evhdUrl) && !string.IsNullOrWhiteSpace(evhdUrl))
+                if (config.TryGetValue("EvhdEnvelopeUrl", out var envelopeUrl) && !string.IsNullOrWhiteSpace(envelopeUrl))
                 {
-                    url = evhdUrl;
+                    url = envelopeUrl;
+                }
+                else if (config.TryGetValue("EvhdPasswordUrl", out var legacyUrl) && !string.IsNullOrWhiteSpace(legacyUrl))
+                {
+                    url = legacyUrl.Replace("evhd-password", "evhd-envelope");
                 }
                 else if (config.TryGetValue("BootImageSelectUrl", out var bootUrl) && !string.IsNullOrWhiteSpace(bootUrl))
                 {
-                    // 尝试基于BootImageSelectUrl推导
-                    url = bootUrl.Replace("boot-image-select", "evhd-password");
+                    url = bootUrl.Replace("boot-image-select", "evhd-envelope");
                 }
                 else
                 {
-                    StatusChanged?.Invoke("未配置EvhdPasswordUrl或BootImageSelectUrl");
+                    StatusChanged?.Invoke("未配置EvhdEnvelopeUrl/EvhdPasswordUrl或BootImageSelectUrl");
                     return null;
                 }
 
-                var secret = ComputeEvhdSecret();
-                var requestUrl = $"{url}?machineId={Uri.EscapeDataString(machineId)}&secret={Uri.EscapeDataString(secret)}";
-                StatusChanged?.Invoke($"正在从远程获取EVHD密码: {requestUrl}");
+                var requestUrl = $"{url}?machineId={Uri.EscapeDataString(machineId)}";
+                StatusChanged?.Invoke($"正在从远程获取EVHD封装信封: {requestUrl}");
                 var response = await httpClient.GetAsync(requestUrl);
-                if (!response.IsSuccessStatusCode)
+
+                if (response.IsSuccessStatusCode)
                 {
-                    StatusChanged?.Invoke($"获取EVHD密码失败: {response.StatusCode}");
+                    var jsonContent = await response.Content.ReadAsStringAsync();
+                    var jsonDoc = JsonDocument.Parse(jsonContent);
+                    if (jsonDoc.RootElement.TryGetProperty("ciphertext", out var cipherElement))
+                    {
+                        var b64 = cipherElement.GetString();
+                        if (!string.IsNullOrWhiteSpace(b64))
+                        {
+                            var rsa = EnsureOrCreateTpmRsa(machineId);
+                            var cipherBytes = Convert.FromBase64String(b64);
+                            var plainBytes = rsa.Decrypt(cipherBytes, RSAEncryptionPadding.OaepSHA256);
+                            var plain = Encoding.UTF8.GetString(plainBytes);
+                            return plain;
+                        }
+                    }
+                    StatusChanged?.Invoke("远程响应中未找到ciphertext字段");
                     return null;
                 }
-                var jsonContent = await response.Content.ReadAsStringAsync();
-                var jsonDoc = JsonDocument.Parse(jsonContent);
-                if (jsonDoc.RootElement.TryGetProperty("evhdPassword", out var pwdElement))
+                else
                 {
-                    var cipherBase64 = pwdElement.GetString();
-                    if (string.IsNullOrWhiteSpace(cipherBase64))
+                    var body = await response.Content.ReadAsStringAsync();
+                    string err = null;
+                    try
+                    {
+                        var doc = JsonDocument.Parse(body);
+                        if (doc.RootElement.TryGetProperty("error", out var ee)) err = ee.GetString();
+                    }
+                    catch { }
+
+                    if ((int)response.StatusCode == 403)
+                    {
+                        StatusChanged?.Invoke(err ?? "机台密钥未审批或已吊销");
                         return null;
-                    var plain = DecryptEvhdPassword(cipherBase64, secret);
-                    return plain;
+                    }
+                    else if ((int)response.StatusCode == 400)
+                    {
+                        // 仅在未注册公钥时执行注册，然后重试一次
+                        if ((err ?? string.Empty).Contains("未注册公钥"))
+                        {
+                            var rsa = EnsureOrCreateTpmRsa(machineId);
+                            var pubPem = ExportPublicKeyPem(rsa);
+                            StatusChanged?.Invoke("机台未注册公钥，正在注册后重试...");
+                            await RegisterPublicKeyAsync(url, machineId, pubPem);
+
+                            var retry = await httpClient.GetAsync(requestUrl);
+                            if (retry.IsSuccessStatusCode)
+                            {
+                                var jsonContent = await retry.Content.ReadAsStringAsync();
+                                var jsonDoc = JsonDocument.Parse(jsonContent);
+                                if (jsonDoc.RootElement.TryGetProperty("ciphertext", out var cipherElement))
+                                {
+                                    var b64 = cipherElement.GetString();
+                                    if (!string.IsNullOrWhiteSpace(b64))
+                                    {
+                                        var cipherBytes = Convert.FromBase64String(b64);
+                                        var plainBytes = rsa.Decrypt(cipherBytes, RSAEncryptionPadding.OaepSHA256);
+                                        var plain = Encoding.UTF8.GetString(plainBytes);
+                                        return plain;
+                                    }
+                                }
+                            }
+                            StatusChanged?.Invoke("重试后仍未下发ciphertext");
+                            return null;
+                        }
+                        StatusChanged?.Invoke(err ?? "获取EVHD封装信封失败: 400");
+                        return null;
+                    }
+                    else
+                    {
+                        StatusChanged?.Invoke($"获取EVHD封装信封失败: {response.StatusCode}");
+                        return null;
+                    }
                 }
-                StatusChanged?.Invoke("远程响应中未找到evhdPassword字段");
-                return null;
             }
             catch (Exception ex)
             {
@@ -714,52 +779,238 @@ namespace VHDMounter
             }
         }
 
-        // 计算EVHD secret = "evhd" + YYMMDDHH (UTC+8)
-        private string ComputeEvhdSecret()
-        {
-            var tzTime = DateTime.UtcNow.AddHours(8);
-            return "evhd" + tzTime.ToString("yyMMddHH");
-        }
-
-        // 使用AES-256-CBC和secret解密Base64密文
-        private string DecryptEvhdPassword(string base64Cipher, string secret)
+        // 远程获取EVHD密码（失败则阻塞并每秒轮询状态，仅在400未注册时注册公钥）
+        public async Task<string> GetEvhdPasswordFromServerWithBlockingRetry()
         {
             try
             {
-                var cipherBytes = Convert.FromBase64String(base64Cipher);
-                var key = Sha256(secret);
-                var ivHash = Sha256(secret + "_iv");
-                var iv = new byte[16];
-                Array.Copy(ivHash, iv, 16);
-
-                using (var aes = System.Security.Cryptography.Aes.Create())
+                var config = ReadConfig();
+                string url = null;
+                if (config.TryGetValue("EvhdEnvelopeUrl", out var envelopeUrl) && !string.IsNullOrWhiteSpace(envelopeUrl))
                 {
-                    aes.KeySize = 256;
-                    aes.BlockSize = 128;
-                    aes.Mode = System.Security.Cryptography.CipherMode.CBC;
-                    aes.Padding = System.Security.Cryptography.PaddingMode.PKCS7;
-                    aes.Key = key;
-                    aes.IV = iv;
+                    url = envelopeUrl;
+                }
+                else if (config.TryGetValue("EvhdPasswordUrl", out var legacyUrl) && !string.IsNullOrWhiteSpace(legacyUrl))
+                {
+                    url = legacyUrl.Replace("evhd-password", "evhd-envelope");
+                }
+                else if (config.TryGetValue("BootImageSelectUrl", out var bootUrl) && !string.IsNullOrWhiteSpace(bootUrl))
+                {
+                    url = bootUrl.Replace("boot-image-select", "evhd-envelope");
+                }
+                else
+                {
+                    StatusChanged?.Invoke("未配置EvhdEnvelopeUrl/EvhdPasswordUrl或BootImageSelectUrl");
+                    return null;
+                }
 
-                    using (var decryptor = aes.CreateDecryptor())
+                // 准备TPM RSA密钥（不主动注册，仅在400未注册公钥时注册）
+                var rsa = EnsureOrCreateTpmRsa(machineId);
+                var pubPem = ExportPublicKeyPem(rsa);
+
+                var requestUrl = $"{url}?machineId={Uri.EscapeDataString(machineId)}";
+                StatusChanged?.Invoke($"正在从远程获取EVHD封装信封: {requestUrl}");
+                var response = await httpClient.GetAsync(requestUrl);
+                if (response.IsSuccessStatusCode)
+                {
+                    var jsonContent = await response.Content.ReadAsStringAsync();
+                    var jsonDoc = JsonDocument.Parse(jsonContent);
+                    if (jsonDoc.RootElement.TryGetProperty("ciphertext", out var cipherElement))
                     {
-                        var plainBytes = decryptor.TransformFinalBlock(cipherBytes, 0, cipherBytes.Length);
-                        return System.Text.Encoding.UTF8.GetString(plainBytes);
+                        var b64 = cipherElement.GetString();
+                        if (!string.IsNullOrWhiteSpace(b64))
+                        {
+                            var cipherBytes = Convert.FromBase64String(b64);
+                            var plainBytes = rsa.Decrypt(cipherBytes, RSAEncryptionPadding.OaepSHA256);
+                            var plain = Encoding.UTF8.GetString(plainBytes);
+                            return plain;
+                        }
                     }
+                }
+
+                // 进入阻塞模式并开始轮询
+                EnterBlockingMode("解密参数下发异常/机台未注册，正在检查注册状态...");
+                while (true)
+                {
+                    try
+                    {
+                        // 每次轮询直接拉取封装信封，仅在400未注册时执行注册
+                        var pollResponse = await httpClient.GetAsync(requestUrl);
+                        var body = await pollResponse.Content.ReadAsStringAsync();
+
+                        if (pollResponse.IsSuccessStatusCode)
+                        {
+                            string b64 = null;
+                            try
+                            {
+                                var doc = JsonDocument.Parse(body);
+                                if (doc.RootElement.TryGetProperty("ciphertext", out var ce))
+                                {
+                                    b64 = ce.GetString();
+                                }
+                            }
+                            catch { }
+
+                            if (!string.IsNullOrWhiteSpace(b64))
+                            {
+                                var cipherBytes = Convert.FromBase64String(b64);
+                                var plainBytes = rsa.Decrypt(cipherBytes, RSAEncryptionPadding.OaepSHA256);
+                                var plain = Encoding.UTF8.GetString(plainBytes);
+                                ExitBlockingMode("已下发EVHD加密信封");
+                                StatusChanged?.Invoke("已下发EVHD加密信封");
+                                return plain;
+                            }
+                            else
+                            {
+                                StatusChanged?.Invoke("机台已注册，等待管理员设置EVHD密码...");
+                            }
+                        }
+                        else
+                        {
+                            string err = null;
+                            try
+                            {
+                                var doc = JsonDocument.Parse(body);
+                                if (doc.RootElement.TryGetProperty("error", out var ee)) err = ee.GetString();
+                            }
+                            catch { }
+
+                            if ((int)pollResponse.StatusCode == 403)
+                            {
+                                StatusChanged?.Invoke(err ?? "机台密钥未审批或已吊销，等待审批...");
+                            }
+                            else if ((int)pollResponse.StatusCode == 404)
+                            {
+                                StatusChanged?.Invoke(err ?? "机台不存在，等待注册...");
+                            }
+                            else if ((int)pollResponse.StatusCode == 400)
+                            {
+                                if ((err ?? string.Empty).Contains("未注册公钥"))
+                                {
+                                    StatusChanged?.Invoke("机台未注册公钥，已提交注册，等待服务生效...");
+                                    await RegisterPublicKeyAsync(url, machineId, pubPem);
+                                }
+                                else
+                                {
+                                    StatusChanged?.Invoke(err ?? "获取EVHD封装信封失败: 400");
+                                }
+                            }
+                            else
+                            {
+                                StatusChanged?.Invoke($"获取EVHD封装信封失败: {pollResponse.StatusCode}");
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        StatusChanged?.Invoke($"重试中: {ex.Message}");
+                    }
+
+                    await Task.Delay(1000);
                 }
             }
             catch (Exception ex)
             {
-                StatusChanged?.Invoke($"EVHD密码解密失败: {ex.Message}");
+                StatusChanged?.Invoke($"远程获取EVHD密码失败: {ex.Message}");
                 return null;
             }
         }
 
-        private byte[] Sha256(string text)
+        private void EnterBlockingMode(string message)
         {
-            using (var sha = System.Security.Cryptography.SHA256.Create())
+            try
             {
-                return sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(text));
+                isBlocking = true;
+                protectionWasRunning = isProtectionCheckEnabled && protectionTimer != null;
+                if (protectionTimer != null)
+                {
+                    protectionTimer.Stop();
+                }
+                BlockingChanged?.Invoke(true, message);
+                StatusChanged?.Invoke(message);
+            }
+            catch { }
+        }
+
+        private void ExitBlockingMode(string message = null)
+        {
+            try
+            {
+                isBlocking = false;
+                if (protectionWasRunning && protectionTimer != null)
+                {
+                    protectionTimer.Start();
+                }
+                BlockingChanged?.Invoke(false, message ?? string.Empty);
+                if (!string.IsNullOrWhiteSpace(message))
+                {
+                    StatusChanged?.Invoke(message);
+                }
+            }
+            catch { }
+        }
+
+        private RSACng EnsureOrCreateTpmRsa(string machineId)
+        {
+            string keyName = $"VHDMounterKey_{machineId}";
+            CngKey key = null;
+            try
+            {
+                key = CngKey.Open(keyName, CngProvider.MicrosoftPlatformCryptoProvider);
+            }
+            catch
+            {
+                var creation = new CngKeyCreationParameters
+                {
+                    Provider = CngProvider.MicrosoftPlatformCryptoProvider,
+                    KeyUsage = CngKeyUsages.AllUsages,
+                    ExportPolicy = CngExportPolicies.None,
+                    KeyCreationOptions = CngKeyCreationOptions.None
+                };
+                key = CngKey.Create(CngAlgorithm.Rsa, keyName, creation);
+            }
+            var rsa = new RSACng(key);
+            if (rsa.KeySize < 2048) rsa.KeySize = 2048;
+            return rsa;
+        }
+
+        private string ExportPublicKeyPem(RSA rsa)
+        {
+            var spki = rsa.ExportSubjectPublicKeyInfo();
+            var b64 = Convert.ToBase64String(spki);
+            var sb = new StringBuilder();
+            sb.AppendLine("-----BEGIN PUBLIC KEY-----");
+            for (int i = 0; i < b64.Length; i += 64)
+            {
+                sb.AppendLine(b64.Substring(i, Math.Min(64, b64.Length - i)));
+            }
+            sb.AppendLine("-----END PUBLIC KEY-----");
+            return sb.ToString();
+        }
+
+        private async Task RegisterPublicKeyAsync(string envelopeUrl, string machineId, string pubkeyPem)
+        {
+            try
+            {
+                var baseUrl = envelopeUrl;
+                var idx = baseUrl.IndexOf("/api/", StringComparison.OrdinalIgnoreCase);
+                if (idx > 0) baseUrl = baseUrl.Substring(0, idx);
+                var regUrl = $"{baseUrl}/api/machines/{Uri.EscapeDataString(machineId)}/keys";
+                var payload = new
+                {
+                    keyId = $"VHDMounterKey_{machineId}",
+                    keyType = "RSA",
+                    pubkeyPem = pubkeyPem
+                };
+                var json = JsonSerializer.Serialize(payload);
+                var req = new StringContent(json, Encoding.UTF8, "application/json");
+                var res = await httpClient.PostAsync(regUrl, req);
+                // 非严格要求成功（可能已注册），仅记录状态
+                StatusChanged?.Invoke(res.IsSuccessStatusCode ? "已注册机台公钥" : $"注册公钥失败: {res.StatusCode}");
+            }
+            catch (Exception ex)
+            {
+                StatusChanged?.Invoke($"注册公钥异常: {ex.Message}");
             }
         }
 
@@ -775,7 +1026,7 @@ namespace VHDMounter
                 }
 
                 // 获取密码
-                var password = await GetEvhdPasswordFromServer();
+                var password = await GetEvhdPasswordFromServerWithBlockingRetry();
                 if (string.IsNullOrEmpty(password))
                 {
                     StatusChanged?.Invoke("未能获取EVHD密码，挂载终止");

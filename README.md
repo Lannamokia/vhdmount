@@ -81,7 +81,7 @@ dotnet publish VHDMounter.csproj --configuration Release --runtime win-x64 --sel
 [Settings]
 EnableRemoteSelection=true
 BootImageSelectUrl=http://localhost:8080/api/boot-image-select
-EvhdPasswordUrl=http://localhost:8080/api/evhd-password
+EvhdEnvelopeUrl=http://localhost:8080/api/evhd-envelope
 MachineId=MACHINE_001
 EnableProtectionCheck=true
 ProtectionCheckUrl=http://localhost:8080/api/protect
@@ -90,13 +90,13 @@ ProtectionCheckInterval=500
 
 - `EnableRemoteSelection`：启用远程 VHD 选择；关闭时仅本地扫描。
 - `BootImageSelectUrl`：远程获取 VHD 关键词的地址，客户端会附带 `machineId` 查询参数。
-- `EvhdPasswordUrl`：EVHD 密码密文获取地址（客户端以“时区 8 小时 Secret”进行解密）。
+- `EvhdEnvelopeUrl`：EVHD 密码封装信封获取地址（客户端用 TPM 私钥解密）。
 - `MachineId`：机台唯一标识，所有远程 API 需要该参数。
 - `EnableProtectionCheck`：定时查询机台保护状态，保护开启时可阻止危险操作。
 - `ProtectionCheckUrl`：保护状态查询地址（GET，需要 `machineId`）。
 - `ProtectionCheckInterval`：保护状态查询间隔（毫秒）。
 
-密钥约定：客户端每小时计算一次 `secret = "evhd" + YYMMDDHH`（UTC+8），服务端用该 `secret` 执行 AES-256-CBC 加密/解密，用于 `/api/evhd-password` 的传输保护。另提供需登录的明文接口 `/api/evhd-password/plain` 以便人工查询与核验。
+密钥流转：客户端在本机 TPM 中生成/保存 RSA 密钥对，将公钥通过 `POST /api/machines/:machineId/keys` 注册到服务端，管理员审批通过后，客户端从 `GET /api/evhd-envelope` 获取密文并用 TPM 私钥（RSA-OAEP-256）解密得到 EVHD 密码。旧的基于时区密钥与明文查询接口已移除。
 
 ### 服务端环境变量
 
@@ -125,8 +125,8 @@ ProtectionCheckInterval=500
 - `GET /api/boot-image-select?machineId=...`：获取该机台当前 VHD 关键词；若机台不存在会自动创建记录。
 - `POST /api/set-vhd`（需登录）：设置全局 VHD 关键词。
 - `GET /api/protect?machineId=...`：查询机台保护状态；机台不存在返回 404。
-- 机台：`GET /api/machines`（需登录）、`POST /api/machines/:machineId/vhd`（需登录）、`POST /api/machines/:machineId/evhd-password`（需登录）。
-- EVHD 密码：`GET /api/evhd-password?machineId=...&secret=...`（密文）、`GET /api/evhd-password/plain?machineId=...`（明文，需登录）。
+- 机台：`GET /api/machines`（需登录）、`POST /api/machines/:machineId/vhd`（需登录）、`POST /api/machines/:machineId/evhd-password`（需登录）、`POST /api/machines/:machineId/keys`（注册公钥）、`POST /api/machines/:machineId/approve`（审批）、`POST /api/machines/:machineId/revoke`（吊销）。
+- EVHD 密码：`GET /api/evhd-envelope?machineId=...`（RSA 封装信封，公开）、`GET /api/evhd-password/plain?machineId=...`（明文查询，需登录，仅管理用途）。
 
 ## 使用流程（客户端）
 
@@ -155,7 +155,7 @@ permissions:
 ## 故障排除
 
 - 无法挂载或访问盘符：以管理员身份运行；检查安全软件拦截；确认目标盘符未占用。
-- 远程 EVHD 密码解密失败：统一客户端与服务端的 UTC+8 小时窗；确保 `machineId` 一致；必要时用 `/api/evhd-password/plain` 验证。
+- 远程 EVHD 密钥下发失败：确保已在 TPM 生成密钥对并成功注册公钥；确认管理员已审批且未吊销；检查服务器 HTTPS 与时间同步。
 - 服务端无法连接数据库：
   - 内置 DB：确认数据卷权限与初始化日志；
   - 外部 DB：检查 `DB_HOST/PORT/USER/PASSWORD/NAME` 与网络。
@@ -163,8 +163,12 @@ permissions:
 
 ## 安全说明
 
-- 登录态接口通过会话管理保护，默认管理员密码为 `admin123`，请尽快修改。
-- EVHD 密文接口提供传输层简易防护（时区密钥），明文接口受登录与权限控制约束。
+- 登录与会话：所有管理接口通过会话保护，默认管理员密码为 `admin123`，请立即修改。生产环境务必设置强随机的 `SESSION_SECRET`，启用 HTTPS 并将会话 cookie 配置为 `secure: true` 与 `httpOnly`。
+- EVHD 密文（RSA 信封）：客户端在本机 TPM 生成 RSA 密钥对并注册公钥；服务端通过 `GET /api/evhd-envelope` 使用设备公钥以 `RSA-OAEP-256` 加密 EVHD 密码，客户端用 TPM 私钥解密。该接口不需要登录，但需设备已注册公钥且管理员已审批；不再使用旧的基于时区的简易防护方案。
+- 明文查询（仅管理用途）：`GET /api/evhd-password/plain?machineId=...` 需要登录，仅用于管理/排障。生产环境建议严格限制或禁用该接口，确保最小权限访问，并强制使用 HTTPS。
+- 审批与重置：管理员审批通过后设备才能获取密文。执行“重置注册状态”会删除已注册的公钥并将审批状态重置为未审批，以阻止后续密文下发。
+- 最近在线审计：服务端在设备调用 `boot-image-select`、`evhd-envelope` 或注册公钥时写入 `last_seen` 时间，仅用于审计与可观测性，不影响权限判定。
+- 数据与日志：服务端仅保存设备公钥与 EVHD 密码（明文）于数据库。请配置数据库访问控制与备份策略；避免在日志中输出敏感数据（例如明文密码、私钥）。
 
 ## 许可
 

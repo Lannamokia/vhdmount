@@ -20,6 +20,7 @@ namespace VHDMounter
             vhdManager = new VHDManager();
             vhdManager.StatusChanged += OnStatusChanged;
             vhdManager.ReplaceProgressChanged += OnReplaceProgress;
+            vhdManager.BlockingChanged += OnBlockingChanged;
             
             // 注册关机事件监听
             SystemEvents.SessionEnding += OnSessionEnding;
@@ -201,6 +202,36 @@ namespace VHDMounter
                 await Task.Delay(5000);
                 Application.Current.Shutdown();
             }
+        }
+
+        private void OnBlockingChanged(bool blocking, string message)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                try
+                {
+                    if (blocking)
+                    {
+                        // 阻塞UI交互并提示信息
+                        VHDSelector.Visibility = Visibility.Collapsed;
+                        ProgressBar.Visibility = Visibility.Visible;
+                        ProgressBar.IsIndeterminate = true;
+                        VHDListBox.IsEnabled = false;
+                        CloseButton.IsEnabled = false;
+                        if (!string.IsNullOrWhiteSpace(message))
+                        {
+                            StatusText.Text = message;
+                        }
+                    }
+                    else
+                    {
+                        // 恢复UI交互
+                        VHDListBox.IsEnabled = true;
+                        CloseButton.IsEnabled = true;
+                    }
+                }
+                catch { }
+            });
         }
 
         private void ShowVHDSelector(List<string> vhdFiles)

@@ -49,9 +49,18 @@ class Database {
             
             if (tableCheck.rows[0].exists) {
                 console.log('数据库表结构已存在');
-                // 确保新增列存在
+                // 确保新增列存在（兼容升级）
                 await client.query('ALTER TABLE machines ADD COLUMN IF NOT EXISTS evhd_password TEXT');
-                console.log('已确保machines表包含evhd_password列');
+                await client.query('ALTER TABLE machines ADD COLUMN IF NOT EXISTS key_id VARCHAR(64)');
+                await client.query('ALTER TABLE machines ADD COLUMN IF NOT EXISTS key_type VARCHAR(32)');
+                await client.query('ALTER TABLE machines ADD COLUMN IF NOT EXISTS pubkey_pem TEXT');
+                await client.query('ALTER TABLE machines ADD COLUMN IF NOT EXISTS approved BOOLEAN DEFAULT FALSE');
+                await client.query('ALTER TABLE machines ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP');
+                await client.query('ALTER TABLE machines ADD COLUMN IF NOT EXISTS revoked BOOLEAN DEFAULT FALSE');
+                await client.query('ALTER TABLE machines ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMP');
+                await client.query('ALTER TABLE machines ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP');
+                await client.query('CREATE INDEX IF NOT EXISTS idx_machines_key_id ON machines(key_id)');
+                console.log('已确保machines表包含密钥与审批相关列');
             } else {
                 console.log('警告: machines表不存在，请确保数据库已正确初始化');
             }
@@ -214,6 +223,97 @@ class Database {
             return result.rows[0] || null;
         } catch (error) {
             console.error('删除机台失败:', error.message);
+            return null;
+        }
+    }
+
+    // 更新最近在线时间
+    async updateMachineLastSeen(machineId) {
+        try {
+            const client = await this.pool.connect();
+            const result = await client.query(`
+                UPDATE machines
+                SET last_seen = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE machine_id = $1
+                RETURNING last_seen
+            `, [machineId]);
+            client.release();
+            return result.rows[0]?.last_seen || null;
+        } catch (error) {
+            console.error('更新机台最近在线时间失败:', error.message);
+            return null;
+        }
+    }
+
+    // 更新机台密钥（注册/替换），重置审批与吊销状态
+    async updateMachineKey(machineId, { keyId, keyType, pubkeyPem }) {
+        try {
+            const client = await this.pool.connect();
+            const result = await client.query(`
+                INSERT INTO machines (machine_id, key_id, key_type, pubkey_pem, approved, revoked, updated_at)
+                VALUES ($1, $2, $3, $4, FALSE, FALSE, CURRENT_TIMESTAMP)
+                ON CONFLICT (machine_id)
+                DO UPDATE SET
+                    key_id = EXCLUDED.key_id,
+                    key_type = EXCLUDED.key_type,
+                    pubkey_pem = EXCLUDED.pubkey_pem,
+                    approved = CASE WHEN machines.pubkey_pem IS DISTINCT FROM EXCLUDED.pubkey_pem THEN FALSE ELSE machines.approved END,
+                    approved_at = CASE WHEN machines.pubkey_pem IS DISTINCT FROM EXCLUDED.pubkey_pem THEN NULL ELSE machines.approved_at END,
+                    revoked = CASE WHEN machines.pubkey_pem IS DISTINCT FROM EXCLUDED.pubkey_pem THEN FALSE ELSE machines.revoked END,
+                    revoked_at = CASE WHEN machines.pubkey_pem IS DISTINCT FROM EXCLUDED.pubkey_pem THEN NULL ELSE machines.revoked_at END,
+                    updated_at = CURRENT_TIMESTAMP
+                RETURNING *
+            `, [machineId, keyId, keyType, pubkeyPem]);
+            client.release();
+            return result.rows[0] || null;
+        } catch (error) {
+            console.error('更新机台密钥失败:', error.message);
+            return null;
+        }
+    }
+
+    // 审批机台密钥
+    async approveMachine(machineId, approved) {
+        try {
+            const client = await this.pool.connect();
+            const result = await client.query(`
+                UPDATE machines
+                SET approved = $2,
+                    approved_at = CASE WHEN $2 THEN CURRENT_TIMESTAMP ELSE NULL END,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE machine_id = $1
+                RETURNING *
+            `, [machineId, !!approved]);
+            client.release();
+            return result.rows[0] || null;
+        } catch (error) {
+            console.error('审批机台失败:', error.message);
+            return null;
+        }
+    }
+
+    // 重置机台注册状态：删除相关密钥并重置审批/吊销为未审批
+    async revokeMachineKey(machineId) {
+        try {
+            const client = await this.pool.connect();
+            const result = await client.query(`
+                UPDATE machines
+                SET key_id = NULL,
+                    key_type = NULL,
+                    pubkey_pem = NULL,
+                    approved = FALSE,
+                    approved_at = NULL,
+                    revoked = FALSE,
+                    revoked_at = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE machine_id = $1
+                RETURNING *
+            `, [machineId]);
+            client.release();
+            return result.rows[0] || null;
+        } catch (error) {
+            console.error('重置机台注册状态失败:', error.message);
             return null;
         }
     }
