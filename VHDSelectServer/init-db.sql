@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS machines (
     approved_at TIMESTAMP DEFAULT NULL,
     revoked BOOLEAN DEFAULT FALSE,
     revoked_at TIMESTAMP DEFAULT NULL,
+    -- 最近在线审计
+    last_seen TIMESTAMP DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -34,6 +36,8 @@ ALTER TABLE machines ADD COLUMN IF NOT EXISTS approved BOOLEAN DEFAULT FALSE;
 ALTER TABLE machines ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP;
 ALTER TABLE machines ADD COLUMN IF NOT EXISTS revoked BOOLEAN DEFAULT FALSE;
 ALTER TABLE machines ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMP;
+-- 新增：最近在线审计列
+ALTER TABLE machines ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP;
 
 -- 创建更新时间触发器函数
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -78,6 +82,7 @@ ON CONFLICT (setting_key) DO NOTHING;
 CREATE INDEX IF NOT EXISTS idx_machines_machine_id ON machines(machine_id);
 CREATE INDEX IF NOT EXISTS idx_machines_protected ON machines(protected);
 CREATE INDEX IF NOT EXISTS idx_machines_key_id ON machines(key_id);
+CREATE INDEX IF NOT EXISTS idx_machines_last_seen ON machines(last_seen);
 CREATE INDEX IF NOT EXISTS idx_admin_settings_key ON admin_settings(setting_key);
 
 -- 显示表结构
