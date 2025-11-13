@@ -12,6 +12,7 @@ using System.Text;
 using System.Timers;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using Microsoft.Win32;
 
 namespace VHDMounter
 {
@@ -1350,6 +1351,8 @@ namespace VHDMounter
                 // 先清理盘符并分离可能已挂载的VHD，避免冲突
                 await UnmountDrive();
                 await UnmountVHD();
+                // 挂载前读取注册表 \DosDevices\* 快照
+                var mountedBefore = GetMountedDevicesDosDevices();
 
                 // 第一步：仅挂载VHD，不分配盘符
                 StatusChanged?.Invoke("步骤1: 挂载VHD文件...");
@@ -1403,53 +1406,126 @@ exit";
                     return false;
                 }
 
-                StatusChanged?.Invoke("VHD挂载成功，等待系统识别分区...");
-                await Task.Delay(3000); // 等待系统识别分区
-
-                // 第二步：为第一个分区分配盘符
-                StatusChanged?.Invoke("步骤2: 为第一个分区分配盘符M...");
-                
-                // 容错检查：如果M盘已经存在，先删除再重新分配
-                if (Directory.Exists(TARGET_DRIVE))
+                StatusChanged?.Invoke("VHD挂载成功，正在通过注册表定位新盘符...");
+                var newEntryName = (string)null;
+                var newEntryValue = (byte[])null;
+                var sw = Stopwatch.StartNew();
+                while (sw.ElapsedMilliseconds < 30000)
                 {
-                    StatusChanged?.Invoke("检测到M盘已存在，正在删除原有盘符...");
-                    bool removed = await RemoveExistingDriveLetter(vhdPath);
-                    if (!removed)
+                    await Task.Delay(500);
+                    var mountedAfter = GetMountedDevicesDosDevices();
+                    foreach (var kv in mountedAfter)
                     {
-                        StatusChanged?.Invoke("删除原有盘符失败，但继续尝试重新分配");
+                        if (!mountedBefore.ContainsKey(kv.Key) && IsDosDevicesDriveLetter(kv.Key))
+                        {
+                            newEntryName = kv.Key;
+                            newEntryValue = kv.Value;
+                            break;
+                        }
                     }
-                    else
-                    {
-                        StatusChanged?.Invoke("原有盘符删除成功");
-                    }
-                    await Task.Delay(2000); // 等待系统更新
-                }
-                
-                bool driveAssigned = await AssignDriveLetterToFirstPartition(vhdPath);
-                
-                if (!driveAssigned)
-                {
-                    StatusChanged?.Invoke("分配盘符失败，尝试备用方法...");
-                    // 备用方法：直接尝试分配盘符
-                    driveAssigned = await AssignDriveLetterDirect();
+                    if (newEntryName != null) break;
                 }
 
-                if (driveAssigned)
+                if (newEntryName == null)
                 {
-                    StatusChanged?.Invoke("VHD挂载和盘符分配完成");
-                    return true;
-                }
-                else
-                {
-                    StatusChanged?.Invoke("盘符分配失败，但VHD已挂载");
+                    StatusChanged?.Invoke("未能在注册表中检测到新增盘符条目（\\DosDevices\\X:）");
                     return false;
                 }
+
+                StatusChanged?.Invoke($"检测到新增盘符条目: {newEntryName}");
+                var targetLetter = TARGET_DRIVE.TrimEnd(':');
+                var targetEntry = $"\\\\DosDevices\\\\{targetLetter}:".Replace("\\\\", "\\");
+                if (string.Equals(newEntryName, targetEntry, StringComparison.OrdinalIgnoreCase))
+                {
+                    StatusChanged?.Invoke("新增盘符已为目标 M:，无需更改");
+                    return true;
+                }
+
+                var success = TryRemapDosDevicesEntry(newEntryName, newEntryValue, targetEntry);
+                if (!success)
+                {
+                    StatusChanged?.Invoke("注册表盘符重映射失败");
+                    return false;
+                }
+
+                StatusChanged?.Invoke("已将注册表盘符重映射为 M:，即将重启以应用更改...");
+                TryRebootSystem();
+                return true;
             }
             catch (Exception ex)
             {
                 StatusChanged?.Invoke($"挂载失败: {ex.Message}");
                 Debug.WriteLine($"MountVHD异常: {ex}");
                 return false;
+            }
+        }
+
+        private static bool IsDosDevicesDriveLetter(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            if (!name.StartsWith("\\DosDevices\\", StringComparison.OrdinalIgnoreCase)) return false;
+            if (!name.EndsWith(":")) return false;
+            var idx = name.LastIndexOf('\\');
+            if (idx < 0 || idx + 2 >= name.Length) return false;
+            var letter = name.Substring(idx + 1);
+            return letter.Length == 2 && char.IsLetter(letter[0]) && letter[1] == ':';
+        }
+
+        private static Dictionary<string, byte[]> GetMountedDevicesDosDevices()
+        {
+            var result = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+            using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\MountedDevices", writable: false);
+            if (key == null) return result;
+            foreach (var name in key.GetValueNames())
+            {
+                try
+                {
+                    var kind = key.GetValueKind(name);
+                    if (kind == RegistryValueKind.Binary && name.StartsWith("\\DosDevices\\", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var val = key.GetValue(name) as byte[];
+                        if (val != null) result[name] = val;
+                    }
+                }
+                catch { }
+            }
+            return result;
+        }
+
+        private static bool TryRemapDosDevicesEntry(string sourceEntry, byte[] value, string targetEntry)
+        {
+            try
+            {
+                using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\MountedDevices", writable: true);
+                if (key == null) return false;
+                try { key.DeleteValue(targetEntry, throwOnMissingValue: false); } catch { }
+                try { key.DeleteValue(sourceEntry, throwOnMissingValue: false); } catch { }
+                key.SetValue(targetEntry, value, RegistryValueKind.Binary);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"TryRemapDosDevicesEntry失败: {ex}");
+                return false;
+            }
+        }
+
+        private static void TryRebootSystem()
+        {
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "shutdown",
+                    Arguments = "/r /t 0",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                Process.Start(psi);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"触发重启失败: {ex}");
             }
         }
 
