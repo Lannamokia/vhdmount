@@ -13,6 +13,7 @@ using System.Timers;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.Win32;
+using System.Runtime.InteropServices;
 
 namespace VHDMounter
 {
@@ -1353,6 +1354,10 @@ namespace VHDMounter
                 await UnmountVHD();
                 // 挂载前读取注册表 \DosDevices\* 快照
                 var mountedBefore = GetMountedDevicesDosDevices();
+                // 挂载前读取注册表 \??\Volume{GUID} 快照
+                var volumeBefore = GetMountedDevicesVolumeGuids();
+                // 挂载前盘符集合，用于对比新出现的盘符
+                var lettersBefore = GetCurrentDriveLetters();
 
                 // 第一步：仅挂载VHD，不分配盘符
                 StatusChanged?.Invoke("步骤1: 挂载VHD文件...");
@@ -1406,46 +1411,103 @@ exit";
                     return false;
                 }
 
-                StatusChanged?.Invoke("VHD挂载成功，正在通过注册表定位新盘符...");
-                var newEntryName = (string)null;
-                var newEntryValue = (byte[])null;
-                var sw = Stopwatch.StartNew();
-                while (sw.ElapsedMilliseconds < 30000)
-                {
-                    await Task.Delay(500);
-                    var mountedAfter = GetMountedDevicesDosDevices();
-                    foreach (var kv in mountedAfter)
-                    {
-                        if (!mountedBefore.ContainsKey(kv.Key) && IsDosDevicesDriveLetter(kv.Key))
-                        {
-                            newEntryName = kv.Key;
-                            newEntryValue = kv.Value;
-                            break;
-                        }
-                    }
-                    if (newEntryName != null) break;
-                }
+                StatusChanged?.Invoke("VHD挂载成功，正在检测新出现的盘符...");
+                var newDriveLetter = await WaitForNewDriveLetterAsync(lettersBefore, 30000);
 
-                if (newEntryName == null)
-                {
-                    StatusChanged?.Invoke("未能在注册表中检测到新增盘符条目（\\DosDevices\\X:）");
-                    return false;
-                }
-
-                StatusChanged?.Invoke($"检测到新增盘符条目: {newEntryName}");
                 var targetLetter = TARGET_DRIVE.TrimEnd(':');
-                var targetEntry = $"\\\\DosDevices\\\\{targetLetter}:".Replace("\\\\", "\\");
-                if (string.Equals(newEntryName, targetEntry, StringComparison.OrdinalIgnoreCase))
+                var targetEntry = $@"\DosDevices\{targetLetter}:";
+
+                if (string.IsNullOrEmpty(newDriveLetter))
+                {
+                    StatusChanged?.Invoke("未检测到新盘符，尝试通过卷GUID定位注册表条目...");
+                    // 轮询寻找新增的 \??\Volume{GUID} 条目
+                    var swVol = Stopwatch.StartNew();
+                    string newVolName = null;
+                    byte[] newVolValue = null;
+                    while (swVol.ElapsedMilliseconds < 30000)
+                    {
+                        await Task.Delay(500);
+                        var volumeAfter = GetMountedDevicesVolumeGuids();
+                        foreach (var kv in volumeAfter)
+                        {
+                            if (!volumeBefore.ContainsKey(kv.Key))
+                            {
+                                newVolName = kv.Key;
+                                newVolValue = kv.Value;
+                                break;
+                            }
+                        }
+                        if (newVolName != null) break;
+                    }
+
+                    if (newVolName == null || newVolValue == null)
+                    {
+                        StatusChanged?.Invoke("未检测到新增的卷GUID注册表条目，无法继续映射");
+                        return false;
+                    }
+
+                    StatusChanged?.Invoke($"检测到新增卷GUID条目: {newVolName}，写入 \\DosDevices\\M:...");
+                    var targetLetter2 = TARGET_DRIVE.TrimEnd(':');
+                    var targetEntry2 = $@"\DosDevices\{targetLetter2}:";
+                    var setOk2 = SetDosDevicesEntry(targetEntry2, newVolValue, deleteExistingTarget: true);
+                    if (!setOk2)
+                    {
+                        StatusChanged?.Invoke("写入 \\DosDevices\\M: 失败");
+                        return false;
+                    }
+                    StatusChanged?.Invoke("已将注册表盘符重映射为 M:，即将重启以应用更改...");
+                    TryRebootSystem();
+                    return true;
+                }
+
+                StatusChanged?.Invoke($"检测到新盘符: {newDriveLetter}");
+
+                if (string.Equals(newDriveLetter.Trim(), TARGET_DRIVE, StringComparison.OrdinalIgnoreCase))
                 {
                     StatusChanged?.Invoke("新增盘符已为目标 M:，无需更改");
                     return true;
                 }
 
-                var success = TryRemapDosDevicesEntry(newEntryName, newEntryValue, targetEntry);
-                if (!success)
+                // 优先使用 \DosDevices\X: 的二进制值
+                var sourceEntry = GetDosDevicesEntryName(newDriveLetter);
+                var sourceValue = ReadMountedDevicesBinary(sourceEntry);
+
+                if (sourceValue != null)
                 {
-                    StatusChanged?.Invoke("注册表盘符重映射失败");
-                    return false;
+                    var remapOk = TryRemapDosDevicesEntry(sourceEntry, sourceValue, targetEntry);
+                    if (!remapOk)
+                    {
+                        StatusChanged?.Invoke("注册表盘符重映射失败");
+                        return false;
+                    }
+                }
+                else
+                {
+                    // 回退：通过卷GUID查找二进制值（\\?\\Volume{GUID} => \\??\\Volume{GUID}）
+                    var driveRoot = GetDriveRoot(newDriveLetter);
+                    var sb = new System.Text.StringBuilder(256);
+                    var ok = GetVolumeNameForVolumeMountPoint(driveRoot, sb, (uint)sb.Capacity);
+                    if (!ok)
+                    {
+                        StatusChanged?.Invoke("无法获取新盘符的卷GUID路径");
+                        return false;
+                    }
+                    var volRegName = ConvertVolumeGuidPathToRegName(sb.ToString());
+                    var volValue = ReadMountedDevicesBinary(volRegName);
+                    if (volValue == null)
+                    {
+                        StatusChanged?.Invoke("无法读取卷GUID对应的注册表二进制值");
+                        return false;
+                    }
+                    // 仅设置目标 M:，不删除卷GUID条目
+                    var setOk = SetDosDevicesEntry(targetEntry, volValue, deleteExistingTarget: true);
+                    if (!setOk)
+                    {
+                        StatusChanged?.Invoke("写入 \\DosDevices\\M: 失败");
+                        return false;
+                    }
+                    // 尝试删除原盘符条目（若存在）
+                    TryDeleteMountedDevicesValue(sourceEntry);
                 }
 
                 StatusChanged?.Invoke("已将注册表盘符重映射为 M:，即将重启以应用更改...");
@@ -1492,13 +1554,40 @@ exit";
             return result;
         }
 
+        private static Dictionary<string, byte[]> GetMountedDevicesVolumeGuids()
+        {
+            var result = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+            using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\MountedDevices", writable: false);
+            if (key == null) return result;
+            foreach (var name in key.GetValueNames())
+            {
+                try
+                {
+                    var kind = key.GetValueKind(name);
+                    if (kind == RegistryValueKind.Binary && IsVolumeGuidEntry(name))
+                    {
+                        var val = key.GetValue(name) as byte[];
+                        if (val != null) result[name] = val;
+                    }
+                }
+                catch { }
+            }
+            return result;
+        }
+
+        private static bool IsVolumeGuidEntry(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            return name.StartsWith("\\??\\Volume{", StringComparison.OrdinalIgnoreCase);
+        }
+
         private static bool TryRemapDosDevicesEntry(string sourceEntry, byte[] value, string targetEntry)
         {
             try
             {
                 using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\MountedDevices", writable: true);
                 if (key == null) return false;
-                try { key.DeleteValue(targetEntry, throwOnMissingValue: false); } catch { }
+                // 先删除来源条目，再写入目标条目，符合“取值后删除源，再新建目标”的流程
                 try { key.DeleteValue(sourceEntry, throwOnMissingValue: false); } catch { }
                 key.SetValue(targetEntry, value, RegistryValueKind.Binary);
                 return true;
@@ -1527,6 +1616,119 @@ exit";
             {
                 Debug.WriteLine($"触发重启失败: {ex}");
             }
+        }
+
+        // 驱动器字母监控与卷GUID映射辅助
+        private static HashSet<string> GetCurrentDriveLetters()
+        {
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var d in DriveInfo.GetDrives())
+            {
+                try
+                {
+                    var root = d.Name.TrimEnd('\\');
+                    if (root.Length >= 2 && char.IsLetter(root[0]) && root[1] == ':')
+                    {
+                        set.Add(root);
+                    }
+                }
+                catch { }
+            }
+            return set;
+        }
+
+        private static async Task<string> WaitForNewDriveLetterAsync(HashSet<string> before, int timeoutMs)
+        {
+            var sw = Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < timeoutMs)
+            {
+                await Task.Delay(500);
+                var after = GetCurrentDriveLetters();
+                foreach (var l in after)
+                {
+                    if (!before.Contains(l))
+                    {
+                        return l;
+                    }
+                }
+            }
+            return null;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool GetVolumeNameForVolumeMountPoint(string lpszVolumeMountPoint, System.Text.StringBuilder lpszVolumeName, uint cchBufferLength);
+
+        private static string ConvertVolumeGuidPathToRegName(string volumeGuidPath)
+        {
+            // 输入: \\?\Volume{GUID}\, 输出: \??\Volume{GUID}
+            if (string.IsNullOrWhiteSpace(volumeGuidPath)) return null;
+            var trimmed = volumeGuidPath.TrimEnd('\\');
+            if (!trimmed.StartsWith(@"\\?\"))
+                return null;
+            return @"\??\" + trimmed.Substring(4);
+        }
+
+        private static string GetDriveRoot(string driveLetter)
+        {
+            var letter = driveLetter.Trim();
+            if (letter.EndsWith("\\"))
+                return letter;
+            if (!letter.EndsWith(":"))
+                letter += ":";
+            return letter + "\\";
+        }
+
+        private static string GetDosDevicesEntryName(string driveLetter)
+        {
+            var letter = driveLetter.Trim().TrimEnd(':');
+            return $@"\DosDevices\{letter}:";
+        }
+
+        private static byte[] ReadMountedDevicesBinary(string valueName)
+        {
+            using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\MountedDevices", writable: false);
+            if (key == null) return null;
+            try
+            {
+                var kind = key.GetValueKind(valueName);
+                if (kind == RegistryValueKind.Binary)
+                {
+                    return key.GetValue(valueName) as byte[];
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private static bool SetDosDevicesEntry(string targetEntry, byte[] value, bool deleteExistingTarget = true)
+        {
+            try
+            {
+                using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\MountedDevices", writable: true);
+                if (key == null) return false;
+                if (deleteExistingTarget)
+                {
+                    try { key.DeleteValue(targetEntry, throwOnMissingValue: false); } catch { }
+                }
+                key.SetValue(targetEntry, value, RegistryValueKind.Binary);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"SetDosDevicesEntry失败: {ex}");
+                return false;
+            }
+        }
+
+        private static void TryDeleteMountedDevicesValue(string valueName)
+        {
+            try
+            {
+                using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\MountedDevices", writable: true);
+                if (key == null) return;
+                try { key.DeleteValue(valueName, throwOnMissingValue: false); } catch { }
+            }
+            catch { }
         }
 
         public async Task<bool> UnmountDrive()

@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using Microsoft.Win32;
+using System.Windows.Threading;
 
 namespace VHDMounter
 {
@@ -13,6 +14,12 @@ namespace VHDMounter
         private VHDManager vhdManager;
         private List<string> availableVHDs;
         private bool isProcessing = false;
+
+        // 使状态消息按队列显示，每条至少停留2秒
+        private readonly Queue<string> statusQueue = new Queue<string>();
+        private DispatcherTimer statusTimer;
+        // 即时模式：用于启动前10秒倒计时，实时刷新不排队
+        private bool statusImmediateMode = false;
 
         public MainWindow()
         {
@@ -24,6 +31,11 @@ namespace VHDMounter
             
             // 注册关机事件监听
             SystemEvents.SessionEnding += OnSessionEnding;
+
+            // 初始化状态队列显示定时器（每条消息显示2秒）
+            statusTimer = new DispatcherTimer();
+            statusTimer.Interval = TimeSpan.FromSeconds(2);
+            statusTimer.Tick += StatusTimer_Tick;
             
             // 开始主流程（包含延迟启动）
             _ = StartMainProcessWithDelay();
@@ -33,8 +45,35 @@ namespace VHDMounter
         {
             Dispatcher.Invoke(() =>
             {
-                StatusText.Text = status;
+                // 即时模式：直接显示当前消息，清空队列并停止计时器
+                if (statusImmediateMode)
+                {
+                    statusTimer.Stop();
+                    statusQueue.Clear();
+                    StatusText.Text = status;
+                    return;
+                }
+                // 入队消息；如果当前没有在显示循环中，则立即显示并启动定时器
+                statusQueue.Enqueue(status);
+                if (!statusTimer.IsEnabled)
+                {
+                    StatusText.Text = statusQueue.Dequeue();
+                    statusTimer.Start();
+                }
             });
+        }
+
+        // 每次触发时显示下一条状态消息；无消息时停止定时器
+        private void StatusTimer_Tick(object sender, EventArgs e)
+        {
+            if (statusQueue.Count > 0)
+            {
+                StatusText.Text = statusQueue.Dequeue();
+            }
+            else
+            {
+                statusTimer.Stop();
+            }
         }
 
         private void OnReplaceProgress(FileReplaceProgress progress)
@@ -64,6 +103,7 @@ namespace VHDMounter
             try
             {
                 // 开机延迟10秒启动
+                statusImmediateMode = true; // 倒计时期间开启即时模式
                 OnStatusChanged("程序启动中，等待10秒...");
                 for (int i = 10; i > 0; i--)
                 {
@@ -72,6 +112,7 @@ namespace VHDMounter
                 }
                 
                 OnStatusChanged("延迟完成，开始主流程...");
+                statusImmediateMode = false; // 倒计时结束，恢复队列显示（每条停留2秒）
                 await StartMainProcess();
             }
             catch (Exception ex)
