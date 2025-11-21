@@ -1893,6 +1893,41 @@ exit";
             }
         }
 
+        public Task<bool> StartGameBatchFile(string packagePath)
+        {
+            var startGameBatPath = Path.Combine(packagePath, "start_game.bat");
+
+            if (!File.Exists(startGameBatPath))
+            {
+                StatusChanged?.Invoke("未找到start_game.bat文件");
+                return Task.FromResult(false);
+            }
+
+            StatusChanged?.Invoke("正在启动start_game.bat...");
+
+            try
+            {
+                var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = startGameBatPath,
+                        WorkingDirectory = packagePath,
+                        UseShellExecute = true,
+                        CreateNoWindow = false
+                    }
+                };
+
+                process.Start();
+                return Task.FromResult(true);
+            }
+            catch (Exception ex)
+            {
+                StatusChanged?.Invoke($"启动失败: {ex.Message}");
+                return Task.FromResult(false);
+            }
+        }
+
         public bool IsTargetProcessRunning()
         {
             try
@@ -1900,6 +1935,69 @@ exit";
                 var processes = Process.GetProcesses();
                 return processes.Any(p => PROCESS_KEYWORDS.Any(keyword => 
                     p.ProcessName.ToLower().Contains(keyword.ToLower())));
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public bool IsProcessRunningByName(string name)
+        {
+            try
+            {
+                var processes = Process.GetProcessesByName(name);
+                return processes != null && processes.Length > 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public Process GetFirstTargetProcess()
+        {
+            try
+            {
+                var processes = Process.GetProcesses();
+                return processes.FirstOrDefault(p => PROCESS_KEYWORDS.Any(keyword =>
+                    p.ProcessName.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0));
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+        private const int SW_RESTORE = 9;
+
+        public bool FocusProcessWindow(Process process)
+        {
+            try
+            {
+                if (process == null) return false;
+                process.Refresh();
+                var hWnd = process.MainWindowHandle;
+                if (hWnd == IntPtr.Zero)
+                {
+                    // 尝试等待窗口句柄出现
+                    for (int i = 0; i < 20; i++)
+                    {
+                        Task.Delay(500).Wait();
+                        process.Refresh();
+                        hWnd = process.MainWindowHandle;
+                        if (hWnd != IntPtr.Zero) break;
+                    }
+                }
+                if (hWnd == IntPtr.Zero) return false;
+                ShowWindow(hWnd, SW_RESTORE);
+                return SetForegroundWindow(hWnd);
             }
             catch
             {
@@ -1918,8 +2016,8 @@ exit";
             {
                 if (!IsTargetProcessRunning())
                 {
-                    StatusChanged?.Invoke("目标进程未运行，重新启动start.bat...");
-                    await StartBatchFile(packagePath);
+                    StatusChanged?.Invoke("目标进程未运行，重新启动start_game.bat...");
+                    await StartGameBatchFile(packagePath);
                     await Task.Delay(15000); // 重启后等待15秒
                 }
                 

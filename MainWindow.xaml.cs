@@ -386,16 +386,53 @@ namespace VHDMounter
                 OnStatusChanged("start.bat启动成功");
                 await Task.Delay(2000); // 暂停2秒显示结果
 
+                // 更新期：如果 NxClient.exe 正在运行，则保持置顶显示并提示“正在更新资源”
+                if (vhdManager.IsProcessRunningByName("NxClient"))
+                {
+                    OnStatusChanged("正在更新资源");
+                    // 保持窗口置顶与显示（XAML 已设置 Topmost=true）
+                    Dispatcher.Invoke(() =>
+                    {
+                        this.WindowState = WindowState.Maximized;
+                        this.ShowInTaskbar = true;
+                    });
+
+                    // 轮询等待 NxClient 退出
+                    while (vhdManager.IsProcessRunningByName("NxClient"))
+                    {
+                        await Task.Delay(1000);
+                    }
+                    OnStatusChanged("更新完成，正在启动游戏");
+                    await Task.Delay(2000);
+                }
+
+                // 等待游戏进程启动
+                OnStatusChanged("正在等待游戏进程启动...");
+                while (!vhdManager.IsTargetProcessRunning())
+                {
+                    await Task.Delay(1000);
+                }
+
+                OnStatusChanged("检测到游戏进程启动，10秒后切换窗口...");
+                await Task.Delay(10000);
+                var proc = vhdManager.GetFirstTargetProcess();
+                if (proc != null)
+                {
+                    var focused = vhdManager.FocusProcessWindow(proc);
+                    if (!focused)
+                    {
+                        OnStatusChanged("切换到游戏窗口失败，窗口可能尚未就绪");
+                        await Task.Delay(2000);
+                    }
+                }
+
+                // 切换后隐藏自身 UI 并进入监控（异常重启使用 start_game.bat）
                 OnStatusChanged("程序启动成功，开始监控...");
-                
-                // 隐藏窗口并开始监控
                 Dispatcher.Invoke(() =>
                 {
                     this.WindowState = WindowState.Minimized;
                     this.ShowInTaskbar = false;
                 });
-
-                // 开始监控和重启循环
                 await vhdManager.MonitorAndRestart(targetFolder);
             }
             catch (Exception ex)
