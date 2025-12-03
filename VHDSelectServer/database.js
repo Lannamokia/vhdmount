@@ -9,7 +9,7 @@ const dbConfig = {
     user: process.env.DB_USER || 'postgres',
     password: process.env.DB_PASSWORD || 'password',
     max: parseInt(process.env.DB_MAX_CONNECTIONS) || 20, // 最大连接数
-    idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT) || 30000, // 空闲连接超时时间
+    idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT) || 30000, // 空闲连接超时时间  
     connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT) || 5000, // 连接超时时间
     ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
 };

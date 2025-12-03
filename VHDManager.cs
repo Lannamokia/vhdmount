@@ -38,6 +38,17 @@ namespace VHDMounter
         public event Action<FileReplaceProgress> ReplaceProgressChanged;
         public event Action<bool, string> BlockingChanged;
         
+        // 在核心流程中使用的阻塞式状态更新：先显示，再等待指定毫秒数
+        private async Task ShowStatusAndWait(string message, int milliseconds = 2000)
+        {
+            try
+            {
+                StatusChanged?.Invoke(message);
+            }
+            catch { }
+            await Task.Delay(milliseconds);
+        }
+        
         private static readonly HttpClient httpClient = new HttpClient();
         private string configFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "vhdmonter_config.ini");
         
@@ -1131,7 +1142,7 @@ namespace VHDMounter
             {
                 if (string.IsNullOrWhiteSpace(evhdPath) || !File.Exists(evhdPath))
                 {
-                    StatusChanged?.Invoke("挂载失败: EVHD文件不存在或路径无效");
+                    await ShowStatusAndWait("挂载失败: EVHD文件不存在或路径无效");
                     return false;
                 }
 
@@ -1139,12 +1150,12 @@ namespace VHDMounter
                 var password = await GetEvhdPasswordFromServerWithBlockingRetry();
                 if (string.IsNullOrEmpty(password))
                 {
-                    StatusChanged?.Invoke("未能获取EVHD密码，挂载终止");
+                    await ShowStatusAndWait("未能获取EVHD密码，挂载终止");
                     return false;
                 }
 
                 // 调用加密挂载工具
-                StatusChanged?.Invoke("正在调用加密VHD挂载工具...");
+                await ShowStatusAndWait("正在调用加密VHD挂载工具...");
                 var toolPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "encrypted-vhd-mount.exe");
                 var fileName = File.Exists(toolPath) ? toolPath : "encrypted-vhd-mount.exe";
 
@@ -1188,19 +1199,19 @@ namespace VHDMounter
                 // 未检测到 N:，视为超时失败（不主动结束加密挂载进程）
                 if (!nReady)
                 {
-                    StatusChanged?.Invoke("EVHD挂载超时（超过60秒），未检测到N盘");
+                    await ShowStatusAndWait("EVHD挂载超时（超过60秒），未检测到N盘");
                     return false;
                 }
 
                 // 在N盘根目录查找解密后的VHD（若刚出现，给它一点准备时间）
-                StatusChanged?.Invoke("已检测到N盘，继续挂载解密后的VHD...");
+                await ShowStatusAndWait("已检测到N盘，继续挂载解密后的VHD...");
                 if (!Directory.Exists(nRoot))
                 {
                     await Task.Delay(1000);
                 }
                 if (!Directory.Exists(nRoot))
                 {
-                    StatusChanged?.Invoke("未找到N盘，EVHD挂载可能失败");
+                    await ShowStatusAndWait("未找到N盘，EVHD挂载可能失败");
                     return false;
                 }
 
@@ -1217,19 +1228,19 @@ namespace VHDMounter
 
                 if (decryptedVhds.Count == 0)
                 {
-                    StatusChanged?.Invoke("N盘中未找到解密后的VHD文件");
+                    await ShowStatusAndWait("N盘中未找到解密后的VHD文件");
                     return false;
                 }
 
                 var vhdToAttach = decryptedVhds[0];
-                StatusChanged?.Invoke($"找到解密后的VHD: {Path.GetFileName(vhdToAttach)}，准备挂载...");
+                await ShowStatusAndWait($"找到解密后的VHD: {Path.GetFileName(vhdToAttach)}，准备挂载...");
 
                 // 使用现有MountVHD挂载到目标盘符
                 return await MountVHD(vhdToAttach);
             }
             catch (Exception ex)
             {
-                StatusChanged?.Invoke($"挂载EVHD失败: {ex.Message}");
+                await ShowStatusAndWait($"挂载EVHD失败: {ex.Message}");
                 return false;
             }
         }
@@ -1338,14 +1349,14 @@ namespace VHDMounter
 
         public async Task<bool> MountVHD(string vhdPath)
         {
-            StatusChanged?.Invoke($"正在挂载VHD文件: {Path.GetFileName(vhdPath)}");
+            await ShowStatusAndWait($"正在挂载VHD文件: {Path.GetFileName(vhdPath)}");
             
             try
             {
                 // 基本校验：文件必须存在
                 if (string.IsNullOrWhiteSpace(vhdPath) || !File.Exists(vhdPath))
                 {
-                    StatusChanged?.Invoke("挂载失败: VHD文件不存在或路径无效");
+                    await ShowStatusAndWait("挂载失败: VHD文件不存在或路径无效");
                     return false;
                 }
 
@@ -1360,7 +1371,7 @@ namespace VHDMounter
                 var lettersBefore = GetCurrentDriveLetters();
 
                 // 第一步：仅挂载VHD，不分配盘符
-                StatusChanged?.Invoke("步骤1: 挂载VHD文件...");
+                await ShowStatusAndWait("步骤1: 挂载VHD文件...");
                 var attachScript = $@"select vdisk file=""{vhdPath}""
 attach vdisk
 exit";
@@ -1391,7 +1402,7 @@ exit";
                 if (completed == timeoutTask)
                 {
                     try { process.Kill(); } catch { }
-                    StatusChanged?.Invoke("VHD挂载超时（超过60秒），已中止diskpart进程");
+                    await ShowStatusAndWait("VHD挂载超时（超过60秒），已中止diskpart进程");
                     if (File.Exists(tempScript))
                         File.Delete(tempScript);
                     return false;
@@ -1405,13 +1416,13 @@ exit";
                 
                 if (process.ExitCode != 0)
                 {
-                    StatusChanged?.Invoke($"VHD挂载失败: {attachError.Trim()}");
+                    await ShowStatusAndWait($"VHD挂载失败: {attachError.Trim()}");
                     Debug.WriteLine($"VHD挂载输出: {attachOutput}");
                     Debug.WriteLine($"VHD挂载错误: {attachError}");
                     return false;
                 }
 
-                StatusChanged?.Invoke("VHD挂载成功，正在检测新出现的盘符...");
+                await ShowStatusAndWait("VHD挂载成功，正在检测新出现的盘符...");
                 var newDriveLetter = await WaitForNewDriveLetterAsync(lettersBefore, 30000);
 
                 var targetLetter = TARGET_DRIVE.TrimEnd(':');
@@ -1419,7 +1430,7 @@ exit";
 
                 if (string.IsNullOrEmpty(newDriveLetter))
                 {
-                    StatusChanged?.Invoke("未检测到新盘符，尝试通过卷GUID定位注册表条目...");
+                    await ShowStatusAndWait("未检测到新盘符，尝试通过卷GUID定位注册表条目...");
                     // 轮询寻找新增的 \??\Volume{GUID} 条目
                     var swVol = Stopwatch.StartNew();
                     string newVolName = null;
@@ -1442,29 +1453,29 @@ exit";
 
                     if (newVolName == null || newVolValue == null)
                     {
-                        StatusChanged?.Invoke("未检测到新增的卷GUID注册表条目，无法继续映射");
+                        await ShowStatusAndWait("未检测到新增的卷GUID注册表条目，无法继续映射");
                         return false;
                     }
 
-                    StatusChanged?.Invoke($"检测到新增卷GUID条目: {newVolName}，写入 \\DosDevices\\M:...");
+                    await ShowStatusAndWait($"检测到新增卷GUID条目: {newVolName}，写入 \\DosDevices\\M:...");
                     var targetLetter2 = TARGET_DRIVE.TrimEnd(':');
                     var targetEntry2 = $@"\DosDevices\{targetLetter2}:";
                     var setOk2 = SetDosDevicesEntry(targetEntry2, newVolValue, deleteExistingTarget: true);
                     if (!setOk2)
                     {
-                        StatusChanged?.Invoke("写入 \\DosDevices\\M: 失败");
+                        await ShowStatusAndWait("写入 \\DosDevices\\M: 失败");
                         return false;
                     }
-                    StatusChanged?.Invoke("已将注册表盘符重映射为 M:，即将重启以应用更改...");
+                    await ShowStatusAndWait("已将注册表盘符重映射为 M:，即将重启以应用更改...");
                     TryRebootSystem();
                     return true;
                 }
 
-                StatusChanged?.Invoke($"检测到新盘符: {newDriveLetter}");
+                await ShowStatusAndWait($"检测到新盘符: {newDriveLetter}");
 
                 if (string.Equals(newDriveLetter.Trim(), TARGET_DRIVE, StringComparison.OrdinalIgnoreCase))
                 {
-                    StatusChanged?.Invoke("新增盘符已为目标 M:，无需更改");
+                    await ShowStatusAndWait("新增盘符已为目标 M:，无需更改");
                     return true;
                 }
 
@@ -1477,7 +1488,7 @@ exit";
                     var remapOk = TryRemapDosDevicesEntry(sourceEntry, sourceValue, targetEntry);
                     if (!remapOk)
                     {
-                        StatusChanged?.Invoke("注册表盘符重映射失败");
+                        await ShowStatusAndWait("注册表盘符重映射失败");
                         return false;
                     }
                 }
@@ -1489,34 +1500,34 @@ exit";
                     var ok = GetVolumeNameForVolumeMountPoint(driveRoot, sb, (uint)sb.Capacity);
                     if (!ok)
                     {
-                        StatusChanged?.Invoke("无法获取新盘符的卷GUID路径");
+                        await ShowStatusAndWait("无法获取新盘符的卷GUID路径");
                         return false;
                     }
                     var volRegName = ConvertVolumeGuidPathToRegName(sb.ToString());
                     var volValue = ReadMountedDevicesBinary(volRegName);
                     if (volValue == null)
                     {
-                        StatusChanged?.Invoke("无法读取卷GUID对应的注册表二进制值");
+                        await ShowStatusAndWait("无法读取卷GUID对应的注册表二进制值");
                         return false;
                     }
                     // 仅设置目标 M:，不删除卷GUID条目
                     var setOk = SetDosDevicesEntry(targetEntry, volValue, deleteExistingTarget: true);
                     if (!setOk)
                     {
-                        StatusChanged?.Invoke("写入 \\DosDevices\\M: 失败");
+                        await ShowStatusAndWait("写入 \\DosDevices\\M: 失败");
                         return false;
                     }
                     // 尝试删除原盘符条目（若存在）
                     TryDeleteMountedDevicesValue(sourceEntry);
                 }
 
-                StatusChanged?.Invoke("已将注册表盘符重映射为 M:，即将重启以应用更改...");
+                await ShowStatusAndWait("已将注册表盘符重映射为 M:，即将重启以应用更改...");
                 TryRebootSystem();
                 return true;
             }
             catch (Exception ex)
             {
-                StatusChanged?.Invoke($"挂载失败: {ex.Message}");
+                await ShowStatusAndWait($"挂载失败: {ex.Message}");
                 Debug.WriteLine($"MountVHD异常: {ex}");
                 return false;
             }
@@ -1858,17 +1869,17 @@ exit";
             return await FindFolder("package");
         }
 
-        public Task<bool> StartBatchFile(string packagePath)
+        public async Task<bool> StartBatchFile(string packagePath)
         {
             var startBatPath = Path.Combine(packagePath, "start.bat");
             
             if (!File.Exists(startBatPath))
             {
-                StatusChanged?.Invoke("未找到start.bat文件");
-                return Task.FromResult(false);
+                await ShowStatusAndWait("未找到start.bat文件");
+                return false;
             }
 
-            StatusChanged?.Invoke("正在启动start.bat...");
+            await ShowStatusAndWait("正在启动start.bat...");
             
             try
             {
@@ -1884,26 +1895,26 @@ exit";
                 };
                 
                 process.Start();
-                return Task.FromResult(true);
+                return true;
             }
             catch (Exception ex)
             {
-                StatusChanged?.Invoke($"启动失败: {ex.Message}");
-                return Task.FromResult(false);
+                await ShowStatusAndWait($"启动失败: {ex.Message}");
+                return false;
             }
         }
 
-        public Task<bool> StartGameBatchFile(string packagePath)
+        public async Task<bool> StartGameBatchFile(string packagePath)
         {
             var startGameBatPath = Path.Combine(packagePath, "start_game.bat");
 
             if (!File.Exists(startGameBatPath))
             {
-                StatusChanged?.Invoke("未找到start_game.bat文件");
-                return Task.FromResult(false);
+                await ShowStatusAndWait("未找到start_game.bat文件");
+                return false;
             }
 
-            StatusChanged?.Invoke("正在启动start_game.bat...");
+            await ShowStatusAndWait("正在启动start_game.bat...");
 
             try
             {
@@ -1919,12 +1930,12 @@ exit";
                 };
 
                 process.Start();
-                return Task.FromResult(true);
+                return true;
             }
             catch (Exception ex)
             {
-                StatusChanged?.Invoke($"启动失败: {ex.Message}");
-                return Task.FromResult(false);
+                await ShowStatusAndWait($"启动失败: {ex.Message}");
+                return false;
             }
         }
 
@@ -2007,16 +2018,16 @@ exit";
 
         public async Task MonitorAndRestart(string packagePath)
         {
-            StatusChanged?.Invoke("等待15秒后开始监控进程...");
+            await ShowStatusAndWait("等待15秒后开始监控进程...");
             await Task.Delay(15000); // 等待15秒
             
-            StatusChanged?.Invoke("开始监控目标进程...");
+            await ShowStatusAndWait("开始监控目标进程...");
             
             while (true)
             {
                 if (!IsTargetProcessRunning())
                 {
-                    StatusChanged?.Invoke("目标进程未运行，重新启动start_game.bat...");
+                    await ShowStatusAndWait("目标进程未运行，重新启动start_game.bat...");
                     await StartGameBatchFile(packagePath);
                     await Task.Delay(15000); // 重启后等待15秒
                 }
@@ -2032,7 +2043,7 @@ exit";
         {
             try
             {
-                StatusChanged?.Invoke("正在删除VHD第一个分区的现有盘符...");
+                await ShowStatusAndWait("正在删除VHD第一个分区的现有盘符...");
                 
                 // 使用diskpart删除第一个分区的盘符
                 var removeScript = $@"select vdisk file=""{vhdPath}""
@@ -2066,7 +2077,7 @@ exit";
                 if (completed == timeoutTask)
                 {
                     try { process.Kill(); } catch { }
-                    StatusChanged?.Invoke("删除盘符超时");
+                    await ShowStatusAndWait("删除盘符超时");
                     if (File.Exists(tempScript))
                         File.Delete(tempScript);
                     return false;
@@ -2091,18 +2102,18 @@ exit";
                 bool driveRemoved = !Directory.Exists(TARGET_DRIVE);
                 if (driveRemoved)
                 {
-                    StatusChanged?.Invoke("盘符M删除成功");
+                    await ShowStatusAndWait("盘符M删除成功");
                 }
                 else
                 {
-                    StatusChanged?.Invoke("盘符M可能仍然存在，但继续处理");
+                    await ShowStatusAndWait("盘符M可能仍然存在，但继续处理");
                 }
                 
                 return driveRemoved;
             }
             catch (Exception ex)
             {
-                StatusChanged?.Invoke($"删除盘符异常: {ex.Message}");
+                await ShowStatusAndWait($"删除盘符异常: {ex.Message}");
                 Debug.WriteLine($"RemoveExistingDriveLetter异常: {ex}");
                 return false;
             }
@@ -2147,7 +2158,7 @@ exit";
                 if (completed == timeoutTask)
                 {
                     try { process.Kill(); } catch { }
-                    StatusChanged?.Invoke("分配盘符超时");
+                    await ShowStatusAndWait("分配盘符超时");
                     if (File.Exists(tempScript))
                         File.Delete(tempScript);
                     return false;
@@ -2171,18 +2182,18 @@ exit";
                 bool driveExists = Directory.Exists(TARGET_DRIVE);
                 if (driveExists)
                 {
-                    StatusChanged?.Invoke("盘符M分配成功");
+                    await ShowStatusAndWait("盘符M分配成功");
                 }
                 else
                 {
-                    StatusChanged?.Invoke("盘符M分配失败，M盘不存在");
+                    await ShowStatusAndWait("盘符M分配失败，M盘不存在");
                 }
                 
                 return driveExists;
             }
             catch (Exception ex)
             {
-                StatusChanged?.Invoke($"分配盘符异常: {ex.Message}");
+                await ShowStatusAndWait($"分配盘符异常: {ex.Message}");
                 Debug.WriteLine($"AssignDriveLetterToFirstPartition异常: {ex}");
                 return false;
             }
@@ -2195,7 +2206,7 @@ exit";
         {
             try
             {
-                StatusChanged?.Invoke("尝试备用盘符分配方法...");
+                await ShowStatusAndWait("尝试备用盘符分配方法...");
                 
                 // 尝试为最后挂载的磁盘分配盘符
                 var assignScript = @"list disk
@@ -2230,7 +2241,7 @@ exit";
                 if (completed == timeoutTask)
                 {
                     try { process.Kill(); } catch { }
-                    StatusChanged?.Invoke("备用盘符分配超时");
+                    await ShowStatusAndWait("备用盘符分配超时");
                     if (File.Exists(tempScript))
                         File.Delete(tempScript);
                     return false;
@@ -2254,18 +2265,18 @@ exit";
                 bool driveExists = Directory.Exists(TARGET_DRIVE);
                 if (driveExists)
                 {
-                    StatusChanged?.Invoke("备用方法盘符M分配成功");
+                    await ShowStatusAndWait("备用方法盘符M分配成功");
                 }
                 else
                 {
-                    StatusChanged?.Invoke("备用方法盘符M分配也失败");
+                    await ShowStatusAndWait("备用方法盘符M分配也失败");
                 }
                 
                 return driveExists;
             }
             catch (Exception ex)
             {
-                StatusChanged?.Invoke($"备用盘符分配异常: {ex.Message}");
+                await ShowStatusAndWait($"备用盘符分配异常: {ex.Message}");
                 Debug.WriteLine($"AssignDriveLetterDirect异常: {ex}");
                 return false;
             }
@@ -2273,7 +2284,7 @@ exit";
 
         public async Task<bool> UnmountVHD()
         {
-            StatusChanged?.Invoke("正在解除VHD挂载...");
+            await ShowStatusAndWait("正在解除VHD挂载...");
             
             try
             {
@@ -2282,7 +2293,7 @@ exit";
                 var tempScript = Path.GetTempFileName();
                 await File.WriteAllTextAsync(tempScript, diskpartScript);
                 
-                StatusChanged?.Invoke("正在执行VHD解除挂载脚本...");
+                await ShowStatusAndWait("正在执行VHD解除挂载脚本...");
                 
                 var process = new Process
                 {
