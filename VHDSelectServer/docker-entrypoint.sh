@@ -31,6 +31,13 @@ wait_for_external_db() {
 init_embedded_db() {
     log "初始化内置PostgreSQL数据库..."
     
+    # 持久化卷在运行时挂载会覆盖镜像内权限设置，这里在容器启动时修复权限
+    mkdir -p "$POSTGRES_DATA_DIR" /run/postgresql || true
+    chown -R postgres:postgres "$POSTGRES_DATA_DIR" /run/postgresql || true
+    chmod 700 "$POSTGRES_DATA_DIR" || true
+    chmod 775 /run/postgresql || true
+    umask 077
+    
     # 检查数据目录是否已初始化
     if [ ! -f "$POSTGRES_DATA_DIR/PG_VERSION" ]; then
         log "初始化PostgreSQL数据目录..."
