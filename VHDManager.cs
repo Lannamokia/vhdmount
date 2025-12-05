@@ -829,7 +829,7 @@ namespace VHDMounter
                         {
                             var rsa = EnsureOrCreateTpmRsa(machineId);
                             var cipherBytes = Convert.FromBase64String(b64);
-                            var plainBytes = rsa.Decrypt(cipherBytes, RSAEncryptionPadding.OaepSHA256);
+                            var plainBytes = rsa.Decrypt(cipherBytes, RSAEncryptionPadding.OaepSHA1);
                             var plain = Encoding.UTF8.GetString(plainBytes);
                             return plain;
                         }
@@ -942,7 +942,7 @@ namespace VHDMounter
                         if (!string.IsNullOrWhiteSpace(b64))
                         {
                             var cipherBytes = Convert.FromBase64String(b64);
-                            var plainBytes = rsa.Decrypt(cipherBytes, RSAEncryptionPadding.OaepSHA256);
+                            var plainBytes = rsa.Decrypt(cipherBytes, RSAEncryptionPadding.OaepSHA1);
                             var plain = Encoding.UTF8.GetString(plainBytes);
                             return plain;
                         }
@@ -975,7 +975,7 @@ namespace VHDMounter
                             if (!string.IsNullOrWhiteSpace(b64))
                             {
                                 var cipherBytes = Convert.FromBase64String(b64);
-                                var plainBytes = rsa.Decrypt(cipherBytes, RSAEncryptionPadding.OaepSHA256);
+                                var plainBytes = rsa.Decrypt(cipherBytes, RSAEncryptionPadding.OaepSHA1);
                                 var plain = Encoding.UTF8.GetString(plainBytes);
                                 ExitBlockingMode("已下发EVHD加密信封");
                                 StatusChanged?.Invoke("已下发EVHD加密信封");

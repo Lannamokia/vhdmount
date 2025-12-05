@@ -70,14 +70,14 @@ function saveConfig() {
     }
 }
 
-// 使用机台公钥进行RSA-OAEP(SHA-256)加密
+// 使用机台公钥进行RSA-OAEP(SHA-1)加密（兼容更多TPM实现）
 function encryptWithPublicKeyRSA(publicKeyPem, plaintext) {
     try {
         const buffer = Buffer.from(plaintext, 'utf8');
         const encrypted = crypto.publicEncrypt({
             key: publicKeyPem,
             padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
-            oaepHash: 'sha256'
+            oaepHash: 'sha1'
         }, buffer);
         return encrypted.toString('base64');
     } catch (err) {
