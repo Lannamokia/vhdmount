@@ -874,7 +874,7 @@ namespace VHDMounter
                                     if (!string.IsNullOrWhiteSpace(b64))
                                     {
                                         var cipherBytes = Convert.FromBase64String(b64);
-                                        var plainBytes = rsa.Decrypt(cipherBytes, RSAEncryptionPadding.OaepSHA256);
+                                        var plainBytes = rsa.Decrypt(cipherBytes, RSAEncryptionPadding.OaepSHA1);
                                         var plain = Encoding.UTF8.GetString(plainBytes);
                                         return plain;
                                     }
