@@ -1,33 +1,32 @@
-# VHD选择服务器 - 跨平台版本
+# VHD选择服务器（VHDSelectServer）
 
-一个现代化的跨平台VHD关键词管理服务器，提供Web GUI界面和HTTP API接口。
+现代化的跨平台 VHD 管理服务器，提供 Web GUI 与 HTTP API。支持机台管理、EVHD 密码下发（RSA‑OAEP‑SHA1）、公钥注册审批，以及内置/外部 PostgreSQL 持久化。
 <img width="1280" height="1754" alt="image" src="https://github.com/user-attachments/assets/c1126381-d13e-4e88-a8da-99f86d778bef" />
 
 ## ✨ 特性
 
-- 🌐 **跨平台支持**: 支持Windows、Linux、macOS
-- 🎨 **现代化Web界面**: 响应式设计，支持移动设备
-- 🔧 **RESTful API**: 标准HTTP API接口
-- 💾 **持久化存储**: 自动保存配置到JSON文件
-- 🚀 **零配置启动**: 开箱即用
-- 📱 **实时更新**: 界面自动刷新状态
-- 🔒 **输入验证**: 安全的用户输入处理
+- 🌐 跨平台：Windows / Linux / macOS
+- 🎨 现代化 Web 界面：响应式管理页与机台页
+- 🔧 RESTful API：标准接口，前后端统一
+- 💾 持久化存储：内置或外部 PostgreSQL
+- 🔒 EVHD 安全下发：RSA‑OAEP‑SHA1 封装信封
+- 🗝️ 公钥注册与审批/吊销：设备密钥生命周期管理
+- 🚀 零配置启动：Docker 一条命令可用
+- 📈 健康检查与日志：`/api/status` 端点
 
 ## 🛠️ 系统要求
 
-### Node.js版本（推荐）
-- Node.js 14.0+ 
-- npm（随Node.js安装）
+### Node.js（推荐）
+- Node.js 18+（含 npm）
 
-### Python版本（备选）
-- Python 3.6+
-- 无需额外依赖
+### Docker（可选）
+- Docker 20.10+ / Compose 2+
 
 ## 🚀 快速开始
 
-### 方法1: Docker部署（推荐）
+### 方法1：Docker 部署（推荐）
 
-#### 选项1: 使用内置数据库（默认）
+#### 选项1：使用内置数据库（默认）
 ```bash
 # 使用Docker Compose启动（内置PostgreSQL数据库）
 docker-compose up -d
@@ -39,7 +38,7 @@ docker-compose logs -f
 docker-compose down
 ```
 
-#### 选项2: 使用外部数据库
+#### 选项2：使用外部数据库
 ```bash
 # 使用外部数据库配置文件
 docker-compose -f docker-compose.external-db.yml up -d
@@ -55,21 +54,21 @@ docker run -d \
   -e DB_PORT=5432 \
   -e DB_NAME=vhd_select \
   -e DB_USER=your-db-user \
-  -e DB_PASSWORD=your-db-password \
+  -e DB_PASSWORD=your-db-password 
   lty271104/vhd-select-server:latest
 ```
 
-### 方法2: Node.js版本
+### 方法2：Node.js 直接运行
 
 1. **安装Node.js**
    - 访问 [https://nodejs.org/](https://nodejs.org/)
-   - 下载并安装LTS版本
+   - 下载并安装 LTS 版本（18+）
 
 2. **启动服务器**
    ```bash
-   # 双击运行
+   # Windows 双击运行
    start.bat
-   
+
    # 或者命令行运行
    npm install
    npm start
@@ -80,12 +79,12 @@ docker run -d \
 
 服务器启动后，访问以下地址：
 
-- **Web界面**: http://localhost:8080
-- **API文档**: http://localhost:8080/api/status
+- Web 管理界面：`http://localhost:8080`
+- 状态/版本信息：`http://localhost:8080/api/status`
 
-## 📡 API接口
+## 📡 API 接口
 
-VHD Select Server 提供完整的RESTful API接口，支持机台管理、VHD关键词设置和状态监控。
+提供完整的 RESTful API，覆盖机台管理、VHD 关键词设置、EVHD 密码下发与公钥生命周期管理。
 
 ### 🔐 认证接口
 
@@ -161,7 +160,7 @@ Authorization: 需要登录
 }
 ```
 
-### 🖥️ VHD关键词接口
+### 🖥️ VHD 关键词接口
 
 #### 获取当前VHD关键词
 ```http
@@ -248,6 +247,7 @@ Authorization: 需要登录
 #### 获取所有机台信息 🔒
 ```http
 GET /api/machines
+```
 Authorization: 需要登录
 ```
 
@@ -356,13 +356,12 @@ GET /api/status
 3. **自动刷新**: 页面每30秒自动刷新状态
 4. **实时反馈**: 操作结果会立即显示在界面上
 
-### 配置持久化
+### 数据持久化
 
-- **Docker部署**: 配置保存在 `/app/config/vhd-config.json`，通过卷映射到主机的 `./config` 目录
-- **本地部署**: 配置保存在项目根目录的 `vhd-config.json` 文件中
-- **环境变量**: 可通过 `CONFIG_PATH` 环境变量自定义配置文件路径
+- 内置数据库：容器内 PostgreSQL + 命名卷持久化；首次启动自动执行 `init-db.sql` 初始化表结构。
+- 外部数据库：通过环境变量连接外部 PostgreSQL，建议启用备份与访问控制。
 
-### Docker相关
+### Docker 相关
 
 #### 数据库配置选项
 
@@ -380,7 +379,6 @@ GET /api/status
 
 **应用配置**
 - `PORT`: 服务端口（默认: 8080）
-- `CONFIG_PATH`: 配置文件目录路径（默认: /app/config）
 - `NODE_ENV`: 运行环境（默认: production）
 
 **数据库配置**
@@ -396,12 +394,11 @@ GET /api/status
 - `DB_SSL`: 是否启用SSL连接（默认: false）
 
 #### 数据卷
-- `/app/config`: 配置文件持久化目录
-- `/app/vhd-data`: VHD数据文件持久化目录
+- `/app/vhd-data`: 业务数据目录（可选）
 - `/var/lib/postgresql/data`: 内置数据库数据持久化目录
 
 #### 健康检查
-- 端点: `http://localhost:8080/api/health`
+- 端点: `http://localhost:8080/api/status`
 - 间隔: 30秒
 - 超时: 10秒
 - 重试: 3次
@@ -458,23 +455,26 @@ curl -X POST http://localhost:8080/api/set-vhd \
 
 ```
 VHDSelectServer/
-├── server.js          # Node.js服务器
-├── server.py          # Python服务器
-├── package.json       # Node.js依赖配置
-├── start.bat          # Windows启动脚本
+├── server.js              # Node.js 服务入口
+├── database.js           # PostgreSQL 访问层
+├── package.json          # Node.js 依赖配置
+├── Dockerfile            # 镜像构建（含内置 DB）
+├── docker-entrypoint.sh  # 容器入口与 DB 初始化/权限修复
+├── init-db.sql           # 表结构初始化
+├── start.bat             # Windows 启动脚本
 ├── public/
-│   └── index.html     # Web界面
-├── vhd-config.json    # 配置文件（自动生成）
-└── README.md          # 说明文档
+│   ├── index.html        # 仪表盘
+│   └── machines.html     # 机台管理
+└── README.md             # 说明文档
 ```
 
 ## 🔧 配置说明
 
-- **端口**: 默认8080，可通过环境变量`PORT`修改
-- **配置文件**: `vhd-config.json`自动生成，存储当前VHD关键词
-- **日志**: 服务器会在控制台输出访问日志
+- 端口：默认 8080，可通过环境变量 `PORT` 修改
+- 日志：控制台输出访问日志与数据库连接信息
+- 安全：管理员密码默认 `admin123`，部署后请立即修改
 
-## 🔗 与VHD挂载程序集成
+## 🔗 与 VHD 挂载程序集成
 
 此服务器与原有的VHD挂载程序完全兼容：
 
@@ -492,6 +492,7 @@ VHDSelectServer/
 - **密码安全**: bcrypt加密存储，支持在线修改管理员密码
 - **会话管理**: 24小时会话有效期，自动登出保护
 - **数据库安全**: 密码哈希持久化存储，支持密码策略验证
+- **EVHD 加密**：设备公钥加密使用 `RSA‑OAEP‑SHA1`（适配 Windows 10 LTSC 1809 的 PCP/TPM 支持）
 
 ## 🐛 故障排除
 
@@ -500,17 +501,18 @@ VHDSelectServer/
 # 检查端口占用
 netstat -ano | findstr :8080
 
-# 使用其他端口
-python server.py 8081
-```
+# 使用其他端口```
 
-### Node.js未安装
-- 下载安装: https://nodejs.org/
-- 使用Python版本作为备选方案
+### Node.js 未安装
+- 下载安装: https://nodejs.org/ （选择 18+ LTS）
 
-### 权限问题
-- 确保有写入配置文件的权限
-- 在管理员模式下运行（如需要）
+### 权限与数据卷问题
+- 运行时挂载的持久化卷可能覆盖镜像权限设置；容器启动时入口脚本会修复权限（`docker-entrypoint.sh`）。请确保主机卷目录的读写权限正确。
+
+### EVHD 密文解密失败（客户端）
+- 确认服务器端与客户端统一为 `RSA‑OAEP‑SHA1`，并已重启服务端使变更生效。
+- 若曾更换设备密钥，删除旧公钥记录后重新注册再获取新密文。
+- 在客户端执行 `Get-Tpm` 确认 TPM 正常；使用 `certutil -csp "Microsoft Platform Crypto Provider" -key` 查看设备密钥容器。
 
 ## 📝 更新日志
 
@@ -545,4 +547,39 @@ python server.py 8081
 
 ---
 
-**🎉 享受使用全新的跨平台VHD选择服务器！**
+**🎉 享受使用更安全、可维护的 VHD 选择服务器！**
+### 🔑 密钥注册与审批
+
+#### 注册设备公钥（公开）
+```http
+POST /api/machines/{machineId}/keys
+Content-Type: application/json
+
+{
+  "publicKeyPem": "-----BEGIN PUBLIC KEY-----..."
+}
+```
+
+#### 审批设备（需登录）
+```http
+POST /api/machines/{machineId}/approve
+```
+
+#### 吊销设备（需登录）
+```http
+POST /api/machines/{machineId}/revoke
+```
+
+### 🔐 EVHD 密码接口
+
+#### 获取 EVHD 密码信封（公开）
+```http
+GET /api/evhd-envelope?machineId=...
+```
+
+说明：服务器使用设备公钥以 `RSA‑OAEP‑SHA1` 加密 EVHD 密码返回密文；客户端用 TPM 私钥解密。
+
+#### 管理用途明文查询（需登录）
+```http
+GET /api/evhd-password/plain?machineId=...
+```

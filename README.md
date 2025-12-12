@@ -39,7 +39,7 @@ vhdmount/
 
 ### 环境要求
 
-- Windows 10 1903+ 或 Windows 11（管理员运行）。
+- Windows 10 1809+ 或 Windows 11（管理员运行）。
 - .NET 6.0 Runtime（客户端）。
 - Node.js 18+ 或 Docker 20.10+（服务端）。
 
@@ -96,7 +96,7 @@ ProtectionCheckInterval=500
 - `ProtectionCheckUrl`：保护状态查询地址（GET，需要 `machineId`）。
 - `ProtectionCheckInterval`：保护状态查询间隔（毫秒）。
 
-密钥流转：客户端在本机 TPM 中生成/保存 RSA 密钥对，将公钥通过 `POST /api/machines/:machineId/keys` 注册到服务端，管理员审批通过后，客户端从 `GET /api/evhd-envelope` 获取密文并用 TPM 私钥（RSA-OAEP-256）解密得到 EVHD 密码。旧的基于时区密钥与明文查询接口已移除。
+密钥流转：客户端在本机 TPM 中生成/保存 RSA 密钥对，将公钥通过 `POST /api/machines/:machineId/keys` 注册到服务端，管理员审批通过后，客户端从 `GET /api/evhd-envelope` 获取密文并用 TPM 私钥（RSA‑OAEP‑SHA1）解密得到 EVHD 密码。旧的基于时区密钥与明文查询接口已移除。
 
 ### 服务端环境变量
 
@@ -156,6 +156,8 @@ permissions:
 
 - 无法挂载或访问盘符：以管理员身份运行；检查安全软件拦截；确认目标盘符未占用。
 - 远程 EVHD 密钥下发失败：确保已在 TPM 生成密钥对并成功注册公钥；确认管理员已审批且未吊销；检查服务器 HTTPS 与时间同步。
+- RSA 解密报错（例如 `CryptographicException: NTE_INVALID_PARAMETER`）：客户端与服务端需统一使用 `RSA‑OAEP‑SHA1`；确保服务端已重启使算法变更生效；删除并重新注册设备公钥以重新生成密文。
+- TPM 状态核查：在提升的 PowerShell 中执行 `Get-Tpm`，确认 `TpmPresent/Ready=True`；使用 `certutil -csp "Microsoft Platform Crypto Provider" -key` 检查是否存在设备密钥容器（例如 `VHDMounterKey_{machineId}`）。
 - 服务端无法连接数据库：
   - 内置 DB：确认数据卷权限与初始化日志；
   - 外部 DB：检查 `DB_HOST/PORT/USER/PASSWORD/NAME` 与网络。
@@ -164,7 +166,7 @@ permissions:
 ## 安全说明
 
 - 登录与会话：所有管理接口通过会话保护，默认管理员密码为 `admin123`，请立即修改。生产环境务必设置强随机的 `SESSION_SECRET`，启用 HTTPS 并将会话 cookie 配置为 `secure: true` 与 `httpOnly`。
-- EVHD 密文（RSA 信封）：客户端在本机 TPM 生成 RSA 密钥对并注册公钥；服务端通过 `GET /api/evhd-envelope` 使用设备公钥以 `RSA-OAEP-256` 加密 EVHD 密码，客户端用 TPM 私钥解密。该接口不需要登录，但需设备已注册公钥且管理员已审批；不再使用旧的基于时区的简易防护方案。
+- EVHD 密文（RSA 信封）：客户端在本机 TPM 生成 RSA 密钥对并注册公钥；服务端通过 `GET /api/evhd-envelope` 使用设备公钥以 `RSA‑OAEP‑SHA1` 加密 EVHD 密码，客户端用 TPM 私钥解密。该接口不需要登录，但需设备已注册公钥且管理员已审批；不再使用旧的基于时区的简易防护方案。
 - 明文查询（仅管理用途）：`GET /api/evhd-password/plain?machineId=...` 需要登录，仅用于管理/排障。生产环境建议严格限制或禁用该接口，确保最小权限访问，并强制使用 HTTPS。
 - 审批与重置：管理员审批通过后设备才能获取密文。执行“重置注册状态”会删除已注册的公钥并将审批状态重置为未审批，以阻止后续密文下发。
 - 最近在线审计：服务端在设备调用 `boot-image-select`、`evhd-envelope` 或注册公钥时写入 `last_seen` 时间，仅用于审计与可观测性，不影响权限判定。
