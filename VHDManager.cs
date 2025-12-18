@@ -2058,8 +2058,32 @@ exit";
                 if (!IsTargetProcessRunning())
                 {
                     try { GameCrashed?.Invoke(); } catch { }
-                    await ShowStatusAndWait("目标进程未运行，重新启动start_game.bat...");
-                    await StartGameBatchFile(packagePath);
+
+                    // 根据存在情况选择重启脚本：优先 start_game.bat；仅有 start.bat 时用 start.bat
+                    var startGameBatPath = Path.Combine(packagePath, "start_game.bat");
+                    var startBatPath = Path.Combine(packagePath, "start.bat");
+                    bool hasStartGame = File.Exists(startGameBatPath);
+                    bool hasStart = File.Exists(startBatPath);
+
+                    if (hasStartGame && hasStart)
+                    {
+                        await ShowStatusAndWait("目标进程未运行，检测到start.bat与start_game.bat，重启使用start_game.bat...");
+                        await StartGameBatchFile(packagePath);
+                    }
+                    else if (hasStartGame)
+                    {
+                        await ShowStatusAndWait("目标进程未运行，检测到start_game.bat，重启使用start_game.bat...");
+                        await StartGameBatchFile(packagePath);
+                    }
+                    else if (hasStart)
+                    {
+                        await ShowStatusAndWait("目标进程未运行，仅检测到start.bat，重启使用start.bat...");
+                        await StartBatchFile(packagePath);
+                    }
+                    else
+                    {
+                        await ShowStatusAndWait("目标进程未运行，未找到重启脚本(start.bat/start_game.bat)，等待脚本或进程出现...");
+                    }
 
                     // 等待启动到可检测
                     var startWaitMs = 0;

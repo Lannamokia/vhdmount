@@ -98,6 +98,12 @@ ProtectionCheckInterval=500
 
 密钥流转：客户端在本机 TPM 中生成/保存 RSA 密钥对，将公钥通过 `POST /api/machines/:machineId/keys` 注册到服务端，管理员审批通过后，客户端从 `GET /api/evhd-envelope` 获取密文并用 TPM 私钥（RSA‑OAEP‑SHA1）解密得到 EVHD 密码。
 
+### 重要说明（EVHD 组件）
+
+- EVHD 挂载相关软件与源代码仅提供给认证合作伙伴，用于受控环境下的机台数据保护等功能。
+- 普通用户无需配置或使用 EVHD，请直接将 VHD 文件放入设备（本地或 USB），客户端会自动扫描并挂载使用。
+- 本开源仓库不包含 EVHD 软件的源代码；如需使用，请联系项目维护方完成合作伙伴认证流程。
+
 ### 服务端环境变量
 
 - `PORT`：服务端口（默认 `8080`）。
