@@ -14,6 +14,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.Win32;
 using System.Runtime.InteropServices;
+using Microsoft.Management.Infrastructure;
 
 namespace VHDMounter
 {
@@ -44,6 +45,7 @@ namespace VHDMounter
             try
             {
                 StatusChanged?.Invoke(message);
+                System.Diagnostics.Trace.WriteLine($"STATUS: {message}");
             }
             catch { }
             await Task.Delay(milliseconds);
@@ -1422,8 +1424,25 @@ exit";
                     return false;
                 }
 
-                await ShowStatusAndWait("VHD挂载成功，正在检测新出现的盘符...");
+                // 优先尝试：直接为该 VHD 的第一个分区分配盘符 M，避免依赖“新增盘符/注册表差异”
+                await ShowStatusAndWait("VHD挂载成功，正在分配盘符 M（无 diskpart）...");
+                var assignedOk = await AssignDriveLetterWithoutDiskpart(vhdPath);
+                if (assignedOk)
+                {
+                    await ShowStatusAndWait("盘符 M 分配成功");
+                    return true;
+                }
+
+                // 若直接分配失败，再回退到“新增盘符”检测路径（适配系统自动分配其他盘符的情况）
+                await ShowStatusAndWait("分配盘符失败，回退到检测新增盘符...");
                 var newDriveLetter = await WaitForNewDriveLetterAsync(lettersBefore, 30000);
+
+                // 兜底：如果系统因既有注册表映射自动分配了 M:，虽然不是“新增”，也直接视为成功
+                if (Directory.Exists(TARGET_DRIVE))
+                {
+                    await ShowStatusAndWait("检测到盘符 M 已可用");
+                    return true;
+                }
 
                 var targetLetter = TARGET_DRIVE.TrimEnd(':');
                 var targetEntry = $@"\DosDevices\{targetLetter}:";
@@ -1453,7 +1472,17 @@ exit";
 
                     if (newVolName == null || newVolValue == null)
                     {
-                        await ShowStatusAndWait("未检测到新增的卷GUID注册表条目，无法继续映射");
+                        // 此场景常见于：该 VHD/卷曾被手动挂载过，注册表条目（\\DosDevices\\X: 或 \\??\\Volume{GUID}）已存在，因此不会新增
+                        // 继续尝试备用方法，直接为最后挂载磁盘的第一个分区分配盘符 M
+                        await ShowStatusAndWait("未检测到新增卷GUID条目，尝试备用分配盘符方法...");
+                        var assignedFallback = await AssignDriveLetterDirect();
+                        if (assignedFallback)
+                        {
+                            await ShowStatusAndWait("备用方法分配盘符 M 成功");
+                            return true;
+                        }
+
+                        await ShowStatusAndWait("未检测到新增的卷GUID注册表条目，且备用方法也失败");
                         return false;
                     }
 
@@ -2280,6 +2309,456 @@ exit";
                 Debug.WriteLine($"AssignDriveLetterDirect异常: {ex}");
                 return false;
             }
+        }
+
+        /// <summary>
+        /// 更稳健的分配盘符方法：通过 detail vdisk 获取磁盘号后，为第一个分区分配 M 盘符
+        /// </summary>
+        private async Task<bool> AssignDriveLetterToFirstPartitionRobust(string vhdPath)
+        {
+            try
+            {
+                var detailScript = $@"select vdisk file=""{vhdPath}""
+attach vdisk
+detail vdisk
+exit";
+                var tempDetail = Path.GetTempFileName();
+                await File.WriteAllTextAsync(tempDetail, detailScript);
+
+                var detailProc = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "diskpart",
+                        Arguments = $"/s \"{tempDetail}\"",
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
+                    }
+                };
+
+                detailProc.Start();
+                var detailWait = detailProc.WaitForExitAsync();
+                var detailTimeout = Task.Delay(30000);
+                var detailCompleted = await Task.WhenAny(detailWait, detailTimeout);
+                if (detailCompleted == detailTimeout)
+                {
+                    try { detailProc.Kill(); } catch { }
+                    if (File.Exists(tempDetail)) File.Delete(tempDetail);
+                    await ShowStatusAndWait("获取磁盘号超时");
+                    return false;
+                }
+
+                var detailOut = await detailProc.StandardOutput.ReadToEndAsync();
+                var detailErr = await detailProc.StandardError.ReadToEndAsync();
+                if (File.Exists(tempDetail)) File.Delete(tempDetail);
+                Debug.WriteLine($"detail vdisk 输出:\n{detailOut}");
+                if (!string.IsNullOrWhiteSpace(detailErr)) Debug.WriteLine($"detail vdisk 错误:\n{detailErr}");
+
+                int diskNumber = -1;
+                var lines = detailOut.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                foreach (var line in lines)
+                {
+                    var trimmed = line.Trim();
+                    var match = System.Text.RegularExpressions.Regex.Match(trimmed, @"^(Disk number|磁盘编号)\s*[:：]\s*(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    if (match.Success && int.TryParse(match.Groups[2].Value, out var num)) { diskNumber = num; break; }
+                }
+
+                if (diskNumber < 0)
+                {
+                    await ShowStatusAndWait("未能解析VHD的磁盘号");
+                    return false;
+                }
+
+                // 确保磁盘在线并列出分区
+                var listScript = $@"select disk {diskNumber}
+online disk
+list partition
+exit";
+                var tempList = Path.GetTempFileName();
+                await File.WriteAllTextAsync(tempList, listScript);
+
+                var listProc = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "diskpart",
+                        Arguments = $"/s \"{tempList}\"",
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
+                    }
+                };
+
+                listProc.Start();
+                var listWait = listProc.WaitForExitAsync();
+                var listTimeout = Task.Delay(30000);
+                var listCompleted = await Task.WhenAny(listWait, listTimeout);
+                if (listCompleted == listTimeout)
+                {
+                    try { listProc.Kill(); } catch { }
+                    if (File.Exists(tempList)) File.Delete(tempList);
+                    await ShowStatusAndWait("列出分区超时");
+                    return false;
+                }
+
+                var listOut = await listProc.StandardOutput.ReadToEndAsync();
+                var listErr = await listProc.StandardError.ReadToEndAsync();
+                if (File.Exists(tempList)) File.Delete(tempList);
+                Debug.WriteLine($"分区列表输出:\n{listOut}");
+                if (!string.IsNullOrWhiteSpace(listErr)) Debug.WriteLine($"分区列表错误:\n{listErr}");
+
+                // 提取所有分区编号（兼容英文"Partition"与中文"分区"）
+                var partitionNumbers = new List<int>();
+                foreach (var line in listOut.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var trimmed = line.Trim();
+                    var match = System.Text.RegularExpressions.Regex.Match(trimmed, "^(Partition|分区)\\s+(\\d+)");
+                    if (match.Success && int.TryParse(match.Groups[2].Value, out var pn))
+                    {
+                        partitionNumbers.Add(pn);
+                    }
+                }
+
+                if (partitionNumbers.Count == 0)
+                {
+                    await ShowStatusAndWait("未找到任何分区");
+                    return false;
+                }
+
+                partitionNumbers.Sort();
+
+                // 逐一尝试为分区分配 M 盘符，直至成功
+                foreach (var pn in partitionNumbers)
+                {
+                    var assignScript = $@"select disk {diskNumber}
+select partition {pn}
+assign letter=M
+exit";
+                    var tempAssign = Path.GetTempFileName();
+                    await File.WriteAllTextAsync(tempAssign, assignScript);
+
+                    var assignProc = new Process
+                    {
+                        StartInfo = new ProcessStartInfo
+                        {
+                            FileName = "diskpart",
+                            Arguments = $"/s \"{tempAssign}\"",
+                            UseShellExecute = false,
+                            CreateNoWindow = true,
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true
+                        }
+                    };
+
+                    assignProc.Start();
+                    var assignWait = assignProc.WaitForExitAsync();
+                    var assignTimeout = Task.Delay(30000);
+                    var assignCompleted = await Task.WhenAny(assignWait, assignTimeout);
+                    if (assignCompleted == assignTimeout)
+                    {
+                        try { assignProc.Kill(); } catch { }
+                        if (File.Exists(tempAssign)) File.Delete(tempAssign);
+                        continue; // 尝试下一个分区
+                    }
+
+                    var assignOut = await assignProc.StandardOutput.ReadToEndAsync();
+                    var assignErr = await assignProc.StandardError.ReadToEndAsync();
+                    if (File.Exists(tempAssign)) File.Delete(tempAssign);
+                    Debug.WriteLine($"尝试分配分区 {pn} 输出:\n{assignOut}");
+                    if (!string.IsNullOrWhiteSpace(assignErr)) Debug.WriteLine($"尝试分配分区 {pn} 错误:\n{assignErr}");
+
+                    await Task.Delay(1000);
+                    if (Directory.Exists(TARGET_DRIVE))
+                    {
+                        await ShowStatusAndWait($"已为分区 {pn} 分配盘符 M 成功");
+                        return true;
+                    }
+                }
+
+                await ShowStatusAndWait("所有分区尝试分配 M 盘符均失败");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                await ShowStatusAndWait($"分配盘符异常: {ex.Message}");
+                Debug.WriteLine($"AssignDriveLetterToFirstPartitionRobust异常: {ex}");
+                return false;
+            }
+        }
+
+        // 无 diskpart 的盘符分配实现：枚举卷 → 解析扩展 → 识别虚拟磁盘卷 → 设置 M:\
+        private async Task<bool> AssignDriveLetterWithoutDiskpart(string vhdPath)
+        {
+            try
+            {
+                if (Directory.Exists(TARGET_DRIVE))
+                {
+                    await ShowStatusAndWait("检测到盘符 M 已可用");
+                    return true;
+                }
+
+                var volumes = EnumerateVolumes();
+                // 优先尝试未分配盘符的卷，减少对已有盘符（如 N:）的影响
+                foreach (var vol in volumes.OrderBy(v => string.IsNullOrWhiteSpace(v.DriveLetter) ? 0 : 1))
+                {
+                    await ShowStatusAndWait($"检测卷: {vol.DevicePath} FS={vol.FileSystem} DL={vol.DriveLetter ?? "(none)"}");
+                    if (string.IsNullOrWhiteSpace(vol.FileSystem))
+                        continue;
+
+                    var diskNumbers = GetVolumeDiskNumbers(vol.DevicePath);
+                    await ShowStatusAndWait($"卷磁盘号: {(diskNumbers == null || diskNumbers.Count == 0 ? "(none)" : string.Join(",", diskNumbers))}");
+                    if (diskNumbers == null || diskNumbers.Count == 0)
+                        continue;
+
+                    if (!BelongsToVirtualDisk(diskNumbers))
+                        continue;
+
+                    await ShowStatusAndWait("识别为虚拟磁盘卷，尝试分配 M");
+                    var ok = TrySetDriveLetterM(vol.DevicePath);
+                    await ShowStatusAndWait($"分配接口返回: {ok}");
+                    await Task.Delay(1000);
+                    if (ok && Directory.Exists(TARGET_DRIVE))
+                    {
+                        return true;
+                    }
+                }
+
+                // 回退优先：若仅有一个“无盘符且为 NTFS”的卷，优先为其分配 M（更贴近挂载的 VHD 数据分区）
+                var noLetterNtfs = volumes.Where(v => string.IsNullOrWhiteSpace(v.DriveLetter) && string.Equals(v.FileSystem ?? string.Empty, "NTFS", StringComparison.OrdinalIgnoreCase)).ToList();
+                if (noLetterNtfs.Count == 1)
+                {
+                    var targetId = NormalizeVolumeId(noLetterNtfs[0].DevicePath);
+                    await ShowStatusAndWait("未识别到虚拟卷，但仅有一个无盘符的 NTFS 卷，尝试回退分配 M");
+                    await ShowStatusAndWait($"开始调用 CIM AddMountPoint: DeviceID={targetId}");
+                    var ok = TrySetDriveLetterM(noLetterNtfs[0].DevicePath);
+                    await ShowStatusAndWait($"分配接口返回: {ok}");
+                    await Task.Delay(1000);
+                    if (ok && Directory.Exists(TARGET_DRIVE))
+                    {
+                        return true;
+                    }
+                }
+
+                // 次级回退：如果系统中仅存在一个“无盘符且有文件系统”的卷（非 NTFS 场景），尝试分配 M
+                var noLetterWithFs = volumes.Where(v => string.IsNullOrWhiteSpace(v.DriveLetter) && !string.IsNullOrWhiteSpace(v.FileSystem)).ToList();
+                if (noLetterWithFs.Count == 1)
+                {
+                    await ShowStatusAndWait("未识别到虚拟卷，但仅有一个无盘符的文件系统卷，尝试回退分配 M");
+                    var ok = TrySetDriveLetterM(noLetterWithFs[0].DevicePath);
+                    await ShowStatusAndWait($"分配接口返回: {ok}");
+                    await Task.Delay(1000);
+                    if (ok && Directory.Exists(TARGET_DRIVE))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Trace.WriteLine($"AssignDriveLetterWithoutDiskpart 异常: {ex}");
+                await ShowStatusAndWait($"盘符分配异常: {ex.Message}");
+                return false;
+            }
+        }
+
+        private class VolumeInfo
+        {
+            public string DevicePath { get; set; } = string.Empty; // 如 \\?\Volume{GUID}\\
+            public string? FileSystem { get; set; }
+            public string? DriveLetter { get; set; } // 如 "M:"，为空表示未分配
+        }
+
+        private List<VolumeInfo> EnumerateVolumes()
+        {
+            var list = new List<VolumeInfo>();
+            try
+            {
+                using var searcher = new System.Management.ManagementObjectSearcher("SELECT DeviceID, FileSystem, DriveLetter FROM Win32_Volume");
+                foreach (System.Management.ManagementObject obj in searcher.Get())
+                {
+                    var devId = obj["DeviceID"]?.ToString();
+                    var fs = obj["FileSystem"]?.ToString();
+                    var dl = obj["DriveLetter"]?.ToString();
+                    if (string.IsNullOrWhiteSpace(devId)) continue;
+                    list.Add(new VolumeInfo { DevicePath = devId!, FileSystem = fs, DriveLetter = dl });
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"EnumerateVolumes 异常: {ex}");
+            }
+            return list;
+        }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct DISK_EXTENT
+        {
+            public int DiskNumber;
+            public long StartingOffset;
+            public long ExtentLength;
+        }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct VOLUME_DISK_EXTENTS
+        {
+            public int NumberOfDiskExtents;
+        }
+
+        private const uint GENERIC_READ = 0x80000000;
+        private const uint FILE_SHARE_READ = 0x00000001;
+        private const uint FILE_SHARE_WRITE = 0x00000002;
+        private const uint FILE_SHARE_DELETE = 0x00000004;
+        private const uint OPEN_EXISTING = 3;
+        private const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
+        private const uint IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS = 0x00560000;
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+        private static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFile(
+            string lpFileName,
+            uint dwDesiredAccess,
+            uint dwShareMode,
+            IntPtr lpSecurityAttributes,
+            uint dwCreationDisposition,
+            uint dwFlagsAndAttributes,
+            IntPtr hTemplateFile);
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool DeviceIoControl(
+            Microsoft.Win32.SafeHandles.SafeFileHandle hDevice,
+            uint dwIoControlCode,
+            IntPtr lpInBuffer,
+            int nInBufferSize,
+            IntPtr lpOutBuffer,
+            int nOutBufferSize,
+            out int lpBytesReturned,
+            IntPtr lpOverlapped);
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+        private static extern bool SetVolumeMountPoint(string lpszVolumeMountPoint, string lpszVolumeName);
+
+        private List<int> GetVolumeDiskNumbers(string volumeDevicePath)
+        {
+            var result = new List<int>();
+            try
+            {
+                if (!volumeDevicePath.EndsWith("\\")) volumeDevicePath += "\\";
+                using var handle = CreateFile(
+                    volumeDevicePath,
+                    GENERIC_READ,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    IntPtr.Zero,
+                    OPEN_EXISTING,
+                    FILE_FLAG_BACKUP_SEMANTICS,
+                    IntPtr.Zero);
+
+                if (handle == null || handle.IsInvalid) return result;
+
+                int outSize = System.Runtime.InteropServices.Marshal.SizeOf<VOLUME_DISK_EXTENTS>() + (System.Runtime.InteropServices.Marshal.SizeOf<DISK_EXTENT>() * 16);
+                var outBuffer = System.Runtime.InteropServices.Marshal.AllocHGlobal(outSize);
+                try
+                {
+                    if (DeviceIoControl(handle, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, IntPtr.Zero, 0, outBuffer, outSize, out var bytesReturned, IntPtr.Zero))
+                    {
+                        int count = System.Runtime.InteropServices.Marshal.ReadInt32(outBuffer);
+                        IntPtr current = outBuffer + System.Runtime.InteropServices.Marshal.SizeOf<VOLUME_DISK_EXTENTS>();
+                        for (int i = 0; i < count; i++)
+                        {
+                            var extent = System.Runtime.InteropServices.Marshal.PtrToStructure<DISK_EXTENT>(current);
+                            result.Add(extent.DiskNumber);
+                            current += System.Runtime.InteropServices.Marshal.SizeOf<DISK_EXTENT>();
+                        }
+                    }
+                }
+                finally
+                {
+                    System.Runtime.InteropServices.Marshal.FreeHGlobal(outBuffer);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"GetVolumeDiskNumbers 异常: {ex}");
+            }
+            return result;
+        }
+
+        private bool BelongsToVirtualDisk(List<int> diskNumbers)
+        {
+            try
+            {
+                foreach (var dn in diskNumbers)
+                {
+                    using var searcher = new System.Management.ManagementObjectSearcher($"SELECT Index, Model FROM Win32_DiskDrive WHERE Index = {dn}");
+                    foreach (System.Management.ManagementObject obj in searcher.Get())
+                    {
+                        var model = obj["Model"]?.ToString() ?? string.Empty;
+                        if (model.Contains("Virtual", StringComparison.OrdinalIgnoreCase) || model.Contains("Microsoft", StringComparison.OrdinalIgnoreCase))
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"BelongsToVirtualDisk 异常: {ex}");
+            }
+            return false;
+        }
+
+        private bool TrySetDriveLetterM(string volumeDevicePath)
+        {
+            try
+            {
+                // 仅使用 CIM：用 Key 构建实例（避免查询和转义问题）
+                using var session = CimSession.Create(null);
+                var expectedId = NormalizeVolumeId(volumeDevicePath);
+                Trace.WriteLine($"CIM 目标卷 DeviceID: {expectedId}");
+
+                var volInstance = new CimInstance("Win32_Volume");
+                volInstance.CimInstanceProperties.Add(
+                    Microsoft.Management.Infrastructure.CimProperty.Create(
+                        "DeviceID",
+                        expectedId,
+                        Microsoft.Management.Infrastructure.CimType.String,
+                        Microsoft.Management.Infrastructure.CimFlags.Key));
+
+                var parameters = new CimMethodParametersCollection();
+                var mountDir = TARGET_DRIVE.EndsWith("\\") ? TARGET_DRIVE : TARGET_DRIVE + "\\";
+                parameters.Add(Microsoft.Management.Infrastructure.CimMethodParameter.Create("Directory", mountDir, Microsoft.Management.Infrastructure.CimType.String, Microsoft.Management.Infrastructure.CimFlags.None));
+
+                var result = session.InvokeMethod(@"root\cimv2", volInstance, "AddMountPoint", parameters);
+                var rvParam = result.ReturnValue;
+                if (rvParam != null)
+                {
+                    var val = rvParam.Value;
+                    if (val is uint u && u == 0) return true;
+                    if (val is int i && i == 0) return true;
+                    Trace.WriteLine($"CIM AddMountPoint 返回码: {val}");
+                }
+                else
+                {
+                    Trace.WriteLine("CIM AddMountPoint 未返回码");
+                }
+
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"TrySetDriveLetterM 异常: {ex}");
+                return false;
+            }
+        }
+
+        private static string NormalizeVolumeId(string id)
+        {
+            var s = (id ?? string.Empty).Trim();
+            if (!s.EndsWith("\\")) s += "\\";
+            return s;
         }
 
         public async Task<bool> UnmountVHD()

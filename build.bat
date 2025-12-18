@@ -1,28 +1,28 @@
 @echo off
-echo VHD Mounter ç¼–è¯‘è„šæœ¬
+echo VHD Mounter ±àÒë½Å±¾
 echo ==================
 
-echo æ­£åœ¨ç¼–è¯‘é¡¹ç›®...
-dotnet build --configuration Release
+echo ÕıÔÚ±àÒëÏîÄ¿...
+dotnet build ./VHDMounter.csproj --configuration Release
 
 if %ERRORLEVEL% EQU 0 (
     echo.
-    echo ç¼–è¯‘æˆåŠŸï¼
+    echo ±àÒë³É¹¦£¡
     echo.
-    echo æ­£åœ¨å‘å¸ƒè‡ªåŒ…å«ç‰ˆæœ¬...
-    dotnet publish --configuration Release --self-contained true --runtime win-x64 --output ./publish
+    echo ÕıÔÚ·¢²¼×Ô°üº¬°æ±¾...
+    dotnet publish ./VHDMounter.csproj -c Release -p:SelfContained=true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:PublishTrimmed=false -r win10-x64
     
     if %ERRORLEVEL% EQU 0 (
         echo.
-        echo å‘å¸ƒæˆåŠŸï¼
-        echo å¯æ‰§è¡Œæ–‡ä»¶ä½ç½®: ./publish/VHDMounter.exe
+        echo ·¢²¼³É¹¦£¡
+        echo ¿ÉÖ´ĞĞÎÄ¼şÎ»ÖÃ: .\bin\Release\net6.0-windows\win10-x64\publish\VHDMounter.exe
         echo.
-        echo æ³¨æ„ï¼šç¨‹åºéœ€è¦ä»¥ç®¡ç†å‘˜èº«ä»½è¿è¡Œï¼
+        echo ×¢Òâ£º³ÌĞòĞèÒªÒÔ¹ÜÀíÔ±Éí·İÔËĞĞ£¡
     ) else (
-        echo å‘å¸ƒå¤±è´¥ï¼
+        echo ·¢²¼Ê§°Ü£¡
     )
 ) else (
-    echo ç¼–è¯‘å¤±è´¥ï¼
+    echo ±àÒëÊ§°Ü£¡
 )
 
 pause

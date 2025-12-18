@@ -1,4 +1,4 @@
-name: Build VHD Mounter
+name: Build VHD Mounter (win10-x64 single-file)
 
 permissions:
   contents: write
@@ -83,76 +83,54 @@ jobs:
         reporter: dotnet-trx
         fail-on-error: false
       
-    - name: Publish Windows x64
+    - name: Publish Windows 10 x64 (single-file, self-contained)
       run: |
         dotnet publish VHDMounter.csproj `
           --configuration ${{ env.BUILD_CONFIGURATION }} `
-          --runtime win-x64 `
+          --runtime win10-x64 `
           --self-contained true `
-          --output ./publish/win-x64 `
+          --output ./publish/win10-x64 `
           -p:PublishSingleFile=true `
           -p:IncludeNativeLibrariesForSelfExtract=true `
+          -p:EnableCompressionInSingleFile=true `
+          -p:PublishTrimmed=false `
           -p:Version=${{ steps.version.outputs.version }}
         
         # Copy configuration file
-        Copy-Item "vhdmonter_config.ini" "./publish/win-x64/" -Force
-      
-    - name: Publish Windows x86
-      run: |
-        dotnet publish VHDMounter.csproj `
-          --configuration ${{ env.BUILD_CONFIGURATION }} `
-          --runtime win-x86 `
-          --self-contained true `
-          --output ./publish/win-x86 `
-          -p:PublishSingleFile=true `
-          -p:IncludeNativeLibrariesForSelfExtract=true `
-          -p:Version=${{ steps.version.outputs.version }}
-        
-        # Copy configuration file
-        Copy-Item "vhdmonter_config.ini" "./publish/win-x86/" -Force
-      
-    - name: Upload Windows x64 artifacts
+        Copy-Item "vhdmonter_config.ini" "./publish/win10-x64/" -Force
+
+    - name: Upload Windows 10 x64 artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: VHDMounter-win-x64-${{ steps.version.outputs.version }}
-        path: ./publish/win-x64/
-        retention-days: 30
-        
-    - name: Upload Windows x86 artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: VHDMounter-win-x86-${{ steps.version.outputs.version }}
-        path: ./publish/win-x86/
+        name: VHDMounter-win10-x64-${{ steps.version.outputs.version }}
+        path: ./publish/win10-x64/
         retention-days: 30
         
     - name: Create Release Assets
       if: github.event_name == 'release'
       run: |
         $version = "${{ steps.version.outputs.version }}"
-        Compress-Archive -Path ./publish/win-x64/* -DestinationPath "VHDMounter-v$version-win-x64.zip" -Force
-        Compress-Archive -Path ./publish/win-x86/* -DestinationPath "VHDMounter-v$version-win-x86.zip" -Force
+        Compress-Archive -Path ./publish/win10-x64/* -DestinationPath "VHDMounter-v$version-win10-x64.zip" -Force
         
         # Create checksums
-        $x64Hash = (Get-FileHash "VHDMounter-v$version-win-x64.zip" -Algorithm SHA256).Hash
-        $x86Hash = (Get-FileHash "VHDMounter-v$version-win-x86.zip" -Algorithm SHA256).Hash
+        $x64Hash = (Get-FileHash "VHDMounter-v$version-win10-x64.zip" -Algorithm SHA256).Hash
         
         @"
         # VHD Mounter v$version - Checksums
         
         ## SHA256 Checksums
         
-        - **VHDMounter-v$version-win-x64.zip**: `$x64Hash`
-        - **VHDMounter-v$version-win-x86.zip**: `$x86Hash`
+        - **VHDMounter-v$version-win10-x64.zip**: `$x64Hash`
         
         ## Installation
         
-        1. Download the appropriate version for your system (x64 or x86)
+        1. Download the Windows 10 x64 package
         2. Extract the ZIP file
         3. Run `run_as_admin.bat` to start the application with administrator privileges
         
         ## Requirements
         
-        - Windows 10/11
+        - Windows 10/11 x64
         - Administrator privileges (required for VHD mounting)
         - .NET 6.0 Runtime (included in self-contained builds)
         "@ | Out-File -FilePath "CHECKSUMS.md" -Encoding UTF8
@@ -162,8 +140,7 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         files: |
-          VHDMounter-v${{ steps.version.outputs.version }}-win-x64.zip
-          VHDMounter-v${{ steps.version.outputs.version }}-win-x86.zip
+          VHDMounter-v${{ steps.version.outputs.version }}-win10-x64.zip
           CHECKSUMS.md
         generate_release_notes: true
         draft: false
