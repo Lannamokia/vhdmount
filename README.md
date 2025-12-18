@@ -1,6 +1,6 @@
 # VHD Mounter & VHDSelectServer
 
-当前版本：`v1.2.1`
+当前版本：`v1.4.0`
 
 一套完整的街机游戏 VHD 管理与远程控制解决方案：包含 Windows 客户端（VHD Mounter）与配套 Web 服务（VHDSelectServer）。支持集中化配置、机台保护、EVHD 密码管理以及自动构建发布。
 
