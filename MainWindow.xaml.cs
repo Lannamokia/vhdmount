@@ -14,14 +14,23 @@ namespace VHDMounter
         private VHDManager vhdManager;
         private List<string> availableVHDs;
         private bool isProcessing = false;
+        // 三次 Delete 关闭程序的检测
+        private int delPressCount = 0;
+        private DateTime lastDelPressTime = DateTime.MinValue;
+        private readonly TimeSpan delPressWindow = TimeSpan.FromSeconds(2);
 
-        // 使状态消息按队列显示，每条至少停留2秒
-        private readonly Queue<string> statusQueue = new Queue<string>();
-        private DispatcherTimer statusTimer;
-        // 即时模式：用于启动前10秒倒计时，实时刷新不排队
-        private bool statusImmediateMode = false;
-        // 阻塞模式：ShowStatusAndWait期间，锁定当前消息，其他消息进入队列不抢占
-        private bool statusBlockActive = false;
+        private enum UiStage
+        {
+            PreLaunchDelay,
+            PrepareGameFiles,
+            ApplyLocalUpdate,
+            PrepareToLaunch,
+            UpdateAndLaunch,
+            CrashRecovering,
+            Error
+        }
+
+        private UiStage currentStage = UiStage.PreLaunchDelay;
 
         public MainWindow()
         {
@@ -30,99 +39,98 @@ namespace VHDMounter
             vhdManager.StatusChanged += OnStatusChanged;
             vhdManager.ReplaceProgressChanged += OnReplaceProgress;
             vhdManager.BlockingChanged += OnBlockingChanged;
+            vhdManager.GameCrashed += OnGameCrashed;
+            vhdManager.GameStarted += OnGameStarted;
             
             // 注册关机事件监听
             SystemEvents.SessionEnding += OnSessionEnding;
-
-            // 初始化状态队列显示定时器（每条消息显示2秒）
-            statusTimer = new DispatcherTimer();
-            statusTimer.Interval = TimeSpan.FromSeconds(2);
-            statusTimer.Tick += StatusTimer_Tick;
             
             // 开始主流程（包含延迟启动）
             _ = StartMainProcessWithDelay();
         }
 
-        // 显示状态并同步等待，确保操作与UI一致节奏
-        private async Task ShowStatusAndWait(string message, int milliseconds = 2000)
+        private void SetStage(UiStage stage, string overrideText = null)
         {
-            await Dispatcher.InvokeAsync(() =>
+            currentStage = stage;
+            Dispatcher.Invoke(() =>
             {
-                statusBlockActive = true;
-                statusTimer.Stop();
-                StatusText.Text = message;
-            });
-            await Task.Delay(milliseconds);
-            await Dispatcher.InvokeAsync(() =>
-            {
-                statusBlockActive = false;
-                // 如果队列里有积压消息，恢复以2秒节奏显示
-                if (statusQueue.Count > 0 && !statusTimer.IsEnabled)
+                switch (stage)
                 {
-                    StatusText.Text = statusQueue.Dequeue();
-                    statusTimer.Start();
+                    case UiStage.PreLaunchDelay:
+                        StatusText.Text = overrideText ?? "程序启动准备中";
+                        ProgressBar.Visibility = Visibility.Collapsed;
+                        break;
+                    case UiStage.PrepareGameFiles:
+                        StatusText.Text = "正在准备游戏文件";
+                        ProgressBar.Visibility = Visibility.Collapsed;
+                        ProgressBar.IsIndeterminate = true;
+                        break;
+                    case UiStage.ApplyLocalUpdate:
+                        StatusText.Text = "正在应用本地更新";
+                        ProgressBar.Visibility = Visibility.Visible;
+                        ProgressBar.IsIndeterminate = false;
+                        ProgressBar.Minimum = 0;
+                        ProgressBar.Maximum = 100;
+                        ProgressBar.Value = 0;
+                        break;
+                    case UiStage.PrepareToLaunch:
+                        StatusText.Text = "正在准备启动游戏";
+                        ProgressBar.Visibility = Visibility.Collapsed;
+                        ProgressBar.IsIndeterminate = true;
+                        break;
+                    case UiStage.UpdateAndLaunch:
+                        StatusText.Text = "正在更新和启动游戏程序，请耐心等待";
+                        ProgressBar.Visibility = Visibility.Collapsed;
+                        ProgressBar.IsIndeterminate = true;
+                        this.Topmost = true;
+                        this.ShowInTaskbar = true;
+                        this.WindowState = WindowState.Maximized;
+                        break;
+                    case UiStage.CrashRecovering:
+                        StatusText.Text = "游戏程序异常退出，正在尝试重启";
+                        ProgressBar.Visibility = Visibility.Collapsed;
+                        ProgressBar.IsIndeterminate = false;
+                        this.Topmost = true;
+                        this.ShowInTaskbar = true;
+                        this.WindowState = WindowState.Maximized;
+                        this.Activate();
+                        break;
+                    case UiStage.Error:
+                        StatusText.Text = "运行发生错误，请联系管理员调阅日志";
+                        ProgressBar.Visibility = Visibility.Collapsed;
+                        ProgressBar.IsIndeterminate = false;
+                        this.Topmost = true;
+                        this.ShowInTaskbar = true;
+                        this.WindowState = WindowState.Maximized;
+                        this.Activate();
+                        break;
                 }
             });
         }
 
         private void OnStatusChanged(string status)
         {
-            Dispatcher.Invoke(() =>
+            try
             {
-                // 即时模式：直接显示当前消息，清空队列并停止计时器
-                if (statusImmediateMode)
-                {
-                    statusTimer.Stop();
-                    statusQueue.Clear();
-                    StatusText.Text = status;
-                    return;
-                }
-                // 阻塞模式：不抢占当前显示，入队等待阻塞结束后再显示
-                if (statusBlockActive)
-                {
-                    statusQueue.Enqueue(status);
-                    return;
-                }
-                // 入队消息；如果当前没有在显示循环中，则立即显示并启动定时器
-                statusQueue.Enqueue(status);
-                if (!statusTimer.IsEnabled)
-                {
-                    StatusText.Text = statusQueue.Dequeue();
-                    statusTimer.Start();
-                }
-            });
-        }
-
-        // 每次触发时显示下一条状态消息；无消息时停止定时器
-        private void StatusTimer_Tick(object sender, EventArgs e)
-        {
-            if (statusQueue.Count > 0)
-            {
-                StatusText.Text = statusQueue.Dequeue();
+                System.Diagnostics.Trace.WriteLine($"UI_STATUS_LOG: {status}");
             }
-            else
-            {
-                statusTimer.Stop();
-            }
+            catch { }
         }
 
         private void OnReplaceProgress(FileReplaceProgress progress)
         {
             Dispatcher.Invoke(() =>
             {
-                // 聚合整体进度（当前文件在总数中的进度占比）
+                // 仅更新进度条，不显示文件名，避免泄露细节
                 double aggregated = 0;
                 if (progress.TotalFiles > 0)
                 {
                     aggregated = ((progress.FileIndex - 1) * 100.0 / progress.TotalFiles) + (progress.Percentage / progress.TotalFiles);
                 }
-
                 ProgressBar.IsIndeterminate = false;
                 ProgressBar.Minimum = 0;
                 ProgressBar.Maximum = 100;
                 ProgressBar.Value = Math.Max(0, Math.Min(100, aggregated));
-
-                StatusText.Text = $"正在复制 {progress.CurrentFileName} ({progress.FileIndex}/{progress.TotalFiles}) - {progress.Percentage:F1}%";
             });
         }
 
@@ -132,24 +140,19 @@ namespace VHDMounter
         {
             try
             {
-                // 开机延迟10秒启动
-                statusImmediateMode = true; // 倒计时期间开启即时模式
-                OnStatusChanged("程序启动中，等待10秒...");
+                // 程序启动前的十秒准备阶段
                 for (int i = 10; i > 0; i--)
                 {
-                    OnStatusChanged($"程序启动中，等待{i}秒...");
+                    SetStage(UiStage.PreLaunchDelay, $"程序启动准备中（剩余 {i} 秒）");
                     await Task.Delay(1000);
                 }
-                
-                OnStatusChanged("延迟完成，开始主流程...");
-                statusImmediateMode = false; // 倒计时结束，恢复队列显示（每条停留2秒）
+                SetStage(UiStage.PreLaunchDelay, "准备完成，开始初始化");
                 await StartMainProcess();
             }
             catch (Exception ex)
             {
                 OnStatusChanged($"延迟启动过程中发生错误: {ex.Message}");
-                await Task.Delay(5000);
-                await SafeShutdown();
+                await ShowFatalErrorAndShutdownAfterDelay();
             }
         }
 
@@ -158,107 +161,39 @@ namespace VHDMounter
             try
             {
                 isProcessing = true;
-                
-                // 尝试远程获取VHD选择
-                await ShowStatusAndWait("正在检查远程VHD选择配置...");
+
+                // 阶段：正在准备游戏文件（远程关键词获取 + 扫描）
+                SetStage(UiStage.PrepareGameFiles);
                 string remoteSelectedKeyword = await vhdManager.GetRemoteVHDSelection();
-                await ShowStatusAndWait($"远程VHD选择检查完成: {(string.IsNullOrWhiteSpace(remoteSelectedKeyword) ? "无远程选择" : $"选择关键词: {remoteSelectedKeyword}")}");
-                
-                // 检查是否存在NX_INS USB设备
-                await ShowStatusAndWait("正在检查NX_INS USB设备...");
                 var nxInsUSB = vhdManager.FindNXInsUSBDrive();
-                List<string> usbVhdFiles = new List<string>();
-                
-                if (nxInsUSB != null)
-                {
-                    await ShowStatusAndWait($"找到NX_INS USB设备: {nxInsUSB.Name}");
-                    // 扫描USB设备中的VHD文件
-                    await ShowStatusAndWait("正在扫描USB设备中的VHD文件...");
-                    usbVhdFiles = vhdManager.ScanUSBForVHDFiles(nxInsUSB);
-                    await ShowStatusAndWait($"在USB设备中找到 {usbVhdFiles.Count} 个VHD文件");
-                }
-                else
-                {
-                    await ShowStatusAndWait("未找到NX_INS USB设备，将使用本地VHD文件");
-                }
-                
-                // 扫描本地VHD文件
-                await ShowStatusAndWait("正在扫描本地VHD文件...");
+                List<string> usbVhdFiles = nxInsUSB != null ? vhdManager.ScanUSBForVHDFiles(nxInsUSB) : new List<string>();
                 var localVhdFiles = await vhdManager.ScanForVHDFiles();
-                await ShowStatusAndWait($"本地VHD文件扫描完成，找到 {localVhdFiles.Count} 个文件");
 
                 // 如果找到USB设备和VHD文件，替换本地文件
                 if (nxInsUSB != null && usbVhdFiles.Count > 0 && localVhdFiles.Count > 0)
                 {
-                    await ShowStatusAndWait("开始替换本地VHD文件...");
-                    Dispatcher.Invoke(() =>
-                    {
-                        ProgressBar.Visibility = Visibility.Visible;
-                        ProgressBar.IsIndeterminate = false;
-                        ProgressBar.Minimum = 0;
-                        ProgressBar.Maximum = 100;
-                        ProgressBar.Value = 0;
-                    });
+                    // 阶段：应用本地更新（显示进度）
+                    SetStage(UiStage.ApplyLocalUpdate);
                     bool replaced = await vhdManager.ReplaceLocalVHDFiles(usbVhdFiles, localVhdFiles);
-                    if (replaced)
-                    {
-                        OnStatusChanged("本地VHD文件已替换，重新扫描本地文件...");
-                        // 重新扫描本地文件
-                        localVhdFiles = await vhdManager.ScanForVHDFiles();
-                        await ShowStatusAndWait($"重新扫描完成，找到 {localVhdFiles.Count} 个文件");
-                    }
-                    else
-                    {
-                        await ShowStatusAndWait("VHD文件替换失败或无需替换");
-                    }
-                    Dispatcher.Invoke(() =>
-                    {
-                        // 替换阶段结束，恢复不确定进度或清零
-                        ProgressBar.IsIndeterminate = true;
-                        ProgressBar.Value = 0;
-                    });
-                    await ShowStatusAndWait("替换阶段结束");
+                    // 替换完成后重新扫描
+                    localVhdFiles = await vhdManager.ScanForVHDFiles();
+                    SetStage(UiStage.PrepareGameFiles);
                 }
 
                 // 当且仅当本地列表为空，且USB有结果时，直接复制到D:\ 根目录
                 if (localVhdFiles.Count == 0 && nxInsUSB != null && usbVhdFiles.Count > 0)
                 {
-                    await ShowStatusAndWait("本地无VHD/EVHD，准备将USB文件复制到 D:\\ 根目录...");
-                    Dispatcher.Invoke(() =>
-                    {
-                        ProgressBar.Visibility = Visibility.Visible;
-                        ProgressBar.IsIndeterminate = false;
-                        ProgressBar.Minimum = 0;
-                        ProgressBar.Maximum = 100;
-                        ProgressBar.Value = 0;
-                    });
-
+                    // 阶段：应用本地更新（USB复制到D盘）
+                    SetStage(UiStage.ApplyLocalUpdate);
                     bool copied = await vhdManager.CopyUsbFilesToDriveRoot(usbVhdFiles, "D");
-                    if (copied)
-                    {
-                        OnStatusChanged("复制完成，重新扫描本地VHD文件...");
-                        localVhdFiles = await vhdManager.ScanForVHDFiles();
-                        await ShowStatusAndWait($"重新扫描完成，找到 {localVhdFiles.Count} 个文件");
-                    }
-                    else
-                    {
-                        await ShowStatusAndWait("未能复制USB上的VHD/EVHD文件到D盘");
-                    }
-
-                    Dispatcher.Invoke(() =>
-                    {
-                        ProgressBar.IsIndeterminate = true;
-                        ProgressBar.Value = 0;
-                    });
-                    await ShowStatusAndWait("复制阶段结束");
+                    localVhdFiles = await vhdManager.ScanForVHDFiles();
+                    SetStage(UiStage.PrepareGameFiles);
                 }
                 
                 if (localVhdFiles.Count == 0)
                 {
                     OnStatusChanged("未找到符合条件的VHD文件");
-                    OnStatusChanged("请检查文件名是否包含SDEZ、SDHD或SDDT关键词");
-                    await Task.Delay(5000);
-                    await SafeShutdown();
+                    await ShowFatalErrorAndShutdownAfterDelay();
                     return;
                 }
                 
@@ -267,17 +202,11 @@ namespace VHDMounter
                 // 如果有远程选择的关键词，优先使用
                 if (!string.IsNullOrWhiteSpace(remoteSelectedKeyword))
                 {
-                    await ShowStatusAndWait($"正在根据远程关键词 '{remoteSelectedKeyword}' 查找VHD文件...");
                     selectedVHD = vhdManager.FindVHDByKeyword(localVhdFiles, remoteSelectedKeyword);
                     if (selectedVHD != null)
                     {
-                        await ShowStatusAndWait($"根据远程选择启动VHD: {System.IO.Path.GetFileName(selectedVHD)}");
                         await ProcessSelectedVHD(selectedVHD);
                         return;
-                    }
-                    else
-                    {
-                        await ShowStatusAndWait($"远程选择的关键词 '{remoteSelectedKeyword}' 未找到对应VHD文件，将显示选择器");
                     }
                 }
                 
@@ -296,8 +225,7 @@ namespace VHDMounter
             catch (Exception ex)
             {
                 OnStatusChanged($"发生错误: {ex.Message}");
-                await Task.Delay(5000);
-                Application.Current.Shutdown();
+                await ShowFatalErrorAndShutdownAfterDelay();
             }
         }
 
@@ -307,25 +235,7 @@ namespace VHDMounter
             {
                 try
                 {
-                    if (blocking)
-                    {
-                        // 阻塞UI交互并提示信息
-                        VHDSelector.Visibility = Visibility.Collapsed;
-                        ProgressBar.Visibility = Visibility.Visible;
-                        ProgressBar.IsIndeterminate = true;
-                        VHDListBox.IsEnabled = false;
-                        CloseButton.IsEnabled = false;
-                        if (!string.IsNullOrWhiteSpace(message))
-                        {
-                            StatusText.Text = message;
-                        }
-                    }
-                    else
-                    {
-                        // 恢复UI交互
-                        VHDListBox.IsEnabled = true;
-                        CloseButton.IsEnabled = true;
-                    }
+                    VHDListBox.IsEnabled = !blocking;
                 }
                 catch { }
             });
@@ -339,7 +249,6 @@ namespace VHDMounter
                 VHDListBox.SelectedIndex = 0;
                 VHDSelector.Visibility = Visibility.Visible;
                 ProgressBar.Visibility = Visibility.Collapsed;
-                OnStatusChanged("请选择要挂载的VHD文件");
             });
         }
 
@@ -350,23 +259,23 @@ namespace VHDMounter
                 Dispatcher.Invoke(() =>
                 {
                     VHDSelector.Visibility = Visibility.Collapsed;
-                    ProgressBar.Visibility = Visibility.Visible;
                 });
+
+                // 阶段：准备启动游戏（EVHD密钥获取至启动前）
+                SetStage(UiStage.PrepareToLaunch);
 
                 // 挂载VHD或EVHD
                 var ext = System.IO.Path.GetExtension(vhdPath)?.ToLowerInvariant();
                 bool isEvhd = ext == ".evhd";
-                await ShowStatusAndWait($"正在挂载{(isEvhd ? "EVHD" : "VHD")}文件: {System.IO.Path.GetFileName(vhdPath)}");
                 bool mounted = isEvhd
                     ? await vhdManager.MountEVHDAndAttachDecryptedVHD(vhdPath)
                     : await vhdManager.MountVHD(vhdPath);
                 if (!mounted)
                 {
-                    await ShowStatusAndWait("挂载失败", 3000);
-                    await SafeShutdown();
+                    OnStatusChanged("挂载失败");
+                    await ShowFatalErrorAndShutdownAfterDelay();
                     return;
                 }
-                await ShowStatusAndWait("挂载成功");
 
                 // 根据文件名选择目标目录（SDHD -> bin，否则 -> package），忽略大小写
                 bool isSDHD = System.IO.Path.GetFileName(vhdPath)
@@ -375,73 +284,55 @@ namespace VHDMounter
                 string targetFolder;
                 if (isSDHD)
                 {
-                    await ShowStatusAndWait("检测到 SDHD 文件，正在搜索 bin 目录...");
                     targetFolder = await vhdManager.FindFolder("bin");
                 }
                 else
                 {
-                    await ShowStatusAndWait("正在搜索 package 目录...");
                     targetFolder = await vhdManager.FindPackageFolder();
                 }
 
                 if (string.IsNullOrEmpty(targetFolder))
                 {
-                    await ShowStatusAndWait(isSDHD ? "未找到bin目录" : "未找到package文件夹", 3000);
-                    await SafeShutdown();
+                    OnStatusChanged(isSDHD ? "未找到bin目录" : "未找到package文件夹");
+                    await ShowFatalErrorAndShutdownAfterDelay();
                     return;
                 }
-                await ShowStatusAndWait($"目标目录搜索完成: {targetFolder}");
 
+                // 阶段：正在更新和启动游戏程序，请耐心等待
+                SetStage(UiStage.UpdateAndLaunch);
                 // 启动start.bat
-                await ShowStatusAndWait("正在启动start.bat文件...");
                 bool started = await vhdManager.StartBatchFile(targetFolder);
                 if (!started)
                 {
-                    await ShowStatusAndWait("启动start.bat失败", 3000);
-                    await SafeShutdown();
+                    OnStatusChanged("启动start.bat失败");
+                    await ShowFatalErrorAndShutdownAfterDelay();
                     return;
                 }
-                await ShowStatusAndWait("start.bat启动成功");
 
-                // 更新期：如果 NxClient.exe 正在运行，则保持置顶显示并提示“正在更新资源”
-                if (vhdManager.IsProcessRunningByName("NxClient"))
-                {
-                    await ShowStatusAndWait("正在更新资源");
-                    // 保持窗口置顶与显示（XAML 已设置 Topmost=true）
-                    Dispatcher.Invoke(() =>
-                    {
-                        this.WindowState = WindowState.Maximized;
-                        this.ShowInTaskbar = true;
-                    });
-
-                    // 轮询等待 NxClient 退出
-                    while (vhdManager.IsProcessRunningByName("NxClient"))
-                    {
-                        await Task.Delay(1000);
-                    }
-                    await ShowStatusAndWait("更新完成，正在启动游戏");
-                }
-
-                // 等待游戏进程启动
-                await ShowStatusAndWait("正在等待游戏进程启动...");
-                while (!vhdManager.IsTargetProcessRunning())
+                // 更新期：如果 NxClient.exe 正在运行，则保持置顶显示
+                while (vhdManager.IsProcessRunningByName("NxClient"))
                 {
                     await Task.Delay(1000);
                 }
 
-                await ShowStatusAndWait("检测到游戏进程启动，10秒后切换窗口...", 10000);
+                // 等待游戏进程启动
+                while (!vhdManager.IsTargetProcessRunning())
+                {
+                    await Task.Delay(1000);
+                }
+                // 游戏启动后，等待10秒再切换窗口
+                await Task.Delay(10000);
                 var proc = vhdManager.GetFirstTargetProcess();
                 if (proc != null)
                 {
                     var focused = vhdManager.FocusProcessWindow(proc);
                     if (!focused)
                     {
-                        await ShowStatusAndWait("切换到游戏窗口失败，窗口可能尚未就绪");
+                        OnStatusChanged("切换到游戏窗口失败，窗口可能尚未就绪");
                     }
                 }
 
                 // 切换后隐藏自身 UI 并进入监控（异常重启使用 start_game.bat）
-                await ShowStatusAndWait("程序启动成功，开始监控...");
                 Dispatcher.Invoke(() =>
                 {
                     this.WindowState = WindowState.Minimized;
@@ -452,47 +343,103 @@ namespace VHDMounter
             catch (Exception ex)
             {
                 OnStatusChanged($"处理过程中发生错误: {ex.Message}");
-                await Task.Delay(5000);
-                await SafeShutdown();
+                await ShowFatalErrorAndShutdownAfterDelay();
             }
+        }
+
+        private async Task ShowFatalErrorAndShutdownAfterDelay()
+        {
+            try
+            {
+                SetStage(UiStage.Error);
+            }
+            catch { }
+            // 展示 5 分钟
+            await Task.Delay(TimeSpan.FromMinutes(5));
+            // 执行关机指令
+            try
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "shutdown",
+                    Arguments = "/s /t 0",
+                    UseShellExecute = true,
+                    CreateNoWindow = true
+                };
+                System.Diagnostics.Process.Start(psi);
+            }
+            catch (Exception ex)
+            {
+                OnStatusChanged($"执行关机指令失败: {ex.Message}");
+                // 失败时，至少关闭应用
+                try { Application.Current.Shutdown(); } catch { }
+            }
+        }
+
+        private void OnGameCrashed()
+        {
+            SetStage(UiStage.CrashRecovering);
+        }
+
+        private void OnGameStarted()
+        {
+            // 游戏已正常启动后，隐藏自身界面
+            Dispatcher.Invoke(() =>
+            {
+                this.WindowState = WindowState.Minimized;
+                this.ShowInTaskbar = false;
+            });
         }
 
         private async void Window_KeyDown(object sender, KeyEventArgs e)
         {
-            if (isProcessing || VHDSelector.Visibility != Visibility.Visible)
-                return;
-
-            switch (e.Key)
+            // 全局检测 Delete 三击
+            if (e.Key == Key.Delete)
             {
-                case Key.Up:
-                    if (VHDListBox.SelectedIndex > 0)
-                        VHDListBox.SelectedIndex--;
-                    break;
-                    
-                case Key.Down:
-                    if (VHDListBox.SelectedIndex < VHDListBox.Items.Count - 1)
-                        VHDListBox.SelectedIndex++;
-                    break;
-                    
-                case Key.Enter:
-                    if (VHDListBox.SelectedIndex >= 0 && availableVHDs != null)
-                    {
-                        isProcessing = true;
-                        string selectedVHD = availableVHDs[VHDListBox.SelectedIndex];
-                        await ProcessSelectedVHD(selectedVHD);
-                    }
-                    break;
-                    
-                case Key.Escape:
-                    _ = SafeShutdown();
-                    break;
+                var now = DateTime.Now;
+                if ((now - lastDelPressTime) <= delPressWindow)
+                {
+                    delPressCount++;
+                }
+                else
+                {
+                    delPressCount = 1;
+                }
+                lastDelPressTime = now;
+                if (delPressCount >= 3)
+                {
+                    delPressCount = 0;
+                    await SafeShutdown();
+                    return;
+                }
+            }
+
+            // 仅在选择器可见时处理上下与回车
+            if (VHDSelector.Visibility == Visibility.Visible)
+            {
+                switch (e.Key)
+                {
+                    case Key.Up:
+                        if (VHDListBox.SelectedIndex > 0)
+                            VHDListBox.SelectedIndex--;
+                        break;
+                    case Key.Down:
+                        if (VHDListBox.SelectedIndex < VHDListBox.Items.Count - 1)
+                            VHDListBox.SelectedIndex++;
+                        break;
+                    case Key.Enter:
+                        if (!isProcessing && VHDListBox.SelectedIndex >= 0 && availableVHDs != null)
+                        {
+                            isProcessing = true;
+                            string selectedVHD = availableVHDs[VHDListBox.SelectedIndex];
+                            await ProcessSelectedVHD(selectedVHD);
+                        }
+                        break;
+                }
             }
         }
 
-        private async void CloseButton_Click(object sender, RoutedEventArgs e)
-        {
-            await SafeShutdown();
-        }
+        
 
         protected override void OnClosed(EventArgs e)
         {

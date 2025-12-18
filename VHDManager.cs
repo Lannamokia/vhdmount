@@ -38,9 +38,11 @@ namespace VHDMounter
         public event Action<string> StatusChanged;
         public event Action<FileReplaceProgress> ReplaceProgressChanged;
         public event Action<bool, string> BlockingChanged;
+        public event Action GameCrashed;
+        public event Action GameStarted;
         
-        // 在核心流程中使用的阻塞式状态更新：先显示，再等待指定毫秒数
-        private async Task ShowStatusAndWait(string message, int milliseconds = 2000)
+        // 在核心流程中使用的状态更新：仅写入文件日志，默认不等待
+        private async Task ShowStatusAndWait(string message, int milliseconds = 0)
         {
             try
             {
@@ -48,7 +50,10 @@ namespace VHDMounter
                 System.Diagnostics.Trace.WriteLine($"STATUS: {message}");
             }
             catch { }
-            await Task.Delay(milliseconds);
+            if (milliseconds > 0)
+            {
+                await Task.Delay(milliseconds);
+            }
         }
         
         private static readonly HttpClient httpClient = new HttpClient();
@@ -2047,20 +2052,40 @@ exit";
 
         public async Task MonitorAndRestart(string packagePath)
         {
-            await ShowStatusAndWait("等待15秒后开始监控进程...");
-            await Task.Delay(15000); // 等待15秒
-            
             await ShowStatusAndWait("开始监控目标进程...");
-            
             while (true)
             {
                 if (!IsTargetProcessRunning())
                 {
+                    try { GameCrashed?.Invoke(); } catch { }
                     await ShowStatusAndWait("目标进程未运行，重新启动start_game.bat...");
                     await StartGameBatchFile(packagePath);
-                    await Task.Delay(15000); // 重启后等待15秒
+
+                    // 等待启动到可检测
+                    var startWaitMs = 0;
+                    while (!IsTargetProcessRunning() && startWaitMs < 30000)
+                    {
+                        await Task.Delay(1000);
+                        startWaitMs += 1000;
+                    }
+                    if (IsTargetProcessRunning())
+                    {
+                        // 检测到进程后，等待 5 秒确保游戏窗口已创建并稳定
+                        await ShowStatusAndWait("检测到游戏进程已启动，等待5秒稳定...");
+                        await Task.Delay(5000);
+
+                        // 尝试将游戏窗口前置到前台
+                        var proc = GetFirstTargetProcess();
+                        if (proc != null)
+                        {
+                            FocusProcessWindow(proc);
+                        }
+
+                        // 通知 UI 已成功重启，MainWindow 会在该事件中最小化/隐藏自身
+                        try { GameStarted?.Invoke(); } catch { }
+                        await ShowStatusAndWait("游戏进程已重启并前置");
+                    }
                 }
-                
                 await Task.Delay(1000); // 每秒检查一次
             }
         }
