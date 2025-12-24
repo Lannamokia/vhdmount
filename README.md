@@ -70,7 +70,15 @@ npm start
 VHDMounter.exe
 
 # 或从源码发布
-dotnet publish VHDMounter.csproj --configuration Release --runtime win-x64 --self-contained true
+dotnet publish VHDMounter.csproj \
+  --configuration Release \
+  --runtime win10-x64 \
+  --self-contained true \
+  --output ./publish/win10-x64 \
+  -p:PublishSingleFile=true \
+  -p:IncludeNativeLibrariesForSelfExtract=true \
+  -p:EnableCompressionInSingleFile=true \
+  -p:PublishTrimmed=false
 ```
 
 ## 配置说明
@@ -169,9 +177,10 @@ ProtectionCheckInterval=500
 
 - 工作流：`.github/workflows/build.yml`
   - 触发：`push`、`pull_request`、`release`、`workflow_dispatch`。
-  - 步骤：恢复依赖 → 构建/测试 → 发布 Windows x64/x86 自包含单文件 → 上传构建产物。
+  - 步骤：恢复依赖 → 构建/测试 → 发布 Windows 10 x64 自包含单文件 → 上传构建产物。
   - `release` 事件：打包 ZIP、生成 `CHECKSUMS.md`（SHA256），上传为 Release 资产。
   - 使用 `softprops/action-gh-release@v2` 上传资产，认证采用 `GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}`。
+  - 产物名称与位置：`VHDMounter-win10-x64-{version}`，位于 `publish/win10-x64/`。
 
 建议在工作流顶部声明：
 
