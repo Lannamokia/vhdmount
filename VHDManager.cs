@@ -8,10 +8,10 @@ using System.Threading.Tasks;
 using System.Text.RegularExpressions;
 using System.Net.Http;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text;
 using System.Timers;
 using System.Security.Cryptography;
-using System.Security.Cryptography.X509Certificates;
 using Microsoft.Win32;
 using System.Runtime.InteropServices;
 using Microsoft.Management.Infrastructure;
@@ -29,11 +29,44 @@ namespace VHDMounter
         public double Percentage { get; set; }
     }
 
+    // USB更新清单结构
+    public class UsbManifest
+    {
+        [JsonPropertyName("packageVersion")]
+        public string PackageVersion { get; set; }
+
+        [JsonPropertyName("files")]
+        public List<UsbManifestEntry> Files { get; set; } = new List<UsbManifestEntry>();
+    }
+
+    public class UsbManifestEntry
+    {
+        [JsonPropertyName("fileName")]
+        public string FileName { get; set; }
+
+        [JsonPropertyName("size")]
+        public long Size { get; set; }
+
+        [JsonPropertyName("sha256")]
+        public string Sha256 { get; set; }
+    }
+
     public class VHDManager : IDisposable
     {
         private const string TARGET_DRIVE = "M:";
         private readonly string[] TARGET_KEYWORDS = { "SDEZ", "SDGB", "SDHJ", "SDDT", "SDHD" };
         private readonly string[] PROCESS_KEYWORDS = { "sinmai", "chusanapp", "mu3" };
+        private const string ManifestFileName = "manifest.json";
+        private const string ManifestSignatureFileName = "manifest.sig";
+        private const string EmbeddedManifestPublicKeyPem = @"-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArt/OxGr65r+ZD2xqHEiA
+r/ETcHFRrsbS8YX680qGxHfdBSMrNsgyC02Sbbe055tV5p/NLLzG6dkxB10MVIs2
+BpMcOnON0ihLpIbElk9Xe/ybD+PU5Rln5jLetrz0A3hkbXDLSYoA1X8SyXlBVLtn
+BhOW9MyeyysKtdSwAn6OIbA5FyDEQWUPFW80phP1ISbzFtX/OSKVTOBASJ9vcANe
+QnlnzQ1YpqyemnqLr05cVmsx4WJY5Tfy9BP2HqPNTezYmXfAtFl+H0F5nJd6r8HM
+0fVYnaHWPtke4euZ344PHVCjYvVo/XEh27feTyKB5vBKN7qPOkoVvObTl4Skao9R
+NwIDAQAB
+-----END PUBLIC KEY-----";
 
         public event Action<string> StatusChanged;
         public event Action<FileReplaceProgress> ReplaceProgressChanged;
@@ -304,10 +337,17 @@ namespace VHDMounter
             // Win11兼容性诊断
             DiagnoseWin11Issues();
 
+            if (!TryLoadAndVerifyUsbManifest(usbVhdFiles, out var manifest, out var manifestError))
+            {
+                StatusChanged?.Invoke($"USB更新清单校验失败: {manifestError}");
+                return false;
+            }
+
             bool anyReplaced = false;
             StatusChanged?.Invoke("正在替换本地VHD文件...");
             // 预扫描：构建可替换队列（排除占用或无法准备的项）
             var copyQueue = new List<(string usbFile, string localFile, string destPath)>();
+            var validationCache = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
             foreach (var usbFile in usbVhdFiles)
             {
                 string usbFileName = Path.GetFileName(usbFile);
@@ -329,6 +369,21 @@ namespace VHDMounter
                 {
                     try
                     {
+                        if (!validationCache.TryGetValue(usbFile, out var isValid))
+                        {
+                            isValid = TryValidateUsbFileAgainstManifest(usbFile, manifest, out var verifyError);
+                            validationCache[usbFile] = isValid;
+                            if (!isValid)
+                            {
+                                StatusChanged?.Invoke($"USB文件校验失败: {Path.GetFileName(usbFile)} - {verifyError}");
+                                return false;
+                            }
+                        }
+                        else if (!isValid)
+                        {
+                            return false;
+                        }
+
                         var localFileInfo = new FileInfo(localFile);
                         var usbFileInfo = new FileInfo(usbFile);
                         Debug.WriteLine($"本地文件属性: {localFileInfo.Attributes}, 只读: {localFileInfo.IsReadOnly}");
@@ -371,34 +426,42 @@ namespace VHDMounter
                 var item = copyQueue[i];
                 try
                 {
-                    // 删除本地文件
-                    StatusChanged?.Invoke($"正在删除本地文件: {Path.GetFileName(item.localFile)}");
-                    if (File.Exists(item.localFile))
-                        File.Delete(item.localFile);
-
-                    int retryCount = 0;
-                    while (File.Exists(item.localFile) && retryCount < 10)
-                    {
-                        await Task.Delay(100);
-                        retryCount++;
-                    }
-
-                    if (File.Exists(item.localFile))
-                    {
-                        StatusChanged?.Invoke($"删除文件失败，文件仍然存在: {Path.GetFileName(item.localFile)}");
-                        continue;
-                    }
-
-                    // 复制（带进度）
+                    var tempPath = item.destPath + ".tmp";
                     StatusChanged?.Invoke($"正在复制: {Path.GetFileName(item.usbFile)} -> {Path.GetFileName(item.destPath)}");
-                    await CopyFileWithProgressAsync(item.usbFile, item.destPath, i + 1, copyQueue.Count);
+                    await CopyFileWithProgressAsync(item.usbFile, tempPath, i + 1, copyQueue.Count);
 
                     // 验证大小
                     var usbFileInfo = new FileInfo(item.usbFile);
-                    var newFileInfo = new FileInfo(item.destPath);
+                    var newFileInfo = new FileInfo(tempPath);
                     if (newFileInfo.Length != usbFileInfo.Length)
                     {
                         StatusChanged?.Invoke($"警告: 文件大小不匹配 - 原始: {usbFileInfo.Length}, 复制后: {newFileInfo.Length}");
+                    }
+
+                    if (File.Exists(item.destPath))
+                    {
+                        if (!PrepareFileForReplacement(item.destPath))
+                        {
+                            StatusChanged?.Invoke($"无法准备目标文件进行替换: {Path.GetFileName(item.destPath)}");
+                            File.Delete(tempPath);
+                            continue;
+                        }
+                        var backupPath = item.destPath + ".bak";
+                        File.Replace(tempPath, item.destPath, backupPath, true);
+                        if (File.Exists(backupPath))
+                            File.Delete(backupPath);
+                    }
+                    else
+                    {
+                        File.Move(tempPath, item.destPath, true);
+                    }
+
+                    if (!string.Equals(item.localFile, item.destPath, StringComparison.OrdinalIgnoreCase) && File.Exists(item.localFile))
+                    {
+                        if (PrepareFileForReplacement(item.localFile))
+                        {
+                            File.Delete(item.localFile);
+                        }
                     }
 
                     anyReplaced = true;
@@ -435,6 +498,12 @@ namespace VHDMounter
                     return false;
                 }
 
+                if (!TryLoadAndVerifyUsbManifest(usbVhdFiles, out var manifest, out var manifestError))
+                {
+                    StatusChanged?.Invoke($"USB更新清单校验失败: {manifestError}");
+                    return false;
+                }
+
                 // Win11兼容性诊断
                 DiagnoseWin11Issues();
 
@@ -449,10 +518,26 @@ namespace VHDMounter
 
                 // 构建复制队列（目标为根目录，按文件名放置）
                 var copyQueue = new List<(string usbFile, string destPath)>();
+                var validationCache = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
                 foreach (var usbFile in usbVhdFiles)
                 {
                     try
                     {
+                        if (!validationCache.TryGetValue(usbFile, out var isValid))
+                        {
+                            isValid = TryValidateUsbFileAgainstManifest(usbFile, manifest, out var verifyError);
+                            validationCache[usbFile] = isValid;
+                            if (!isValid)
+                            {
+                                StatusChanged?.Invoke($"USB文件校验失败: {System.IO.Path.GetFileName(usbFile)} - {verifyError}");
+                                return false;
+                            }
+                        }
+                        else if (!isValid)
+                        {
+                            return false;
+                        }
+
                         var name = System.IO.Path.GetFileName(usbFile);
                         var destPath = System.IO.Path.Combine(rootPath, name);
 
@@ -495,15 +580,34 @@ namespace VHDMounter
                     var item = copyQueue[i];
                     try
                     {
+                        var tempPath = item.destPath + ".tmp";
                         StatusChanged?.Invoke($"正在复制: {System.IO.Path.GetFileName(item.usbFile)} -> {System.IO.Path.GetFileName(item.destPath)}");
-                        await CopyFileWithProgressAsync(item.usbFile, item.destPath, i + 1, copyQueue.Count);
+                        await CopyFileWithProgressAsync(item.usbFile, tempPath, i + 1, copyQueue.Count);
 
                         // 验证大小
                         var usbInfo = new System.IO.FileInfo(item.usbFile);
-                        var newInfo = new System.IO.FileInfo(item.destPath);
+                        var newInfo = new System.IO.FileInfo(tempPath);
                         if (newInfo.Length != usbInfo.Length)
                         {
                             StatusChanged?.Invoke($"警告: 文件大小不匹配 - 原始: {usbInfo.Length}, 复制后: {newInfo.Length}");
+                        }
+
+                        if (System.IO.File.Exists(item.destPath))
+                        {
+                            if (!PrepareFileForReplacement(item.destPath))
+                            {
+                                StatusChanged?.Invoke($"无法准备目标文件进行替换: {System.IO.Path.GetFileName(item.destPath)}");
+                                System.IO.File.Delete(tempPath);
+                                continue;
+                            }
+                            var backupPath = item.destPath + ".bak";
+                            System.IO.File.Replace(tempPath, item.destPath, backupPath, true);
+                            if (System.IO.File.Exists(backupPath))
+                                System.IO.File.Delete(backupPath);
+                        }
+                        else
+                        {
+                            System.IO.File.Move(tempPath, item.destPath, true);
                         }
 
                         anyCopied = true;
@@ -590,6 +694,145 @@ namespace VHDMounter
                     return keyword;
             }
             return string.Empty;
+        }
+
+        private bool TryLoadAndVerifyUsbManifest(List<string> usbVhdFiles, out UsbManifest manifest, out string errorMessage)
+        {
+            manifest = null;
+            errorMessage = string.Empty;
+
+            if (usbVhdFiles == null || usbVhdFiles.Count == 0)
+            {
+                errorMessage = "USB文件列表为空";
+                return false;
+            }
+
+            var usbRoot = Path.GetPathRoot(usbVhdFiles[0]);
+            if (string.IsNullOrWhiteSpace(usbRoot))
+            {
+                errorMessage = "无法获取USB根目录";
+                return false;
+            }
+
+            var manifestPath = Path.Combine(usbRoot, ManifestFileName);
+            var signaturePath = Path.Combine(usbRoot, ManifestSignatureFileName);
+            if (!File.Exists(manifestPath) || !File.Exists(signaturePath))
+            {
+                errorMessage = "缺少manifest.json或manifest.sig";
+                return false;
+            }
+
+            byte[] manifestBytes;
+            byte[] signatureBytes;
+            try
+            {
+                manifestBytes = File.ReadAllBytes(manifestPath);
+                signatureBytes = File.ReadAllBytes(signaturePath);
+            }
+            catch (Exception ex)
+            {
+                errorMessage = $"读取清单文件失败: {ex.Message}";
+                return false;
+            }
+
+            if (!VerifyManifestSignature(manifestBytes, signatureBytes, out var verifyError))
+            {
+                errorMessage = $"清单签名无效: {verifyError}";
+                return false;
+            }
+
+            try
+            {
+                var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                manifest = JsonSerializer.Deserialize<UsbManifest>(manifestBytes, options);
+                if (manifest == null || manifest.Files == null || manifest.Files.Count == 0)
+                {
+                    errorMessage = "清单内容为空或格式不正确";
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                errorMessage = $"解析清单失败: {ex.Message}";
+                return false;
+            }
+
+            return true;
+        }
+
+        private bool VerifyManifestSignature(byte[] manifestBytes, byte[] signatureBytes, out string errorMessage)
+        {
+            errorMessage = string.Empty;
+            try
+            {
+                using (var rsa = RSA.Create())
+                {
+                    rsa.ImportFromPem(EmbeddedManifestPublicKeyPem);
+                    var isValid = rsa.VerifyData(manifestBytes, signatureBytes, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+                    if (!isValid)
+                    {
+                        errorMessage = "签名校验失败";
+                    }
+                    return isValid;
+                }
+            }
+            catch (Exception ex)
+            {
+                errorMessage = ex.Message;
+                return false;
+            }
+        }
+
+        private bool TryValidateUsbFileAgainstManifest(string usbFile, UsbManifest manifest, out string errorMessage)
+        {
+            errorMessage = string.Empty;
+            try
+            {
+                var fileName = Path.GetFileName(usbFile);
+                var entry = manifest.Files.FirstOrDefault(f => string.Equals(f.FileName, fileName, StringComparison.OrdinalIgnoreCase));
+                if (entry == null)
+                {
+                    errorMessage = "清单中未找到对应文件";
+                    return false;
+                }
+
+                var fileInfo = new FileInfo(usbFile);
+                if (!fileInfo.Exists)
+                {
+                    errorMessage = "USB文件不存在";
+                    return false;
+                }
+
+                if (entry.Size != fileInfo.Length)
+                {
+                    errorMessage = $"文件大小不匹配，清单大小: {entry.Size}，实际大小: {fileInfo.Length}";
+                    return false;
+                }
+
+                var hash = ComputeFileSha256Hex(usbFile);
+                if (!string.Equals(hash, entry.Sha256, StringComparison.OrdinalIgnoreCase))
+                {
+                    errorMessage = "SHA-256校验失败";
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                errorMessage = $"校验文件失败: {ex.Message}";
+                return false;
+            }
+
+            return true;
+        }
+
+        private string ComputeFileSha256Hex(string filePath)
+        {
+            using (var sha256 = SHA256.Create())
+            using (var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                var hash = sha256.ComputeHash(stream);
+                return Convert.ToHexString(hash);
+            }
         }
         
         // 检查文件是否被占用
