@@ -90,7 +90,7 @@ namespace UpdatePackagerGUI
                 var payloadDir = PayloadDir.Text;
                 var outDir = string.IsNullOrWhiteSpace(ManifestOutDir.Text) ? "." : ManifestOutDir.Text;
                 var type = ((System.Windows.Controls.ComboBoxItem)TypeBox.SelectedItem).Content?.ToString() ?? "app-update";
-                var minVersion = string.IsNullOrWhiteSpace(MinVersionBox.Text) ? "1.0.0" : MinVersionBox.Text;
+                var minVersion = string.IsNullOrWhiteSpace(MinVersionBox.Text) ? "1.5.0" : MinVersionBox.Text;
                 var version = string.IsNullOrWhiteSpace(VersionBox.Text) ? DateTime.UtcNow.ToString("yyyy.MM.dd.HHmmss") : VersionBox.Text;
                 var created = DateTime.UtcNow;
                 var createdStr = created.ToString("o");

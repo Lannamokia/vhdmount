@@ -71,7 +71,7 @@
                 </ComboBox>
 
                 <TextBlock Grid.Row="8" Text="最小版本" VerticalAlignment="Center"/>
-                <TextBox x:Name="MinVersionBox" Grid.Row="8" Grid.Column="1" Margin="8,0" Text="1.2.0"/>
+                <TextBox x:Name="MinVersionBox" Grid.Row="8" Grid.Column="1" Margin="8,0" Text="1.5.0"/>
 
                 <TextBlock Grid.Row="10" Text="版本" VerticalAlignment="Center"/>
                 <TextBox x:Name="VersionBox" Grid.Row="10" Grid.Column="1" Margin="8,0"/>
