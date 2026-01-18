@@ -15,7 +15,10 @@ jobs:
         with:
           dotnet-version: 6.0.x
       - name: Restore
-        run: dotnet restore
+        run: |
+          dotnet restore ./VHDMounter.csproj
+          dotnet restore ./Updater/Updater.csproj
+          dotnet restore ./UpdatePackagerGUI/UpdatePackagerGUI.csproj
         shell: pwsh
       - name: Publish VHDMounter
         run: dotnet publish ./VHDMounter.csproj -c Release -r win10-x64
