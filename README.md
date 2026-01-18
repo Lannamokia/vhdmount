@@ -1,6 +1,31 @@
 # VHD Mounter & VHDSelectServer
 
-当前版本：`v1.4.0`
+当前版本：`v1.5.0`
+
+## 1.5.0 新增功能
+
+- 离线更新体系全面落地  
+  - 介质：USB/NX_INS 根目录直接分发；manifest.json + manifest.sig 与实际更新文件并列放置  
+  - 验签：RSA‑PSS/SHA‑256，公钥固定在 trusted_keys.pem  
+  - 时效：清单包含 createdAt/expiresAt，主程序更新如过期（>3天）则拒绝更新
+- 自更新流程强化  
+  - 主程序验签通过后退出，由辅助更新器 Updater 完成文件替换  
+  - Updater 支持管理员自我提升（runas）、切换到主程序目录后拉起 VHDMounter.exe  
+  - 替换失败则延迟到重启生效；成功时自动拉起主程序
+- 版本阈值与更新标记  
+  - Updater 通过 update_done.flag 内容记录 manifest.version  
+  - 阈值规则：存在 flag 时比较 localVersion 与 minVersion（local>min→拒绝；local=min→跳过；local<min→更新）；无 flag 视为 local<min，直接更新  
+  - 主程序启动前置判断：当 flag 版本 >= manifest.version 时不拉起 Updater，直接继续启动
+- 新增清单与打包器   
+  - 生成 createdAt/expiresAt，默认 minVersion 统一提升为 1.5.0  
+  - 使用 RSA‑PSS/SHA‑256 对清单签名
+  - 支持快速生成签名密钥对和供机台读取的trusted_keys.pem
+- 资源更新逻辑优化  
+  - resource_version.tag 缺失时直接触发更新，更新完成后写入 manifest.version  
+  - 当存在 tag 时按 minVersion 做阈值判定（local>min 拒绝；local=min 跳过；local<min 更新）
+- 日志  
+  - 新增 Updater 文件日志 `updater.log`，10MB 循环覆盖；关键步骤（验签、时效、阈值、替换、拉起）均记录  
+  - 主程序日志策略保持：`vhdmounter.log` 文件记录，支持 NXLOG 设备拷贝
 
 一套完整的街机游戏 VHD 管理与远程控制解决方案：包含 Windows 客户端（VHD Mounter）与配套 Web 服务（VHDSelectServer）。支持集中化配置、机台保护、EVHD 密码管理以及自动构建发布。
 
@@ -11,11 +36,24 @@
   - 进程保活与异常重启（`sinmai`、`chusanapp`、`mu3`）。
   - 远程 VHD 关键词获取与机台保护状态查询。
   - 可选 USB 文件优先替换，带总进度与当前文件进度显示。
+  - 自更新前置判断：`update_done.flag` 版本 ≥ 清单 `version` 则跳过自更新，直接继续启动。
 
 - VHDSelectServer（Web 服务）
   - Web GUI 管理、RESTful API、健康检查与会话认证。
   - 机台管理（VHD 关键词、EVHD 密码、保护状态）。
   - Docker 单容器内置 PostgreSQL 或外部数据库模式（通过环境变量切换）。
+
+- Updater（辅助更新器）
+  - 完成主程序文件替换；支持管理员自我提升（runas）。
+  - 替换失败时延迟到重启生效；成功时在主程序目录拉起 `VHDMounter.exe`。
+  - 写入 `update_done.flag = manifest.version`；按阈值规则记录并决策更新（local>min 拒绝、等于跳过、小于更新；无 flag 视为小于）。
+  - 文件日志 `updater.log`，10MB 循环覆盖；仅记录不自动拷贝到设备。
+
+- UpdatePackagerGUI（离线打包器）
+  - 生成 `manifest.json` 与 `manifest.sig`（RSA‑PSS/SHA‑256 签名）。
+  - 支持快速生成签名密钥对和供机台读取的 `trusted_keys.pem`。
+  - 路径规则：`app-update` 使用相对路径；`vhd-data` 使用文件名。
+  - 清单包含 `createdAt/expiresAt`（默认有效期 3 天），默认 `minVersion=1.5.0`。
 
 ## 项目结构
 
@@ -28,10 +66,18 @@ vhdmount/
 │   ├── Dockerfile                # 镜像构建（含内置 DB）
 │   ├── docker-entrypoint.sh      # 容器入口与 DB 初始化
 │   └── init-db.sql               # 表结构初始化
+├── Updater/                      # 辅助更新器（自我提升、替换与重启主程序）
+│   └── Program.cs
+├── UpdatePackagerGUI/            # 离线打包器（WPF）
+│   ├── MainWindow.xaml           # 打包与签名界面
+│   └── MainWindow.xaml.cs        # 打包逻辑（RSA‑PSS签名）
 ├── VHDMounter.csproj             # .NET 6 WPF 客户端
 ├── VHDManager.cs                 # 客户端核心逻辑
 ├── Program.cs                    # 单实例入口
 ├── vhdmonter_config.ini          # 客户端配置
+├── build.bat                     # 本地构建脚本（生成自包含单文件并复制到 single 目录）
+├── run_as_admin.bat              # 管理员运行辅助脚本
+├── single/                       # 打包输出（VHDMounter.exe、Updater.exe、UpdatePackagerGUI.exe）
 └── .github/workflows/build.yml   # CI 构建与发布
 ```
 
@@ -80,6 +126,24 @@ dotnet publish VHDMounter.csproj \
   -p:EnableCompressionInSingleFile=true \
   -p:PublishTrimmed=false
 ```
+
+### VHDMounter离线更新与自更新
+
+1. 使用 UpdatePackagerGUI：
+   - 选择 payload 目录（更新内容），类型 `app-update` 或 `vhd-data`。
+   - 设置 `minVersion`（默认已设为 `1.5.0`）与 `version`。
+   - 生成 `manifest.json` 与 `manifest.sig`（RSA‑PSS/SHA‑256）。
+2. 分发：
+   - 将 `manifest.json`、`manifest.sig` 与实际更新文件一起置于 `NX_INS` 驱动器根目录。
+   - 确保主程序目录存在可信公钥列表 `trusted_keys.pem`。
+3. 运行：
+   - 主程序验签通过且清单未过期（≤3 天）后，判断 `update_done.flag` 与清单版本：
+     - `flag >= manifest.version`：跳过自更新，直接启动；
+     - 否则复制清单与文件到 `staging` 并拉起 Updater。
+   - Updater 完成替换，写入 `update_done.flag = manifest.version`，若未延迟则以管理员在主程序目录拉起 `VHDMounter.exe`。
+4. 注意：
+   - 过期清单（>3 天）直接拒绝更新；
+   - 存在 `update_done.flag` 时按 `localVersion` 与 `minVersion` 阈值判定（local>min 拒绝、等于跳过、小于更新）；无 flag 视为小于直接更新。
 
 ## 配置说明
 
@@ -170,6 +234,7 @@ ProtectionCheckInterval=500
 - 位置：应用目录 `vhdmounter.log`。
 - 循环覆盖：超过 10MB 自动截断至 0 并从头继续写入，保留最新日志。
 - 设备拷贝：运行时每 5 秒检测卷标为 `NXLOG` 的可移动设备；若存在且日志更新，则复制到设备根目录 `NXLOG:\vhdmounter.log`。每个设备独立记录上次复制时间，避免重复覆盖。
+- Updater 日志：应用目录 `updater.log`，10MB 循环覆盖；仅记录，不自动拷贝到设备。
 
 备注：日志仅采用文件记录，UI 展示简洁的阶段性提示。
 
@@ -188,6 +253,13 @@ ProtectionCheckInterval=500
 permissions:
   contents: write
 ```
+
+### 本地构建脚本
+
+- 运行 `build.bat` 执行编译与发布，完成后生成自包含单文件并复制到 `single` 目录：
+  - `single\VHDMounter.exe`
+  - `single\Updater.exe`
+  - `single\UpdatePackagerGUI.exe`
 
 ## 故障排除
 
