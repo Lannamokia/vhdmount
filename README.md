@@ -27,7 +27,7 @@
   - 新增 Updater 文件日志 `updater.log`，10MB 循环覆盖；关键步骤（验签、时效、阈值、替换、拉起）均记录  
   - 主程序日志策略保持：`vhdmounter.log` 文件记录，支持 NXLOG 设备拷贝
 
-一套完整的街机游戏 VHD 管理与远程控制解决方案：包含 Windows 客户端（VHD Mounter）与配套 Web 服务（VHDSelectServer）。支持集中化配置、机台保护、EVHD 密码管理以及自动构建发布。
+### 一套完整的街机游戏 VHD 管理与远程控制解决方案：包含 Windows 客户端（VHD Mounter）与配套 Web 服务（VHDSelectServer）。支持集中化配置、机台保护、EVHD 密码管理以及自动构建发布。
 
 ## 组件概览
 

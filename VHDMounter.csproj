@@ -38,4 +38,11 @@
     <None Include="UpdatePackagerGUI\**\*.xaml" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="vhdmonter_config.ini">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Always</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>

@@ -6,6 +6,8 @@ on:
     tags:
       - "*"
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   windows:
     runs-on: windows-latest
@@ -29,15 +31,45 @@ jobs:
       - name: Publish UpdatePackagerGUI
         run: dotnet publish ./UpdatePackagerGUI/UpdatePackagerGUI.csproj -c Release -r win10-x64
         shell: pwsh
-      - name: Collect single
+      - name: Zip artifacts
         run: |
-          New-Item -ItemType Directory -Force -Path ./single | Out-Null
-          Copy-Item -Force ./bin/Release/net6.0-windows/win10-x64/publish/VHDMounter.exe ./single/VHDMounter.exe
-          Copy-Item -Force ./Updater/bin/Release/net6.0-windows/win10-x64/publish/Updater.exe ./single/Updater.exe
-          Copy-Item -Force ./UpdatePackagerGUI/bin/Release/net6.0-windows/win10-x64/publish/UpdatePackagerGUI.exe ./single/UpdatePackagerGUI.exe
+          New-Item -ItemType Directory -Force -Path ./artifacts | Out-Null
+          Compress-Archive -Path ./bin/Release/net6.0-windows/win10-x64/publish -DestinationPath ./artifacts/VHDMounter-win10-x64.zip -Force
+          Compress-Archive -Path ./Updater/bin/Release/net6.0-windows/win10-x64/publish -DestinationPath ./artifacts/Updater-win10-x64.zip -Force
+          Compress-Archive -Path ./UpdatePackagerGUI/bin/Release/net6.0-windows/win10-x64/publish -DestinationPath ./artifacts/UpdatePackagerGUI-win10-x64.zip -Force
         shell: pwsh
-      - name: Upload artifact
+      - name: Upload VHDMounter artifact
         uses: actions/upload-artifact@v4
         with:
-          name: single-win10-x64
-          path: single
+          name: VHDMounter-win10-x64
+          path: artifacts/VHDMounter-win10-x64.zip
+      - name: Upload Updater artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Updater-win10-x64
+          path: artifacts/Updater-win10-x64.zip
+      - name: Upload UpdatePackagerGUI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UpdatePackagerGUI-win10-x64
+          path: artifacts/UpdatePackagerGUI-win10-x64.zip
+      - name: Generate checksums
+        run: |
+          $out = "./artifacts/CHECKSUMS.sha256"
+          if (Test-Path $out) { Remove-Item -Force $out }
+          Get-ChildItem ./artifacts/*.zip | ForEach-Object {
+            $hash = Get-FileHash $_.FullName -Algorithm SHA256
+            "$($hash.Hash)  $($_.Name)" | Add-Content $out
+          }
+        shell: pwsh
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/VHDMounter-win10-x64.zip
+            artifacts/Updater-win10-x64.zip
+            artifacts/UpdatePackagerGUI-win10-x64.zip
+            artifacts/CHECKSUMS.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -19,10 +19,12 @@ if %ERRORLEVEL% EQU 0 (
         echo Publish succeeded!
         if not exist .\single mkdir .\single
         copy /Y .\bin\Release\net6.0-windows\win10-x64\publish\VHDMounter.exe .\single\VHDMounter.exe >nul
+        copy /Y .\bin\Release\net6.0-windows\win10-x64\publish\vhdmonter_config.ini .\single\vhdmonter_config.ini >nul
         copy /Y .\Updater\bin\Release\net6.0-windows\win10-x64\publish\Updater.exe .\single\Updater.exe >nul
         copy /Y .\UpdatePackagerGUI\bin\Release\net6.0-windows\win10-x64\publish\UpdatePackagerGUI.exe .\single\UpdatePackagerGUI.exe >nul
         echo Output to single directory:
         echo   single\VHDMounter.exe
+        echo   single\vhdmonter_config.ini
         echo   single\Updater.exe
         echo   single\UpdatePackagerGUI.exe
         echo.
