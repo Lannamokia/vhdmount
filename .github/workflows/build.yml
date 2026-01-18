@@ -1,149 +1,40 @@
-name: Build VHD Mounter (win10-x64 single-file)
-
-permissions:
-  contents: write
-  
+name: build
 on:
   push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
-  release:
-    types: [ published ]
+    branches:
+      - main
+    tags:
+      - "*"
   workflow_dispatch:
-
-env:
-  DOTNET_VERSION: '6.0.x'
-  BUILD_CONFIGURATION: 'Release'
-
 jobs:
-  build:
+  windows:
     runs-on: windows-latest
-    
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-    
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-      
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: ${{ env.DOTNET_VERSION }}
-        
-    - name: Get version
-      id: version
-      run: |
-        $version = "1.2.1"
-        if ($env:GITHUB_REF -like "refs/tags/*") {
-          $version = $env:GITHUB_REF -replace "refs/tags/v?", ""
-        } elseif ($env:GITHUB_EVENT_NAME -eq "pull_request") {
-          $version = "$version-pr${{ github.event.number }}"
-        } else {
-          $shortSha = $env:GITHUB_SHA.Substring(0, 7)
-          $version = "$version-alpha$shortSha"
-        }
-        echo "version=$version" >> $env:GITHUB_OUTPUT
-        echo "Version: $version"
-        
-    - name: Cache NuGet packages
-      uses: actions/cache@v4
-      with:
-        path: ~/.nuget/packages
-        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
-        restore-keys: |
-          ${{ runner.os }}-nuget-
-        
-    - name: Restore dependencies
-      run: dotnet restore VHDMounter.csproj --verbosity minimal
-      
-    - name: Build
-      run: dotnet build VHDMounter.csproj --configuration ${{ env.BUILD_CONFIGURATION }} --no-restore --verbosity minimal
-      
-    - name: Test
-      run: |
-        if (Test-Path "*Tests*.csproj") {
-          dotnet test VHDMounter.csproj --configuration ${{ env.BUILD_CONFIGURATION }} --no-build --verbosity normal --logger trx --results-directory TestResults
-        } else {
-          Write-Host "No test projects found, skipping tests"
-          New-Item -ItemType Directory -Force -Path TestResults
-          Write-Host "Created empty TestResults directory"
-        }
-      continue-on-error: true
-      
-    - name: Publish Test Results
-      uses: dorny/test-reporter@v1
-      if: always() && hashFiles('TestResults/*.trx') != ''
-      with:
-        name: Test Results
-        path: TestResults/*.trx
-        reporter: dotnet-trx
-        fail-on-error: false
-      
-    - name: Publish Windows 10 x64 (single-file, self-contained)
-      run: |
-        dotnet publish VHDMounter.csproj `
-          --configuration ${{ env.BUILD_CONFIGURATION }} `
-          --runtime win10-x64 `
-          --self-contained true `
-          --output ./publish/win10-x64 `
-          -p:PublishSingleFile=true `
-          -p:IncludeNativeLibrariesForSelfExtract=true `
-          -p:EnableCompressionInSingleFile=true `
-          -p:PublishTrimmed=false `
-          -p:Version=${{ steps.version.outputs.version }}
-        
-        # Copy configuration file
-        Copy-Item "vhdmonter_config.ini" "./publish/win10-x64/" -Force
-
-    - name: Upload Windows 10 x64 artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: VHDMounter-win10-x64-${{ steps.version.outputs.version }}
-        path: ./publish/win10-x64/
-        retention-days: 30
-        
-    - name: Create Release Assets
-      if: github.event_name == 'release'
-      run: |
-        $version = "${{ steps.version.outputs.version }}"
-        Compress-Archive -Path ./publish/win10-x64/* -DestinationPath "VHDMounter-v$version-win10-x64.zip" -Force
-        
-        # Create checksums
-        $x64Hash = (Get-FileHash "VHDMounter-v$version-win10-x64.zip" -Algorithm SHA256).Hash
-        
-        @"
-        # VHD Mounter v$version - Checksums
-        
-        ## SHA256 Checksums
-        
-        - **VHDMounter-v$version-win10-x64.zip**: `$x64Hash`
-        
-        ## Installation
-        
-        1. Download the Windows 10 x64 package
-        2. Extract the ZIP file
-        3. Run `run_as_admin.bat` to start the application with administrator privileges
-        
-        ## Requirements
-        
-        - Windows 10/11 x64
-        - Administrator privileges (required for VHD mounting)
-        - .NET 6.0 Runtime (included in self-contained builds)
-        "@ | Out-File -FilePath "CHECKSUMS.md" -Encoding UTF8
-        
-    - name: Upload Release Assets
-      if: github.event_name == 'release'
-      uses: softprops/action-gh-release@v2
-      with:
-        files: |
-          VHDMounter-v${{ steps.version.outputs.version }}-win10-x64.zip
-          CHECKSUMS.md
-        generate_release_notes: true
-        draft: false
-        prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 6.0.x
+      - name: Restore
+        run: dotnet restore
+        shell: pwsh
+      - name: Publish VHDMounter
+        run: dotnet publish ./VHDMounter.csproj -c Release -r win10-x64
+        shell: pwsh
+      - name: Publish Updater
+        run: dotnet publish ./Updater/Updater.csproj -c Release -r win10-x64
+        shell: pwsh
+      - name: Publish UpdatePackagerGUI
+        run: dotnet publish ./UpdatePackagerGUI/UpdatePackagerGUI.csproj -c Release -r win10-x64
+        shell: pwsh
+      - name: Collect single
+        run: |
+          New-Item -ItemType Directory -Force -Path ./single | Out-Null
+          Copy-Item -Force ./bin/Release/net6.0-windows/win10-x64/publish/VHDMounter.exe ./single/VHDMounter.exe
+          Copy-Item -Force ./Updater/bin/Release/net6.0-windows/win10-x64/publish/Updater.exe ./single/Updater.exe
+          Copy-Item -Force ./UpdatePackagerGUI/bin/Release/net6.0-windows/win10-x64/publish/UpdatePackagerGUI.exe ./single/UpdatePackagerGUI.exe
+        shell: pwsh
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: single-win10-x64
+          path: single

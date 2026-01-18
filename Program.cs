@@ -5,6 +5,9 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Security.Cryptography;
+using System.Text.Json;
+using System.Globalization;
 
 namespace VHDMounter
 {
@@ -175,6 +178,19 @@ namespace VHDMounter
                     return null;
                 };
 
+                var selfUpdated = TryPerformSelfUpdateFromUsb();
+                if (selfUpdated)
+                {
+                    try
+                    {
+                        cts.Cancel();
+                        fileListener.Flush();
+                        fileListener.Close();
+                    }
+                    catch { }
+                    return;
+                }
+
                 var app = new Application();
                 var mainWindow = new MainWindow();
                 app.Run(mainWindow);
@@ -186,6 +202,116 @@ namespace VHDMounter
                     fileListener.Close();
                 }
                 catch { }
+            }
+        }
+
+        private static bool TryPerformSelfUpdateFromUsb()
+        {
+            try
+            {
+                var baseDir = AppContext.BaseDirectory;
+                var trustedKeys = Path.Combine(baseDir, "trusted_keys.pem");
+                if (!File.Exists(trustedKeys)) return false;
+                var nx = DriveInfo.GetDrives().FirstOrDefault(d => d.IsReady && d.DriveType == DriveType.Removable && string.Equals(d.VolumeLabel, "NX_INS", StringComparison.OrdinalIgnoreCase));
+                if (nx == null) return false;
+                var root = nx.RootDirectory.FullName;
+                var candidates = new[]
+                {
+                    Path.Combine(root, "manifest.json"),
+                    Path.Combine(root, "updates", "manifest.json")
+                };
+                string manifestPath = candidates.FirstOrDefault(File.Exists);
+                if (string.IsNullOrEmpty(manifestPath)) return false;
+                var sigPath = Path.Combine(Path.GetDirectoryName(manifestPath) ?? root, "manifest.sig");
+                if (!File.Exists(sigPath)) return false;
+                var ok = UpdateSecurity.VerifyManifestSignature(manifestPath, sigPath, trustedKeys);
+                if (!ok) return false;
+                var manifest = UpdateSecurity.LoadManifest(manifestPath);
+                if (!string.Equals(manifest.type, "app-update", StringComparison.OrdinalIgnoreCase)) return false;
+                DateTime now = DateTime.UtcNow;
+                DateTime exp;
+                if (!string.IsNullOrWhiteSpace(manifest.expiresAt) && DateTime.TryParse(manifest.expiresAt, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var e))
+                {
+                    exp = e;
+                }
+                else if (DateTime.TryParse(manifest.createdAt, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var c))
+                {
+                    exp = c.AddDays(3);
+                }
+                else
+                {
+                    return false;
+                }
+                if (now > exp) return false;
+                try
+                {
+                    var flagPath = Path.Combine(baseDir, "update_done.flag");
+                    if (File.Exists(flagPath))
+                    {
+                        var localVersion = File.ReadAllText(flagPath).Trim();
+                        var cmp = string.Compare(localVersion ?? "", manifest.version ?? "", StringComparison.Ordinal);
+                        if (cmp >= 0)
+                        {
+                            Trace.WriteLine($"跳过自更新：update_done.flag({localVersion}) >= manifest.version({manifest.version})");
+                            return false;
+                        }
+                    }
+                }
+                catch { }
+                var staging = Path.Combine(baseDir, "staging");
+                if (!Directory.Exists(staging)) Directory.CreateDirectory(staging);
+                foreach (var f in manifest.files)
+                {
+                    var src = Path.Combine(Path.GetDirectoryName(manifestPath) ?? root, f.path.Replace('/', Path.DirectorySeparatorChar));
+                    if (!UpdateSecurity.VerifyFileHash(src, f.sha256, f.size)) return false;
+                    var dest = Path.Combine(staging, f.path.Replace('/', Path.DirectorySeparatorChar));
+                    var destDir = Path.GetDirectoryName(dest) ?? staging;
+                    if (!Directory.Exists(destDir)) Directory.CreateDirectory(destDir);
+                    using var srcFs = new FileStream(src, FileMode.Open, FileAccess.Read, FileShare.Read);
+                    using var dstFs = new FileStream(dest, FileMode.Create, FileAccess.Write, FileShare.None);
+                    srcFs.CopyTo(dstFs);
+                    dstFs.Flush(true);
+                }
+                var stagingManifest = Path.Combine(staging, "manifest.json");
+                var stagingSig = Path.Combine(staging, "manifest.sig");
+                File.Copy(manifestPath, stagingManifest, true);
+                File.Copy(sigPath, stagingSig, true);
+                var updaterExe = Path.Combine(baseDir, "Updater.exe");
+                var updaterDll = Path.Combine(baseDir, "Updater.dll");
+                ProcessStartInfo psi;
+                if (File.Exists(updaterExe))
+                {
+                    psi = new ProcessStartInfo
+                    {
+                        FileName = updaterExe,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    };
+                }
+                else if (File.Exists(updaterDll))
+                {
+                    psi = new ProcessStartInfo
+                    {
+                        FileName = "dotnet",
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    };
+                    psi.ArgumentList.Add(updaterDll);
+                }
+                else
+                {
+                    return false;
+                }
+                psi.ArgumentList.Add("--manifest");
+                psi.ArgumentList.Add(stagingManifest);
+                psi.ArgumentList.Add("--pid");
+                psi.ArgumentList.Add(Environment.ProcessId.ToString());
+                var p = Process.Start(psi);
+                return true;
+            }
+            catch
+            {
+                return false;
             }
         }
     }

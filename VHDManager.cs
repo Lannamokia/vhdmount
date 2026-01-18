@@ -304,6 +304,8 @@ namespace VHDMounter
             // Win11兼容性诊断
             DiagnoseWin11Issues();
 
+            var usbRoot = Path.GetPathRoot(usbVhdFiles[0]);
+            UpdateManifest manifest = TryLoadVhdDataManifest(usbRoot);
             bool anyReplaced = false;
             StatusChanged?.Invoke("正在替换本地VHD文件...");
             // 预扫描：构建可替换队列（排除占用或无法准备的项）
@@ -365,6 +367,47 @@ namespace VHDMounter
                 return false;
             }
 
+            if (manifest != null)
+            {
+                try
+                {
+                    var rootPath = Path.GetPathRoot(copyQueue[0].destPath);
+                    var tagPath = System.IO.Path.Combine(rootPath ?? "", "resource_version.tag");
+                    string localVersion = null;
+                    bool tagExists = false;
+                    if (!string.IsNullOrEmpty(rootPath))
+                    {
+                        try
+                        {
+                            tagExists = System.IO.File.Exists(tagPath);
+                            if (tagExists) localVersion = System.IO.File.ReadAllText(tagPath).Trim();
+                        }
+                        catch { }
+                    }
+                    if (tagExists)
+                    {
+                        var cmp = string.Compare(localVersion ?? "", manifest.minVersion ?? "", StringComparison.Ordinal);
+                        if (cmp > 0)
+                        {
+                            StatusChanged?.Invoke($"拒绝资源更新：当前版本高于清单的最小版本要求（local={localVersion}, min={manifest.minVersion}）");
+                            return false;
+                        }
+                        if (cmp == 0)
+                        {
+                            StatusChanged?.Invoke($"跳过资源更新：当前版本等于清单的最小版本（{localVersion}）");
+                            return false;
+                        }
+                    }
+                }
+                catch { }
+                var ok = await VerifyFilesWithProgress(manifest, usbRoot, copyQueue.Select(x => x.usbFile).ToList(), copyQueue.Count);
+                if (!ok)
+                {
+                    StatusChanged?.Invoke("资源文件校验失败，已取消更新");
+                    return false;
+                }
+            }
+
             // 执行替换并上报进度
             for (int i = 0; i < copyQueue.Count; i++)
             {
@@ -391,7 +434,7 @@ namespace VHDMounter
 
                     // 复制（带进度）
                     StatusChanged?.Invoke($"正在复制: {Path.GetFileName(item.usbFile)} -> {Path.GetFileName(item.destPath)}");
-                    await CopyFileWithProgressAsync(item.usbFile, item.destPath, i + 1, copyQueue.Count);
+                    await CopyFileWithProgressAsync(item.usbFile, item.destPath, i + 1, copyQueue.Count, manifest != null);
 
                     // 验证大小
                     var usbFileInfo = new FileInfo(item.usbFile);
@@ -421,6 +464,20 @@ namespace VHDMounter
                 }
             }
 
+            if (anyReplaced && manifest != null)
+            {
+                try
+                {
+                    var rootPath = Path.GetPathRoot(copyQueue[0].destPath);
+                    if (!string.IsNullOrEmpty(rootPath))
+                    {
+                        var tagPath = System.IO.Path.Combine(rootPath, "resource_version.tag");
+                        System.IO.File.WriteAllText(tagPath, manifest.version ?? "");
+                    }
+                }
+                catch { }
+            }
+
             return anyReplaced;
         }
 
@@ -446,6 +503,35 @@ namespace VHDMounter
                 }
 
                 StatusChanged?.Invoke($"正在将USB中的VHD/EVHD复制到 {rootPath} 根目录...");
+
+                var usbRoot = Path.GetPathRoot(usbVhdFiles[0]);
+                var manifest = TryLoadVhdDataManifest(usbRoot);
+                if (manifest != null)
+                {
+                    var tagPath = System.IO.Path.Combine(rootPath, "resource_version.tag");
+                    string localVersion = null;
+                    bool tagExists = false;
+                    try
+                    {
+                        tagExists = System.IO.File.Exists(tagPath);
+                        if (tagExists) localVersion = System.IO.File.ReadAllText(tagPath).Trim();
+                    }
+                    catch { }
+                    if (tagExists)
+                    {
+                        var cmp = string.Compare(localVersion ?? "", manifest.minVersion ?? "", StringComparison.Ordinal);
+                        if (cmp > 0)
+                        {
+                            StatusChanged?.Invoke($"拒绝资源更新：当前版本高于清单的最小版本要求（local={localVersion}, min={manifest.minVersion}）");
+                            return false;
+                        }
+                        if (cmp == 0)
+                        {
+                            StatusChanged?.Invoke($"跳过资源更新：当前版本等于清单的最小版本（{localVersion}）");
+                            return false;
+                        }
+                    }
+                }
 
                 // 构建复制队列（目标为根目录，按文件名放置）
                 var copyQueue = new List<(string usbFile, string destPath)>();
@@ -489,6 +575,16 @@ namespace VHDMounter
                     return false;
                 }
 
+                if (manifest != null)
+                {
+                    var ok = await VerifyFilesWithProgress(manifest, usbRoot, copyQueue.Select(x => x.usbFile).ToList(), copyQueue.Count);
+                    if (!ok)
+                    {
+                        StatusChanged?.Invoke("资源文件校验失败，已取消更新");
+                        return false;
+                    }
+                }
+
                 bool anyCopied = false;
                 for (int i = 0; i < copyQueue.Count; i++)
                 {
@@ -496,7 +592,7 @@ namespace VHDMounter
                     try
                     {
                         StatusChanged?.Invoke($"正在复制: {System.IO.Path.GetFileName(item.usbFile)} -> {System.IO.Path.GetFileName(item.destPath)}");
-                        await CopyFileWithProgressAsync(item.usbFile, item.destPath, i + 1, copyQueue.Count);
+                        await CopyFileWithProgressAsync(item.usbFile, item.destPath, i + 1, copyQueue.Count, manifest != null);
 
                         // 验证大小
                         var usbInfo = new System.IO.FileInfo(item.usbFile);
@@ -523,6 +619,16 @@ namespace VHDMounter
                     }
                 }
 
+                if (anyCopied && manifest != null)
+                {
+                    try
+                    {
+                        var tagPath = System.IO.Path.Combine(rootPath, "resource_version.tag");
+                        System.IO.File.WriteAllText(tagPath, manifest.version ?? "");
+                    }
+                    catch { }
+                }
+
                 return anyCopied;
             }
             catch (Exception ex)
@@ -533,16 +639,19 @@ namespace VHDMounter
         }
 
         // 带进度的文件复制
-        private async Task CopyFileWithProgressAsync(string sourcePath, string destPath, int fileIndex, int totalFiles)
+        private async Task CopyFileWithProgressAsync(string sourcePath, string destPath, int fileIndex, int totalFiles, bool scaleToSecondHalf = false)
         {
-            var buffer = new byte[1024 * 1024]; // 1MB块
+            var buffer = new byte[1024 * 1024];
             long totalBytes = 0;
             long copiedBytes = 0;
 
             try
             {
+                var destDir = Path.GetDirectoryName(destPath) ?? string.Empty;
+                var tempName = Path.GetFileName(destPath) + ".tmp";
+                var tempPath = Path.Combine(destDir, tempName);
                 using (var src = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read))
-                using (var dst = new FileStream(destPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                using (var dst = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
                 {
                     totalBytes = src.Length;
                     int read;
@@ -558,10 +667,19 @@ namespace VHDMounter
                             TotalFiles = totalFiles,
                             BytesCopied = copiedBytes,
                             TotalBytes = totalBytes,
-                            Percentage = totalBytes > 0 ? (copiedBytes * 100.0 / totalBytes) : 0
+                            Percentage = totalBytes > 0
+                                ? (scaleToSecondHalf ? (50.0 + (copiedBytes * 50.0 / totalBytes)) : (copiedBytes * 100.0 / totalBytes))
+                                : 0
                         };
                         ReplaceProgressChanged?.Invoke(progress);
                     }
+                    await dst.FlushAsync();
+                }
+                bool replaced = FileReplaceUtil.AtomicReplace(tempPath, destPath);
+                if (!replaced)
+                {
+                    try { System.IO.File.Delete(tempPath); } catch { }
+                    throw new IOException("Atomic replace failed");
                 }
             }
             catch
@@ -574,10 +692,110 @@ namespace VHDMounter
                     TotalFiles = totalFiles,
                     BytesCopied = copiedBytes,
                     TotalBytes = totalBytes,
-                    Percentage = totalBytes > 0 ? (copiedBytes * 100.0 / totalBytes) : 0
+                    Percentage = totalBytes > 0
+                        ? (scaleToSecondHalf ? (50.0 + (copiedBytes * 50.0 / totalBytes)) : (copiedBytes * 100.0 / totalBytes))
+                        : 0
                 };
                 ReplaceProgressChanged?.Invoke(progress);
                 throw;
+            }
+        }
+
+        private UpdateManifest TryLoadVhdDataManifest(string usbRoot)
+        {
+            try
+            {
+                var root = usbRoot;
+                var candidates = new[]
+                {
+                    System.IO.Path.Combine(root, "manifest.json"),
+                    System.IO.Path.Combine(root, "updates", "manifest.json")
+                };
+                string manifestPath = candidates.FirstOrDefault(System.IO.File.Exists);
+                if (string.IsNullOrEmpty(manifestPath)) return null;
+                var sigPath = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(manifestPath) ?? root, "manifest.sig");
+                if (!System.IO.File.Exists(sigPath)) return null;
+                var trustedKeys = System.IO.Path.Combine(AppContext.BaseDirectory, "trusted_keys.pem");
+                if (!System.IO.File.Exists(trustedKeys)) return null;
+                var ok = UpdateSecurity.VerifyManifestSignature(manifestPath, sigPath, trustedKeys);
+                if (!ok) return null;
+                var manifest = UpdateSecurity.LoadManifest(manifestPath);
+                if (!string.Equals(manifest.type, "vhd-data", StringComparison.OrdinalIgnoreCase)) return null;
+                return manifest;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private async Task<bool> VerifyFilesWithProgress(UpdateManifest manifest, string usbRoot, List<string> usbFiles, int totalFiles)
+        {
+            try
+            {
+                var dict = new Dictionary<string, UpdateManifestFile>(StringComparer.OrdinalIgnoreCase);
+                foreach (var f in manifest.files)
+                {
+                    var key = System.IO.Path.GetFileName(f.path);
+                    if (!string.IsNullOrEmpty(key) && !dict.ContainsKey(key)) dict[key] = f;
+                }
+                for (int i = 0; i < usbFiles.Count; i++)
+                {
+                    var usbFile = usbFiles[i];
+                    var name = System.IO.Path.GetFileName(usbFile);
+                    if (!dict.TryGetValue(name, out var mf))
+                    {
+                        StatusChanged?.Invoke($"校验失败：清单中缺少文件 {name}");
+                        return false;
+                    }
+                    var src = System.IO.Path.Combine(usbRoot, (mf.path ?? name).Replace('/', System.IO.Path.DirectorySeparatorChar));
+                    if (!System.IO.File.Exists(src)) src = usbFile;
+                    if (!System.IO.File.Exists(src))
+                    {
+                        StatusChanged?.Invoke($"校验失败：未找到文件 {name}");
+                        return false;
+                    }
+                    using var sha = SHA256.Create();
+                    using var fs = new FileStream(src, FileMode.Open, FileAccess.Read, FileShare.Read);
+                    var total = fs.Length;
+                    var buf = new byte[1024 * 1024];
+                    long processed = 0;
+                    int r;
+                    while ((r = await fs.ReadAsync(buf, 0, buf.Length)) > 0)
+                    {
+                        sha.TransformBlock(buf, 0, r, null, 0);
+                        processed += r;
+                        var progress = new FileReplaceProgress
+                        {
+                            CurrentFileName = name,
+                            FileIndex = i + 1,
+                            TotalFiles = totalFiles,
+                            BytesCopied = processed,
+                            TotalBytes = total,
+                            Percentage = total > 0 ? (processed * 50.0 / total) : 0
+                        };
+                        ReplaceProgressChanged?.Invoke(progress);
+                    }
+                    sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
+                    var hex = BitConverter.ToString(sha.Hash).Replace("-", "").ToLowerInvariant();
+                    if (!string.Equals(hex, mf.sha256?.ToLowerInvariant(), StringComparison.Ordinal))
+                    {
+                        StatusChanged?.Invoke($"校验失败：{name} 哈希不匹配");
+                        return false;
+                    }
+                    if (mf.size > 0 && mf.size != total)
+                    {
+                        StatusChanged?.Invoke($"校验失败：{name} 大小不匹配");
+                        return false;
+                    }
+                }
+                StatusChanged?.Invoke("资源文件校验完成");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                StatusChanged?.Invoke($"资源校验过程中发生错误: {ex.Message}");
+                return false;
             }
         }
 
