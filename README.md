@@ -5,7 +5,7 @@
 ## 1.5.0 新增功能
 
 - 离线更新体系全面落地  
-  - 介质：USB/NX_INS 根目录直接分发；manifest.json + manifest.sig 与实际更新文件并列放置  
+  - 介质：NX_INS 根目录直接分发；manifest.json + manifest.sig 与实际更新文件并列放置  
   - 验签：RSA‑PSS/SHA‑256，公钥固定在 trusted_keys.pem  
   - 时效：清单包含 createdAt/expiresAt，主程序更新如过期（>3天）则拒绝更新
 - 自更新流程强化  
