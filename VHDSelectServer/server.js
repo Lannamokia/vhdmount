@@ -719,6 +719,51 @@ async function createApp(options = {}) {
         });
     }));
 
+    app.post('/api/machines', requireAuth, requireDatabase, asyncHandler(async (req, res) => {
+        const machineId = assertMachineId(req.body?.machineId);
+        const protectedState = typeof req.body?.protected === 'boolean' ? req.body.protected : false;
+        const vhdKeyword = req.body?.vhdKeyword
+            ? assertVhdKeyword(req.body.vhdKeyword)
+            : serviceSettingsStore.getDefaultVhdKeyword();
+        const evhdPassword = req.body?.evhdPassword;
+
+        if (evhdPassword != null && (typeof evhdPassword !== 'string' || evhdPassword.length < 1 || evhdPassword.length > 512)) {
+            throw createJsonError(400, 'EVHD 密码必须是 1-512 个字符');
+        }
+
+        const existingMachine = await runtime.database.getMachine(machineId);
+        if (existingMachine) {
+            throw createJsonError(409, '机台已存在');
+        }
+
+        let machine = await runtime.database.upsertMachine(machineId, protectedState, vhdKeyword);
+        if (!machine) {
+            throw createJsonError(500, '新增机台失败');
+        }
+
+        if (typeof evhdPassword === 'string' && evhdPassword.length > 0) {
+            machine = await runtime.database.updateMachineEvhdPassword(machineId, evhdPassword);
+            if (!machine) {
+                throw createJsonError(500, '新增机台后写入 EVHD 密码失败');
+            }
+        }
+
+        runtime.writeAudit(req, {
+            type: 'machine.create',
+            actor: 'admin',
+            result: 'success',
+            machineId,
+            protected: protectedState,
+            vhdKeyword,
+        });
+
+        res.status(201).json({
+            success: true,
+            machine,
+            message: '机台已添加',
+        });
+    }));
+
     app.get('/api/machines/:machineId', requireAuth, requireDatabase, asyncHandler(async (req, res) => {
         const machineId = assertMachineId(req.params.machineId);
         const machine = await runtime.database.getMachine(machineId);

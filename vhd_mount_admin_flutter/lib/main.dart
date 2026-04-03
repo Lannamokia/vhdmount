@@ -173,6 +173,20 @@ class MachineRecord {
   }
 }
 
+class MachineDraft {
+  const MachineDraft({
+    required this.machineId,
+    required this.vhdKeyword,
+    required this.protectedState,
+    this.evhdPassword,
+  });
+
+  final String machineId;
+  final String vhdKeyword;
+  final bool protectedState;
+  final String? evhdPassword;
+}
+
 class TrustedCertificateRecord {
   const TrustedCertificateRecord({
     required this.name,
@@ -268,7 +282,11 @@ abstract class AdminApi {
 
   Future<List<MachineRecord>> getMachines();
 
+  Future<void> addMachine(MachineDraft draft);
+
   Future<void> setMachineApproval(String machineId, bool approved);
+
+  Future<void> setMachineProtection(String machineId, bool protectedState);
 
   Future<void> resetMachineRegistration(String machineId);
 
@@ -277,6 +295,8 @@ abstract class AdminApi {
   Future<void> setMachineEvhdPassword(String machineId, String evhdPassword);
 
   Future<String> getPlainEvhdPassword(String machineId, String reason);
+
+  Future<void> deleteMachine(String machineId);
 
   Future<List<TrustedCertificateRecord>> getTrustedCertificates();
 
@@ -481,11 +501,38 @@ class HttpAdminApi implements AdminApi {
   }
 
   @override
+  Future<void> addMachine(MachineDraft draft) async {
+    await _requestJson(
+      'POST',
+      '/api/machines',
+      body: <String, dynamic>{
+        'machineId': draft.machineId,
+        'vhdKeyword': draft.vhdKeyword,
+        'protected': draft.protectedState,
+        if (draft.evhdPassword != null && draft.evhdPassword!.isNotEmpty)
+          'evhdPassword': draft.evhdPassword,
+      },
+    );
+  }
+
+  @override
   Future<void> setMachineApproval(String machineId, bool approved) async {
     await _requestJson(
       'POST',
       '/api/machines/$machineId/approve',
       body: <String, dynamic>{'approved': approved},
+    );
+  }
+
+  @override
+  Future<void> setMachineProtection(String machineId, bool protectedState) async {
+    await _requestJson(
+      'POST',
+      '/api/protect',
+      body: <String, dynamic>{
+        'machineId': machineId,
+        'protected': protectedState,
+      },
     );
   }
 
@@ -521,6 +568,11 @@ class HttpAdminApi implements AdminApi {
       '/api/evhd-password/plain?machineId=$encodedMachineId&reason=$encodedReason',
     );
     return (json['evhdPassword'] as String?) ?? '';
+  }
+
+  @override
+  Future<void> deleteMachine(String machineId) async {
+    await _requestJson('DELETE', '/api/machines/$machineId');
   }
 
   @override
@@ -714,18 +766,31 @@ class AppController extends ChangeNotifier {
 
   Future<void> loadMachines() async {
     machines = await _runAction(api.getMachines);
+    notifyListeners();
   }
 
   Future<void> loadCertificates() async {
     certificates = await _runAction(api.getTrustedCertificates);
+    notifyListeners();
   }
 
   Future<void> loadAudit() async {
     auditEntries = await _runAction(api.getAuditEntries);
+    notifyListeners();
+  }
+
+  Future<void> addMachine(MachineDraft draft) async {
+    await _runAction(() => api.addMachine(draft));
+    await loadMachines();
   }
 
   Future<void> setMachineApproval(String machineId, bool approved) async {
     await _runAction(() => api.setMachineApproval(machineId, approved));
+    await loadMachines();
+  }
+
+  Future<void> setMachineProtection(String machineId, bool protectedState) async {
+    await _runAction(() => api.setMachineProtection(machineId, protectedState));
     await loadMachines();
   }
 
@@ -746,6 +811,11 @@ class AppController extends ChangeNotifier {
 
   Future<String> readPlainEvhdPassword(String machineId, String reason) async {
     return _runAction(() => api.getPlainEvhdPassword(machineId, reason));
+  }
+
+  Future<void> deleteMachine(String machineId) async {
+    await _runAction(() => api.deleteMachine(machineId));
+    await loadMachines();
   }
 
   Future<void> addTrustedCertificate(String name, String certificatePem) async {
@@ -1554,6 +1624,36 @@ class MachinesView extends StatelessWidget {
               style: Theme.of(context).textTheme.headlineSmall,
             ),
             const Spacer(),
+            FilledButton.icon(
+              onPressed: () async {
+                final draft = await showAddMachineDialog(
+                  context,
+                  defaultVhdKeyword: controller.serverStatus?.defaultVhdKeyword ?? 'SDEZ',
+                );
+                if (draft == null) {
+                  return;
+                }
+                try {
+                  await controller.addMachine(draft);
+                  if (!context.mounted) {
+                    return;
+                  }
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('机台 ${draft.machineId} 已添加。')),
+                  );
+                } catch (error) {
+                  if (!context.mounted) {
+                    return;
+                  }
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(describeError(error))),
+                  );
+                }
+              },
+              icon: const Icon(Icons.add_rounded),
+              label: const Text('添加机台'),
+            ),
+            const SizedBox(width: 8),
             OutlinedButton.icon(
               onPressed: controller.loadMachines,
               icon: const Icon(Icons.refresh_rounded),
@@ -1650,6 +1750,34 @@ class MachinesView extends StatelessWidget {
                                 }
                               },
                               child: Text(machine.approved ? '取消审批' : '审批通过'),
+                            ),
+                            OutlinedButton(
+                              onPressed: () async {
+                                try {
+                                  await controller.setMachineProtection(
+                                    machine.machineId,
+                                    !machine.protectedState,
+                                  );
+                                  if (!context.mounted) {
+                                    return;
+                                  }
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        machine.protectedState ? '已关闭保护。' : '已开启保护。',
+                                      ),
+                                    ),
+                                  );
+                                } catch (error) {
+                                  if (!context.mounted) {
+                                    return;
+                                  }
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text(describeError(error))),
+                                  );
+                                }
+                              },
+                              child: Text(machine.protectedState ? '关闭保护' : '开启保护'),
                             ),
                             OutlinedButton(
                               onPressed: () async {
@@ -1753,6 +1881,37 @@ class MachinesView extends StatelessWidget {
                                 }
                               },
                               child: const Text('读取明文'),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed: () async {
+                                final confirmed = await showConfirmDialog(
+                                  context,
+                                  title: '删除机台',
+                                  message: '确认删除 ${machine.machineId} 吗？这会移除该机台的管理记录与已保存的 EVHD 密码。',
+                                  confirmLabel: '删除',
+                                );
+                                if (confirmed != true) {
+                                  return;
+                                }
+                                try {
+                                  await controller.deleteMachine(machine.machineId);
+                                  if (!context.mounted) {
+                                    return;
+                                  }
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('机台 ${machine.machineId} 已删除。')),
+                                  );
+                                } catch (error) {
+                                  if (!context.mounted) {
+                                    return;
+                                  }
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text(describeError(error))),
+                                  );
+                                }
+                              },
+                              icon: const Icon(Icons.delete_outline_rounded),
+                              label: const Text('删除机台'),
                             ),
                           ],
                         ),
@@ -2266,4 +2425,108 @@ Future<List<String>?> showTwoFieldDialog(
   firstController.dispose();
   secondController.dispose();
   return result;
+}
+
+Future<MachineDraft?> showAddMachineDialog(
+  BuildContext context, {
+  required String defaultVhdKeyword,
+}) async {
+  final machineIdController = TextEditingController();
+  final vhdController = TextEditingController(text: defaultVhdKeyword);
+  final evhdPasswordController = TextEditingController();
+  bool protectedState = false;
+
+  final result = await showDialog<MachineDraft>(
+    context: context,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setState) => AlertDialog(
+        title: const Text('添加机台'),
+        content: SizedBox(
+          width: 560,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              TextField(
+                controller: machineIdController,
+                decoration: const InputDecoration(labelText: '机台 ID'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: vhdController,
+                decoration: const InputDecoration(labelText: '初始 VHD 关键词'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: evhdPasswordController,
+                obscureText: true,
+                decoration: const InputDecoration(labelText: '初始 EVHD 密码（可选）'),
+              ),
+              const SizedBox(height: 12),
+              SwitchListTile.adaptive(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('创建后立即开启保护'),
+                value: protectedState,
+                onChanged: (value) {
+                  setState(() {
+                    protectedState = value;
+                  });
+                },
+              ),
+            ],
+          ),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.of(context).pop(
+                MachineDraft(
+                  machineId: machineIdController.text.trim(),
+                  vhdKeyword: vhdController.text.trim().toUpperCase(),
+                  protectedState: protectedState,
+                  evhdPassword: evhdPasswordController.text.isEmpty
+                      ? null
+                      : evhdPasswordController.text,
+                ),
+              );
+            },
+            child: const Text('创建'),
+          ),
+        ],
+      ),
+    ),
+  );
+
+  machineIdController.dispose();
+  vhdController.dispose();
+  evhdPasswordController.dispose();
+  return result;
+}
+
+Future<bool?> showConfirmDialog(
+  BuildContext context, {
+  required String title,
+  required String message,
+  String confirmLabel = '确定',
+}) {
+  return showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(title),
+      content: Text(message),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(true),
+          child: Text(confirmLabel),
+        ),
+      ],
+    ),
+  );
 }

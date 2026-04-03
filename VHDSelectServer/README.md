@@ -103,7 +103,10 @@ GET /api/init/status
 - `GET /api/boot-image-select?machineId=...`
 - `POST /api/set-vhd`
 - `GET /api/protect?machineId=...`
+- `POST /api/protect`
 - `GET /api/machines`
+- `POST /api/machines`
+- `DELETE /api/machines/:machineId`
 - `POST /api/machines/:machineId/vhd`
 - `POST /api/machines/:machineId/evhd-password`
 - `POST /api/machines/:machineId/keys`

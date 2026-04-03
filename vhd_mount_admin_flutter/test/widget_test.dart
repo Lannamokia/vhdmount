@@ -104,6 +104,25 @@ class FakeAdminApi implements AdminApi {
   }
 
   @override
+  Future<void> addMachine(MachineDraft draft) async {
+    machines = <MachineRecord>[
+      ...machines,
+      MachineRecord(
+        machineId: draft.machineId,
+        protectedState: draft.protectedState,
+        vhdKeyword: draft.vhdKeyword,
+        evhdPasswordConfigured: draft.evhdPassword?.isNotEmpty == true,
+        approved: false,
+        revoked: false,
+        keyId: null,
+        keyType: null,
+        registrationCertFingerprint: null,
+        lastSeen: null,
+      ),
+    ];
+  }
+
+  @override
   Future<void> addTrustedCertificate(String name, String certificatePem) async {}
 
   @override
@@ -171,7 +190,34 @@ class FakeAdminApi implements AdminApi {
   Future<void> resetMachineRegistration(String machineId) async {}
 
   @override
+  Future<void> deleteMachine(String machineId) async {
+    machines = machines.where((machine) => machine.machineId != machineId).toList();
+  }
+
+  @override
   Future<void> setMachineApproval(String machineId, bool approved) async {}
+
+  @override
+  Future<void> setMachineProtection(String machineId, bool protectedState) async {
+    machines = machines
+        .map(
+          (machine) => machine.machineId == machineId
+              ? MachineRecord(
+                  machineId: machine.machineId,
+                  protectedState: protectedState,
+                  vhdKeyword: machine.vhdKeyword,
+                  evhdPasswordConfigured: machine.evhdPasswordConfigured,
+                  approved: machine.approved,
+                  revoked: machine.revoked,
+                  keyId: machine.keyId,
+                  keyType: machine.keyType,
+                  registrationCertFingerprint: machine.registrationCertFingerprint,
+                  lastSeen: machine.lastSeen,
+                )
+              : machine,
+        )
+        .toList();
+  }
 
   @override
   Future<void> setMachineEvhdPassword(String machineId, String evhdPassword) async {}

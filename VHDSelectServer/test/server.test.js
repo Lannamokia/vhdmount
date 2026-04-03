@@ -469,6 +469,46 @@ test('查询 EVHD 明文前必须完成 OTP 二次验证', async (t) => {
     assert.equal(plainResponse.body.evhdPassword, 'TopSecret-123');
 });
 
+test('管理员可以新增机台、切换保护状态并删除机台', async (t) => {
+    const { client } = await createInitializedHarness(t);
+
+    await client.post('/api/auth/login').send({ password: 'ComplexPassword123!' }).expect(200);
+
+    const createResponse = await client
+        .post('/api/machines')
+        .send({
+            machineId: 'MACHINE-ADD-01',
+            protected: true,
+            vhdKeyword: 'SAFEBOOT',
+            evhdPassword: 'AddedSecret-789',
+        })
+        .expect(201);
+
+    assert.equal(createResponse.body.machine.machine_id, 'MACHINE-ADD-01');
+    assert.equal(createResponse.body.machine.protected, true);
+    assert.equal(createResponse.body.machine.vhd_keyword, 'SAFEBOOT');
+    assert.equal(createResponse.body.machine.evhd_password_configured, true);
+
+    await client
+        .post('/api/protect')
+        .send({ machineId: 'MACHINE-ADD-01', protected: false })
+        .expect(200);
+
+    const detailResponse = await client
+        .get('/api/machines/MACHINE-ADD-01')
+        .expect(200);
+
+    assert.equal(detailResponse.body.machine.protected, false);
+
+    await client
+        .delete('/api/machines/MACHINE-ADD-01')
+        .expect(200);
+
+    await client
+        .get('/api/machines/MACHINE-ADD-01')
+        .expect(404);
+});
+
 test('机台注册必须使用可信证书签名且拒绝 nonce 重放', async (t) => {
     const { client } = await createInitializedHarness(t);
     const machineId = 'MACHINE-REG';

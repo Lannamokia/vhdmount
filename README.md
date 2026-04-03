@@ -213,7 +213,7 @@ RegistrationCertificatePassword=ChangeThisPfxPassword
 - Flutter 管理端：`vhd_mount_admin_flutter`
   - 初始化向导（管理员密码、Session Secret、数据库、可信证书）。
   - 管理员登录与 OTP 二次验证。
-  - 机台审批、VHD/EVHD 配置、注册重置、明文读取。
+  - 机台新增、删除、保护开关、审批、VHD/EVHD 配置、注册重置、明文读取。
   - 可信注册证书管理与审计查看。
 
 - VHDMountAdminTools：
@@ -229,7 +229,8 @@ RegistrationCertificatePassword=ChangeThisPfxPassword
 - `GET /api/boot-image-select?machineId=...`：获取该机台当前 VHD 关键词；若机台不存在会自动创建记录。
 - `POST /api/set-vhd`（需登录）：设置默认 VHD 关键词。
 - `GET /api/protect?machineId=...`：查询机台保护状态；机台不存在返回 404。
-- 机台：`GET /api/machines`（需登录）、`POST /api/machines/:machineId/vhd`（需登录）、`POST /api/machines/:machineId/evhd-password`（需登录）、`POST /api/machines/:machineId/keys`（注册公钥，需预配置证书签名）、`POST /api/machines/:machineId/approve`（审批）、`POST /api/machines/:machineId/revoke`（重置注册）。
+- `POST /api/protect`（需登录）：更新机台保护状态。
+- 机台：`GET /api/machines`（需登录）、`POST /api/machines`（需登录，新增机台）、`DELETE /api/machines/:machineId`（需登录，删除机台）、`POST /api/machines/:machineId/vhd`（需登录）、`POST /api/machines/:machineId/evhd-password`（需登录）、`POST /api/machines/:machineId/keys`（注册公钥，需预配置证书签名）、`POST /api/machines/:machineId/approve`（审批）、`POST /api/machines/:machineId/revoke`（重置注册）。
 - 证书与审计：`GET /api/security/trusted-certificates`、`POST /api/security/trusted-certificates`、`DELETE /api/security/trusted-certificates/:fingerprint`、`GET /api/audit`。
 - EVHD 密码：`GET /api/evhd-envelope?machineId=...`（RSA 封装信封，公开）、`GET /api/evhd-password/plain?machineId=...&reason=...`（明文查询，需登录 + OTP，仅管理用途）。
 
