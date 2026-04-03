@@ -62,6 +62,8 @@ vhdmonter_config.ini
 README.old.md
 SECURITY_AUDIT_*.md
 SECURITY_REMEDIATION_PLAN_*.md
+WORK_REPORT_*.md
+CLI_GUIDE.md
 
 # ============ OS Specific ============
 .AppleDouble
