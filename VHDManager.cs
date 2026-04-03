@@ -67,6 +67,7 @@ namespace VHDMounter
         private int protectionCheckInterval;
         private bool isBlocking = false;
         private bool protectionWasRunning = false;
+        private bool hasLocalEvhdFiles;
 
         // 加密EVHD挂载进程（需保持常驻直到主程序退出）
         private Process evhdMountProcess;
@@ -292,7 +293,7 @@ namespace VHDMounter
                 StatusChanged?.Invoke($"扫描USB设备时出错: {ex.Message}");
             }
 
-            return vhdFiles;
+            return FilterUsbFilesForCurrentChain(vhdFiles);
         }
 
         // 替换本地VHD文件
@@ -323,7 +324,7 @@ namespace VHDMounter
                     var localName = Path.GetFileName(f);
                     var localExt = Path.GetExtension(f).ToLowerInvariant();
                     var sameKeyword = ExtractKeyword(localName) == usbKeyword;
-                    var typeAllowed = localExt == usbExt || (usbExt == ".evhd" && localExt == ".vhd");
+                    var typeAllowed = localExt == usbExt;
                     return sameKeyword && typeAllowed;
                 }).ToList();
 
@@ -486,6 +487,8 @@ namespace VHDMounter
         {
             try
             {
+                usbVhdFiles = FilterUsbFilesForCurrentChain(usbVhdFiles);
+
                 if (usbVhdFiles == null || usbVhdFiles.Count == 0)
                 {
                     StatusChanged?.Invoke("USB中未找到可复制的VHD/EVHD文件");
@@ -959,6 +962,47 @@ namespace VHDMounter
             }
             
             return config;
+        }
+
+        private static bool IsEvhdFile(string filePath)
+        {
+            return string.Equals(Path.GetExtension(filePath), ".evhd", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private List<string> FilterUsbFilesForCurrentChain(IEnumerable<string> sourceFiles)
+        {
+            var files = sourceFiles?.ToList() ?? new List<string>();
+            if (files.Count == 0 || hasLocalEvhdFiles)
+                return files;
+
+            var filtered = files
+                .Where(file => !IsEvhdFile(file))
+                .ToList();
+
+            if (filtered.Count != files.Count)
+            {
+                StatusChanged?.Invoke("本地未扫描到 .evhd 文件，USB 更新链路已跳过 .evhd 文件");
+            }
+
+            return filtered;
+        }
+
+        private string SelectBestMatchByKeyword(IEnumerable<string> candidateFiles, string keyword)
+        {
+            var matches = (candidateFiles ?? Enumerable.Empty<string>())
+                .Where(file => ExtractKeyword(Path.GetFileName(file)).Equals(keyword, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (matches.Count == 0)
+                return null;
+
+            var vhdMatch = matches.FirstOrDefault(file => !IsEvhdFile(file));
+            if (!string.IsNullOrEmpty(vhdMatch))
+            {
+                return vhdMatch;
+            }
+
+            return hasLocalEvhdFiles ? matches.FirstOrDefault(IsEvhdFile) : null;
         }
         
         // 远程获取VHD选择
@@ -1718,9 +1762,8 @@ namespace VHDMounter
         {
             if (string.IsNullOrWhiteSpace(keyword) || vhdFiles == null || vhdFiles.Count == 0)
                 return null;
-                
-            var matchingFile = vhdFiles.FirstOrDefault(f => 
-                ExtractKeyword(Path.GetFileName(f)).Equals(keyword, StringComparison.OrdinalIgnoreCase));
+
+            var matchingFile = SelectBestMatchByKeyword(vhdFiles, keyword);
                 
             if (matchingFile != null)
             {
@@ -1779,6 +1822,11 @@ namespace VHDMounter
                     Debug.WriteLine($"找到文件: {file}");
                 }
             });
+
+            hasLocalEvhdFiles = vhdFiles.Any(IsEvhdFile);
+            StatusChanged?.Invoke(hasLocalEvhdFiles
+                ? "本地扫描检测到 .evhd 文件，EVHD 链路可用"
+                : "本地未扫描到 .evhd 文件，EVHD 链路保持关闭");
 
             return vhdFiles;
         }
