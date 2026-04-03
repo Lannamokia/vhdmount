@@ -2,6 +2,8 @@ version: '3.8'
 
 services:
   vhd-select-server:
+    build:
+      context: .
     image: lty271104/vhd-select-server:latest
     ports:
       - "8080:8080"

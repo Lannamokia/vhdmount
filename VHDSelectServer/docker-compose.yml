@@ -2,13 +2,17 @@ version: '3.8'
 
 services:
   vhd-select-server:
+    build:
+      context: .
     image: lty271104/vhd-select-server:latest
     ports:
       - "8082:8080"
     volumes:
       - ./config:/app/config
       - ./vhd-data:/app/vhd-data
-      # 内置数据库数据持久化
+      # 内置数据库数据持久化。若要改为宿主机 bind mount，请映射父目录到 /var/lib/postgresql/data，
+      # 不要把宿主机目录直接当作 PostgreSQL cluster 目录使用。
+      # - ./postgres-data:/var/lib/postgresql/data
       - vhd_db_data:/var/lib/postgresql/data
     environment:
       # 应用配置
@@ -23,6 +27,7 @@ services:
       - DB_NAME=vhd_select
       - DB_USER=postgres
       - DB_PASSWORD=vhd_select_password
+      - POSTGRES_DATA_DIR=/var/lib/postgresql/data/pgdata
       
       # 可选的数据库连接配置
       - DB_MAX_CONNECTIONS=20

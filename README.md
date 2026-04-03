@@ -38,10 +38,10 @@
   - 可选 USB 文件优先替换，带总进度与当前文件进度显示。
   - 自更新前置判断：`update_done.flag` 版本 ≥ 清单 `version` 则跳过自更新，直接继续启动。
 
-- VHDSelectServer（Web 服务）
-  - Web GUI 管理、RESTful API、健康检查与会话认证。
-  - 机台管理（VHD 关键词、EVHD 密码、保护状态）。
-  - Docker 单容器内置 PostgreSQL 或外部数据库模式（通过环境变量切换）。
+- VHDSelectServer（管理服务）
+  - 锁文件初始化、REST API、审计日志、Session + OTP 二次验证。
+  - 机台管理（VHD 关键词、EVHD 密码、保护状态、注册审批）。
+  - 预配置证书签名注册、Docker 单容器内置 PostgreSQL 或外部数据库模式。
 
 - Updater（辅助更新器）
   - 完成主程序文件替换；支持管理员自我提升（runas）。
@@ -49,35 +49,37 @@
   - 写入 `update_done.flag = manifest.version`；按阈值规则记录并决策更新（local>min 拒绝、等于跳过、小于更新；无 flag 视为小于）。
   - 文件日志 `updater.log`，10MB 循环覆盖；仅记录不自动拷贝到设备。
 
-- UpdatePackagerGUI（离线打包器）
+- VHDMountAdminTools（离线管理工具）
   - 生成 `manifest.json` 与 `manifest.sig`（RSA‑PSS/SHA‑256 签名）。
-  - 支持快速生成签名密钥对和供机台读取的 `trusted_keys.pem`。
+  - 生成更新签名密钥对、`trusted_keys.pem` 和预配置注册证书包（`.pfx/.pem/.trust.json`）。
   - 路径规则：`app-update` 使用相对路径；`vhd-data` 使用文件名。
   - 清单包含 `createdAt/expiresAt`（默认有效期 3 天），默认 `minVersion=1.5.0`。
+
+- vhd_mount_admin_flutter（Flutter 管理端）
+  - 负责服务初始化、管理员登录、OTP 验证、机台管理、证书管理和审计查看。
 
 ## 项目结构
 
 ```
 vhdmount/
-├── VHDSelectServer/              # Web 服务
+├── VHDSelectServer/              # 管理服务
 │   ├── server.js                 # 主服务与路由
 │   ├── database.js               # PostgreSQL 持久化
-│   ├── public/                   # 管理界面静态文件（index.html、machines.html、*.js、*.css）
 │   ├── Dockerfile                # 镜像构建（含内置 DB）
 │   ├── docker-entrypoint.sh      # 容器入口与 DB 初始化
 │   └── init-db.sql               # 表结构初始化
 ├── Updater/                      # 辅助更新器（自我提升、替换与重启主程序）
 │   └── Program.cs
-├── UpdatePackagerGUI/            # 离线打包器（WPF）
-│   ├── MainWindow.xaml           # 打包与签名界面
-│   └── MainWindow.xaml.cs        # 打包逻辑（RSA‑PSS签名）
-├── VHDMounter.csproj             # .NET 6 WPF 客户端
+├── VHDMountAdminTools/           # 离线管理工具（WPF）
+│   ├── MainWindow.xaml           # 打包、签名与注册证书界面
+│   └── MainWindow.xaml.cs        # 打包与注册证书逻辑
+├── vhd_mount_admin_flutter/      # Flutter 管理客户端（Windows）
+├── VHDMounter.csproj             # .NET 8 WPF 客户端
 ├── VHDManager.cs                 # 客户端核心逻辑
 ├── Program.cs                    # 单实例入口
 ├── vhdmonter_config.ini          # 客户端配置
 ├── build.bat                     # 本地构建脚本（生成自包含单文件并复制到 single 目录）
-├── run_as_admin.bat              # 管理员运行辅助脚本
-├── single/                       # 打包输出（VHDMounter.exe、Updater.exe、UpdatePackagerGUI.exe）
+├── single/                       # 打包输出（VHDMounter.exe、Updater.exe、VHDMountAdminTools.exe）
 └── .github/workflows/build.yml   # CI 构建与发布
 ```
 
@@ -86,18 +88,30 @@ vhdmount/
 ### 环境要求
 
 - Windows 10 1809+ 或 Windows 11（管理员运行）。
-- .NET 6.0 Runtime（客户端）。
+- .NET 8.0 Runtime（客户端）。
 - Node.js 18+ 或 Docker 20.10+（服务端）。
+- Flutter 3.41+（新的 Windows 管理客户端）。
 
 ### 启动服务端
 
 Docker（推荐）：
 
 ```powershell
-docker build -t vhd-select-server ./VHDSelectServer
-docker run -d --name vhd-select-server -p 8080:8080 vhd-select-server
-start http://localhost:8080
+cd VHDSelectServer
+docker compose up --build -d
+docker compose logs -f
 ```
+
+如果需要把内置 PostgreSQL 数据持久化到宿主机目录，请映射父目录到 `/var/lib/postgresql/data`，并保持实际数据目录为 `pgdata` 子目录。例如：
+
+```yaml
+volumes:
+  - ./postgres-data:/var/lib/postgresql/data
+environment:
+  - POSTGRES_DATA_DIR=/var/lib/postgresql/data/pgdata
+```
+
+原因：Docker Desktop/部分 bind mount 文件系统不会正确保留挂载根目录上的 Linux 所有权和 `0700` 权限；PostgreSQL 对真实 cluster 目录有严格权限要求。当前镜像已默认使用 `pgdata` 子目录来兼容 named volume 与大多数 bind mount 场景。
 
 本地开发：
 
@@ -107,7 +121,7 @@ npm install
 npm start
 ```
 
-默认管理员密码：`admin123`（请登录后尽快修改）。
+首次启动后请先调用 `/api/init/status`、`/api/init/prepare`、`/api/init/complete` 完成初始化；不再存在默认管理员密码。
 
 ### 启动客户端
 
@@ -118,18 +132,25 @@ VHDMounter.exe
 # 或从源码发布
 dotnet publish VHDMounter.csproj \
   --configuration Release \
-  --runtime win10-x64 \
+  --runtime win-x64 \
   --self-contained true \
-  --output ./publish/win10-x64 \
+  --output ./publish/win-x64 \
   -p:PublishSingleFile=true \
   -p:IncludeNativeLibrariesForSelfExtract=true \
   -p:EnableCompressionInSingleFile=true \
   -p:PublishTrimmed=false
 ```
 
+新的管理入口：
+
+```powershell
+cd vhd_mount_admin_flutter
+flutter run -d windows
+```
+
 ### VHDMounter离线更新与自更新
 
-1. 使用 UpdatePackagerGUI：
+1. 使用 VHDMountAdminTools：
    - 选择 payload 目录（更新内容），类型 `app-update` 或 `vhd-data`。
    - 设置 `minVersion`（默认已设为 `1.5.0`）与 `version`。
    - 生成 `manifest.json` 与 `manifest.sig`（RSA‑PSS/SHA‑256）。
@@ -158,6 +179,8 @@ MachineId=MACHINE_001
 EnableProtectionCheck=true
 ProtectionCheckUrl=http://localhost:8080/api/protect
 ProtectionCheckInterval=500
+RegistrationCertificatePath=certs\machine-registration.pfx
+RegistrationCertificatePassword=ChangeThisPfxPassword
 ```
 
 - `EnableRemoteSelection`：启用远程 VHD 选择；关闭时仅本地扫描。
@@ -167,8 +190,10 @@ ProtectionCheckInterval=500
 - `EnableProtectionCheck`：定时查询机台保护状态，保护开启时可阻止危险操作。
 - `ProtectionCheckUrl`：保护状态查询地址（GET，需要 `machineId`）。
 - `ProtectionCheckInterval`：保护状态查询间隔（毫秒）。
+- `RegistrationCertificatePath`：预配置注册证书 `.pfx` 路径，用于签名公钥注册请求。
+- `RegistrationCertificatePassword`：注册证书密码。
 
-密钥流转：客户端在本机 TPM 中生成/保存 RSA 密钥对，将公钥通过 `POST /api/machines/:machineId/keys` 注册到服务端，管理员审批通过后，客户端从 `GET /api/evhd-envelope` 获取密文并用 TPM 私钥（RSA‑OAEP‑SHA1）解密得到 EVHD 密码。
+密钥流转：客户端在本机 TPM 中生成/保存 RSA 密钥对，并使用预配置注册证书对 `POST /api/machines/:machineId/keys` 请求签名；管理员审批通过后，客户端从 `GET /api/evhd-envelope` 获取密文并用 TPM 私钥（RSA‑OAEP‑SHA1）解密得到 EVHD 密码。
 
 ### 重要说明（EVHD 组件）
 
@@ -181,30 +206,32 @@ ProtectionCheckInterval=500
 - `PORT`：服务端口（默认 `8080`）。
 - `USE_EMBEDDED_DB`：`true` 启用容器内置 PostgreSQL；`false` 使用外部数据库。
 - `DB_HOST`、`DB_PORT`、`DB_NAME`、`DB_USER`、`DB_PASSWORD`：连接外部数据库时使用。
+- `POSTGRES_DATA_DIR`：内置 PostgreSQL 的真实数据目录，默认 `/var/lib/postgresql/data/pgdata`。
 
-## 管理界面
+## 管理入口
 
-- `index.html`（仪表盘）：
-  - 服务器状态与当前全局 VHD 关键词。
-  - 设置全局 VHD 关键词（需登录）。
-  - 机台保护状态查询（无需登录）。
-  - 管理入口与管理员密码修改（需登录）。
+- Flutter 管理端：`vhd_mount_admin_flutter`
+  - 初始化向导（管理员密码、Session Secret、数据库、可信证书）。
+  - 管理员登录与 OTP 二次验证。
+  - 机台审批、VHD/EVHD 配置、注册重置、明文读取。
+  - 可信注册证书管理与审计查看。
 
-- `machines.html`（机台管理）：
-  - 搜索与刷新机台列表（需登录）。
-  - 机台列包含：`ID`、`VHD 关键词`、`EVHD 密码`、`保护状态`、`最后在线`。
-  - 设置机台 VHD 关键词与 EVHD 密码；切换保护；删除机台。
-  - EVHD 密码查询支持密文接口与明文接口（明文需登录）。
+- VHDMountAdminTools：
+  - 离线生成更新签名密钥与注册证书包。
+  - 生成 `manifest.json` / `manifest.sig`。
 
 ## API 速览
 
 - `GET /api/status`：服务器状态与版本。
-- 认证：`POST /api/auth/login`（表单体含 `password`）、`GET /api/auth/check`、`POST /api/auth/logout`、`POST /api/auth/change-password`。
+- `GET /api/health`：容器健康检查端点。
+- 初始化：`GET /api/init/status`、`POST /api/init/prepare`、`POST /api/init/complete`。
+- 认证：`POST /api/auth/login`、`GET /api/auth/check`、`POST /api/auth/logout`、`POST /api/auth/change-password`、`POST /api/auth/otp/verify`、`GET /api/auth/otp/status`。
 - `GET /api/boot-image-select?machineId=...`：获取该机台当前 VHD 关键词；若机台不存在会自动创建记录。
-- `POST /api/set-vhd`（需登录）：设置全局 VHD 关键词。
+- `POST /api/set-vhd`（需登录）：设置默认 VHD 关键词。
 - `GET /api/protect?machineId=...`：查询机台保护状态；机台不存在返回 404。
-- 机台：`GET /api/machines`（需登录）、`POST /api/machines/:machineId/vhd`（需登录）、`POST /api/machines/:machineId/evhd-password`（需登录）、`POST /api/machines/:machineId/keys`（注册公钥）、`POST /api/machines/:machineId/approve`（审批）、`POST /api/machines/:machineId/revoke`（吊销）。
-- EVHD 密码：`GET /api/evhd-envelope?machineId=...`（RSA 封装信封，公开）、`GET /api/evhd-password/plain?machineId=...`（明文查询，需登录，仅管理用途）。
+- 机台：`GET /api/machines`（需登录）、`POST /api/machines/:machineId/vhd`（需登录）、`POST /api/machines/:machineId/evhd-password`（需登录）、`POST /api/machines/:machineId/keys`（注册公钥，需预配置证书签名）、`POST /api/machines/:machineId/approve`（审批）、`POST /api/machines/:machineId/revoke`（重置注册）。
+- 证书与审计：`GET /api/security/trusted-certificates`、`POST /api/security/trusted-certificates`、`DELETE /api/security/trusted-certificates/:fingerprint`、`GET /api/audit`。
+- EVHD 密码：`GET /api/evhd-envelope?machineId=...`（RSA 封装信封，公开）、`GET /api/evhd-password/plain?machineId=...&reason=...`（明文查询，需登录 + OTP，仅管理用途）。
 
 ## 使用流程（客户端）
 
@@ -245,7 +272,7 @@ ProtectionCheckInterval=500
   - 步骤：恢复依赖 → 构建/测试 → 发布 Windows 10 x64 自包含单文件 → 上传构建产物。
   - `release` 事件：打包 ZIP、生成 `CHECKSUMS.md`（SHA256），上传为 Release 资产。
   - 使用 `softprops/action-gh-release@v2` 上传资产，认证采用 `GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}`。
-  - 产物名称与位置：`VHDMounter-win10-x64-{version}`，位于 `publish/win10-x64/`。
+  - 产物名称与位置：`VHDMounter-win-x64-{version}`，位于 `publish/win-x64/`。
 
 建议在工作流顶部声明：
 
@@ -259,7 +286,7 @@ permissions:
 - 运行 `build.bat` 执行编译与发布，完成后生成自包含单文件并复制到 `single` 目录：
   - `single\VHDMounter.exe`
   - `single\Updater.exe`
-  - `single\UpdatePackagerGUI.exe`
+  - `single\VHDMountAdminTools.exe`
 
 ## 故障排除
 
@@ -274,9 +301,9 @@ permissions:
 
 ## 安全说明
 
-- 登录与会话：所有管理接口通过会话保护，默认管理员密码为 `admin123`，请立即修改。生产环境务必设置强随机的 `SESSION_SECRET`，启用 HTTPS 并将会话 cookie 配置为 `secure: true` 与 `httpOnly`。
-- EVHD 密文（RSA 信封）：客户端在本机 TPM 生成 RSA 密钥对并注册公钥；服务端通过 `GET /api/evhd-envelope` 使用设备公钥以 `RSA‑OAEP‑SHA1` 加密 EVHD 密码，客户端用 TPM 私钥解密。该接口不需要登录，但需设备已注册公钥且管理员已审批；不再使用旧的基于时区的简易防护方案。
-- 明文查询（仅管理用途）：`GET /api/evhd-password/plain?machineId=...` 需要登录，仅用于管理/排障。生产环境建议严格限制或禁用该接口，确保最小权限访问，并强制使用 HTTPS。
+- 登录与会话：所有管理接口通过初始化向导生成的管理员口令与 Session Secret 保护，不再存在默认管理员密码。生产环境务必启用 HTTPS，并将会话 cookie 运行在受信网络环境中。
+- EVHD 密文（RSA 信封）：客户端在本机 TPM 生成 RSA 密钥对，并使用预配置注册证书对注册请求签名；服务端通过 `GET /api/evhd-envelope` 使用设备公钥以 `RSA‑OAEP‑SHA1` 加密 EVHD 密码，客户端用 TPM 私钥解密。
+- 明文查询（仅管理用途）：`GET /api/evhd-password/plain?machineId=...&reason=...` 需要登录并先完成 OTP 二次验证，仅用于管理/排障。
 - 审批与重置：管理员审批通过后设备才能获取密文。执行“重置注册状态”会删除已注册的公钥并将审批状态重置为未审批，以阻止后续密文下发。
 - 最近在线审计：服务端在设备调用 `boot-image-select`、`evhd-envelope` 或注册公钥时写入 `last_seen` 时间，仅用于审计与可观测性，不影响权限判定。
 - 数据与日志：服务端仅保存设备公钥与 EVHD 密码（明文）于数据库。请配置数据库访问控制与备份策略；避免在日志中输出敏感数据（例如明文密码、私钥）。

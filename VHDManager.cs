@@ -1334,30 +1334,202 @@ namespace VHDMounter
             return sb.ToString();
         }
 
-        private async Task RegisterPublicKeyAsync(string envelopeUrl, string machineId, string pubkeyPem)
+        private string NormalizePemText(string pem)
+        {
+            return string.IsNullOrWhiteSpace(pem) ? string.Empty : pem.Trim();
+        }
+
+        private string ResolveConfigPath(string rawPath)
+        {
+            if (string.IsNullOrWhiteSpace(rawPath))
+            {
+                return rawPath;
+            }
+
+            return Path.IsPathRooted(rawPath)
+                ? rawPath
+                : Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, rawPath));
+        }
+
+        private X509Certificate2 LoadRegistrationCertificate(Dictionary<string, string> config)
+        {
+            if (!config.TryGetValue("RegistrationCertificatePath", out var certificatePath) || string.IsNullOrWhiteSpace(certificatePath))
+            {
+                throw new InvalidOperationException("未配置 RegistrationCertificatePath，无法进行预配置证书签名注册");
+            }
+
+            var resolvedCertificatePath = ResolveConfigPath(certificatePath);
+            if (!File.Exists(resolvedCertificatePath))
+            {
+                throw new FileNotFoundException($"注册证书文件不存在: {resolvedCertificatePath}");
+            }
+
+            var password = config.TryGetValue("RegistrationCertificatePassword", out var passwordValue)
+                ? passwordValue
+                : string.Empty;
+
+            var certificate = new X509Certificate2(
+                resolvedCertificatePath,
+                password,
+                X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet);
+
+            if (!certificate.HasPrivateKey)
+            {
+                certificate.Dispose();
+                throw new InvalidOperationException("注册证书缺少私钥，无法签名注册请求");
+            }
+
+            return certificate;
+        }
+
+        private string BuildRegistrationSigningPayload(string machineId, string keyId, string keyType, string pubkeyPem, long timestamp, string nonce)
+        {
+            var canonicalMachineId = (machineId ?? string.Empty).Trim().ToUpperInvariant();
+            var canonicalKeyId = (keyId ?? string.Empty).Trim();
+            var canonicalKeyType = (keyType ?? string.Empty).Trim().ToUpperInvariant();
+            var canonicalPublicKeyPem = NormalizePemText(pubkeyPem);
+            var canonicalNonce = (nonce ?? string.Empty).Trim();
+
+            using var sha = SHA256.Create();
+            var hashBytes = sha.ComputeHash(Encoding.UTF8.GetBytes(canonicalPublicKeyPem));
+            var publicKeyHash = Convert.ToHexString(hashBytes).ToLowerInvariant();
+
+            return string.Join("\n", new[]
+            {
+                "VHDMounterRegistrationV1",
+                canonicalMachineId,
+                canonicalKeyId,
+                canonicalKeyType,
+                publicKeyHash,
+                timestamp.ToString(),
+                canonicalNonce,
+            });
+        }
+
+        private string ExportCertificatePem(X509Certificate2 certificate)
+        {
+            var certBytes = certificate.Export(X509ContentType.Cert);
+            var b64 = Convert.ToBase64String(certBytes);
+            var sb = new StringBuilder();
+            sb.AppendLine("-----BEGIN CERTIFICATE-----");
+            for (int i = 0; i < b64.Length; i += 64)
+            {
+                sb.AppendLine(b64.Substring(i, Math.Min(64, b64.Length - i)));
+            }
+            sb.AppendLine("-----END CERTIFICATE-----");
+            return sb.ToString().Trim();
+        }
+
+        private string GenerateRegistrationNonce()
+        {
+            var nonceBytes = RandomNumberGenerator.GetBytes(16);
+            return Convert.ToHexString(nonceBytes).ToLowerInvariant();
+        }
+
+        private async Task<bool> RegisterPublicKeyAsync(string envelopeUrl, string machineId, string pubkeyPem)
         {
             try
             {
+                var config = ReadConfig();
                 var baseUrl = envelopeUrl;
                 var idx = baseUrl.IndexOf("/api/", StringComparison.OrdinalIgnoreCase);
                 if (idx > 0) baseUrl = baseUrl.Substring(0, idx);
                 var regUrl = $"{baseUrl}/api/machines/{Uri.EscapeDataString(machineId)}/keys";
+
+                var keyId = $"VHDMounterKey_{machineId}";
+                var keyType = "RSA";
+                var normalizedPubkeyPem = NormalizePemText(pubkeyPem);
+                var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                var nonce = GenerateRegistrationNonce();
+
+                using var registrationCertificate = LoadRegistrationCertificate(config);
+                using var registrationPrivateKey = registrationCertificate.GetRSAPrivateKey();
+                if (registrationPrivateKey == null)
+                {
+                    throw new InvalidOperationException("注册证书不包含 RSA 私钥");
+                }
+
+                var signingPayload = BuildRegistrationSigningPayload(machineId, keyId, keyType, normalizedPubkeyPem, timestamp, nonce);
+                var signatureBytes = registrationPrivateKey.SignData(
+                    Encoding.UTF8.GetBytes(signingPayload),
+                    HashAlgorithmName.SHA256,
+                    RSASignaturePadding.Pkcs1);
+
                 var payload = new
                 {
-                    keyId = $"VHDMounterKey_{machineId}",
-                    keyType = "RSA",
-                    pubkeyPem = pubkeyPem
+                    keyId,
+                    keyType,
+                    pubkeyPem = normalizedPubkeyPem,
+                    registrationCertificatePem = ExportCertificatePem(registrationCertificate),
+                    signature = Convert.ToBase64String(signatureBytes),
+                    timestamp,
+                    nonce,
                 };
                 var json = JsonSerializer.Serialize(payload);
                 var req = new StringContent(json, Encoding.UTF8, "application/json");
                 var res = await httpClient.PostAsync(regUrl, req);
-                // 非严格要求成功（可能已注册），仅记录状态
-                StatusChanged?.Invoke(res.IsSuccessStatusCode ? "已注册机台公钥" : $"注册公钥失败: {res.StatusCode}");
+                var body = await res.Content.ReadAsStringAsync();
+
+                if (res.IsSuccessStatusCode)
+                {
+                    StatusChanged?.Invoke("已提交机台公钥签名注册，等待管理员审批");
+                    return true;
+                }
+
+                string errorMessage = null;
+                try
+                {
+                    using var doc = JsonDocument.Parse(body);
+                    if (doc.RootElement.TryGetProperty("error", out var errorElement))
+                    {
+                        errorMessage = errorElement.GetString();
+                    }
+                }
+                catch { }
+
+                StatusChanged?.Invoke(errorMessage ?? $"注册公钥失败: {res.StatusCode}");
+                return false;
             }
             catch (Exception ex)
             {
                 StatusChanged?.Invoke($"注册公钥异常: {ex.Message}");
+                return false;
             }
+        }
+
+        private async Task WritePasswordToMountToolAsync(Process process, string password)
+        {
+            if (process == null)
+            {
+                throw new ArgumentNullException(nameof(process));
+            }
+
+            if (process.HasExited)
+            {
+                throw new InvalidOperationException("加密VHD挂载工具在接收密码前已退出");
+            }
+
+            await process.StandardInput.WriteAsync(password ?? string.Empty);
+            await process.StandardInput.FlushAsync();
+            process.StandardInput.Close();
+        }
+
+        private static string BuildMountToolFailureDetail(int exitCode, string stderr, string stdout)
+        {
+            var errorText = string.IsNullOrWhiteSpace(stderr) ? null : stderr.Trim();
+            var outputText = string.IsNullOrWhiteSpace(stdout) ? null : stdout.Trim();
+
+            if (!string.IsNullOrEmpty(errorText))
+            {
+                return $"EVHD挂载进程提前退出，退出码 {exitCode}: {errorText}";
+            }
+
+            if (!string.IsNullOrEmpty(outputText))
+            {
+                return $"EVHD挂载进程提前退出，退出码 {exitCode}: {outputText}";
+            }
+
+            return $"EVHD挂载进程提前退出，退出码 {exitCode}";
         }
 
         // 挂载EVHD到N盘，并从其中提取解密后的VHD再挂载
@@ -1389,18 +1561,43 @@ namespace VHDMounter
                     FileName = fileName,
                     UseShellExecute = false,
                     CreateNoWindow = true,
+                    RedirectStandardInput = true,
+                    StandardInputEncoding = Encoding.UTF8,
                     RedirectStandardOutput = true,
-                    RedirectStandardError = true
+                    StandardOutputEncoding = Encoding.UTF8,
+                    RedirectStandardError = true,
+                    StandardErrorEncoding = Encoding.UTF8
                 };
-                // 使用 ArgumentList 逐项传参，确保密码中的特殊符号与空格不会造成截断
-                psi.ArgumentList.Add("/p");
-                psi.ArgumentList.Add(password);
+                psi.ArgumentList.Add("--password-stdin");
                 psi.ArgumentList.Add(evhdPath);
                 psi.ArgumentList.Add("N:");
 
+                var stdoutBuilder = new StringBuilder();
+                var stderrBuilder = new StringBuilder();
                 var proc = new Process { StartInfo = psi };
 
+                proc.OutputDataReceived += (_, args) =>
+                {
+                    if (!string.IsNullOrEmpty(args.Data))
+                    {
+                        stdoutBuilder.AppendLine(args.Data);
+                    }
+                };
+
+                proc.ErrorDataReceived += (_, args) =>
+                {
+                    if (!string.IsNullOrEmpty(args.Data))
+                    {
+                        stderrBuilder.AppendLine(args.Data);
+                    }
+                };
+
                 proc.Start();
+                proc.BeginOutputReadLine();
+                proc.BeginErrorReadLine();
+                await WritePasswordToMountToolAsync(proc, password);
+                password = null;
+
                 // 保存引用，确保工具在主程序生命周期内持续运行
                 evhdMountProcess = proc;
 
@@ -1418,12 +1615,26 @@ namespace VHDMounter
                         break;
                     }
 
+                    if (proc.HasExited)
+                    {
+                        evhdMountProcess = null;
+                        await ShowStatusAndWait(BuildMountToolFailureDetail(proc.ExitCode, stderrBuilder.ToString(), stdoutBuilder.ToString()));
+                        return false;
+                    }
+
                     await Task.Delay(500);
                 }
 
                 // 未检测到 N:，视为超时失败（不主动结束加密挂载进程）
                 if (!nReady)
                 {
+                    if (proc.HasExited)
+                    {
+                        evhdMountProcess = null;
+                        await ShowStatusAndWait(BuildMountToolFailureDetail(proc.ExitCode, stderrBuilder.ToString(), stdoutBuilder.ToString()));
+                        return false;
+                    }
+
                     await ShowStatusAndWait("EVHD挂载超时（超过60秒），未检测到N盘");
                     return false;
                 }

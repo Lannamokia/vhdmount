@@ -1,549 +1,922 @@
-const express = require('express');
-const cors = require('cors');
-const bodyParser = require('body-parser');
-const path = require('path');
-const fs = require('fs');
-const session = require('express-session');
-const bcrypt = require('bcryptjs');
-const crypto = require('crypto');
 require('dotenv').config();
 
-const database = require('./database');
+const crypto = require('crypto');
+const express = require('express');
+const fs = require('fs');
+const helmet = require('helmet');
+const path = require('path');
+const rateLimit = require('express-rate-limit');
+const session = require('express-session');
 
-const app = express();
-const PORT = process.env.PORT || 8080;
+const { AuditLog } = require('./auditLog');
+const { createDatabase } = require('./database');
+const { RegistrationAuthError, verifySignedRegistrationRequest } = require('./registrationAuth');
+const { SecurityStore } = require('./securityStore');
+const {
+    ValidationError,
+    assertKeyId,
+    assertMachineId,
+    assertOptionalReason,
+    assertRsaPublicKeyPem,
+    assertString,
+    assertVhdKeyword,
+} = require('./validators');
 
-// 管理员密码配置 (默认密码: admin123) - 现在从数据库获取
-const DEFAULT_ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH || bcrypt.hashSync('admin123', 10);
+const DEFAULT_PORT = Number(process.env.PORT || 8080);
+const DEFAULT_VHD_KEYWORD = 'SDEZ';
+const OTP_STEP_UP_WINDOW_MS = 5 * 60 * 1000;
+const APP_VERSION = '2.0.0';
 
-// 会话配置
-app.use(session({
-    secret: process.env.SESSION_SECRET || 'vhd-select-server-secret-key-2024',
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-        secure: false, // 在生产环境中应该设置为true (需要HTTPS)
-        httpOnly: true,
-        maxAge: 24 * 60 * 60 * 1000 // 24小时
-    }
-}));
-
-// 中间件
-app.use(cors({
-    origin: true,
-    credentials: true // 允许发送cookies
-}));
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
-
-// VHD关键词存储
-let currentVhdKeyword = 'SDEZ'; // 默认值
-
-// 配置文件路径 - 支持Docker环境
-const configDir = process.env.CONFIG_PATH || __dirname;
-const configFile = path.join(configDir, 'vhd-config.json');
-
-// 确保配置目录存在
-if (!fs.existsSync(configDir)) {
-    fs.mkdirSync(configDir, { recursive: true });
+function writeJsonAtomic(filePath, data) {
+    const tempFile = `${filePath}.tmp`;
+    fs.writeFileSync(tempFile, JSON.stringify(data, null, 2), 'utf8');
+    fs.renameSync(tempFile, filePath);
 }
 
-// 加载配置
-function loadConfig() {
-    try {
-        if (fs.existsSync(configFile)) {
-            const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
-            currentVhdKeyword = config.vhdKeyword || 'SDEZ';
+function createServiceSettingsStore(configDir, logger = console) {
+    const settingsFile = path.join(configDir, 'vhd-config.json');
+
+    function ensureDir() {
+        if (!fs.existsSync(configDir)) {
+            fs.mkdirSync(configDir, { recursive: true });
         }
-    } catch (error) {
-        console.log('配置文件加载失败，使用默认值:', error.message);
     }
-}
 
-// 保存配置
-function saveConfig() {
-    try {
-        const config = { vhdKeyword: currentVhdKeyword };
-        fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
-    } catch (error) {
-        console.error('配置文件保存失败:', error.message);
+    function load() {
+        ensureDir();
+        if (!fs.existsSync(settingsFile)) {
+            return {
+                defaultVhdKeyword: DEFAULT_VHD_KEYWORD,
+                updatedAt: null,
+            };
+        }
+
+        try {
+            const raw = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+            const keyword = assertVhdKeyword(raw.defaultVhdKeyword || raw.vhdKeyword || DEFAULT_VHD_KEYWORD);
+            return {
+                defaultVhdKeyword: keyword,
+                updatedAt: raw.updatedAt || null,
+            };
+        } catch (error) {
+            logger.error('读取服务配置失败，使用默认VHD关键词:', error.message);
+            return {
+                defaultVhdKeyword: DEFAULT_VHD_KEYWORD,
+                updatedAt: null,
+            };
+        }
     }
-}
 
-// 使用机台公钥进行RSA-OAEP(SHA-1)加密（兼容更多TPM实现）
-function encryptWithPublicKeyRSA(publicKeyPem, plaintext) {
-    try {
-        const buffer = Buffer.from(plaintext, 'utf8');
-        const encrypted = crypto.publicEncrypt({
-            key: publicKeyPem,
-            padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
-            oaepHash: 'sha1'
-        }, buffer);
-        return encrypted.toString('base64');
-    } catch (err) {
-        console.error('EVHD密码RSA加密失败:', err.message);
-        return '';
+    function save(nextConfig) {
+        ensureDir();
+        writeJsonAtomic(settingsFile, nextConfig);
+        return nextConfig;
     }
-}
 
-// 认证中间件
-function requireAuth(req, res, next) {
-    if (req.session && req.session.isAuthenticated) {
-        return next();
-    } else {
-        return res.status(401).json({ 
-            success: false, 
-            message: '需要登录',
-            requireAuth: true 
-        });
-    }
-}
-
-// 静态文件服务 (登录页面不需要认证)
-app.use(express.static(path.join(__dirname, 'public')));
-
-// 认证API路由
-app.post('/api/auth/login', async (req, res) => {
-    try {
-        const { password } = req.body;
-        
-        console.log(`[${new Date().toISOString()}] 登录尝试`);
-        
-        if (!password) {
-            return res.status(400).json({
-                success: false,
-                message: '请输入密码'
+    return {
+        getPath() {
+            return settingsFile;
+        },
+        load,
+        getDefaultVhdKeyword() {
+            return load().defaultVhdKeyword;
+        },
+        setDefaultVhdKeyword(keyword) {
+            const normalizedKeyword = assertVhdKeyword(keyword);
+            return save({
+                defaultVhdKeyword: normalizedKeyword,
+                vhdKeyword: normalizedKeyword,
+                updatedAt: new Date().toISOString(),
             });
-        }
-        
-        // 从数据库获取密码哈希
-        let adminPasswordHash = await database.getAdminPasswordHash();
-        
-        // 如果数据库中没有密码，使用默认密码
-        if (!adminPasswordHash) {
-            adminPasswordHash = DEFAULT_ADMIN_PASSWORD_HASH;
-            // 将默认密码保存到数据库
+        },
+    };
+}
+
+function asyncHandler(handler) {
+    return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
+}
+
+function createJsonError(statusCode, message, extra = {}) {
+    const error = new Error(message);
+    error.statusCode = statusCode;
+    Object.assign(error, extra);
+    return error;
+}
+
+function parsePositiveInteger(value, fallbackValue, maxValue = 500) {
+    const parsed = Number.parseInt(String(value || ''), 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        return fallbackValue;
+    }
+    return Math.min(parsed, maxValue);
+}
+
+function normalizeFingerprint(value) {
+    return String(value || '').replace(/:/g, '').trim().toUpperCase();
+}
+
+function buildAuditMetadata(req) {
+    return {
+        ip: req.ip,
+        method: req.method,
+        path: req.originalUrl,
+        userAgent: req.get('user-agent') || '',
+    };
+}
+
+function encryptWithPublicKeyRSA(publicKeyPem, plaintext) {
+    const buffer = Buffer.from(plaintext, 'utf8');
+    const encrypted = crypto.publicEncrypt({
+        key: publicKeyPem,
+        padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+        oaepHash: 'sha1',
+    }, buffer);
+    return encrypted.toString('base64');
+}
+
+function regenerateSession(req) {
+    return new Promise((resolve, reject) => {
+        req.session.regenerate((error) => {
+            if (error) {
+                reject(error);
+                return;
+            }
+            resolve();
+        });
+    });
+}
+
+function saveSession(req) {
+    return new Promise((resolve, reject) => {
+        req.session.save((error) => {
+            if (error) {
+                reject(error);
+                return;
+            }
+            resolve();
+        });
+    });
+}
+
+function destroySession(req) {
+    return new Promise((resolve, reject) => {
+        req.session.destroy((error) => {
+            if (error) {
+                reject(error);
+                return;
+            }
+            resolve();
+        });
+    });
+}
+
+async function createApp(options = {}) {
+    const logger = options.logger || console;
+    const configDir = options.configDir || process.env.CONFIG_PATH || __dirname;
+    const securityStore = options.securityStore || new SecurityStore(configDir);
+    const serviceSettingsStore = options.serviceSettingsStore || createServiceSettingsStore(configDir, logger);
+    const auditLog = options.auditLog || new AuditLog(securityStore.getPaths().auditFile);
+    const databaseFactory = options.databaseFactory || ((dbConfig) => createDatabase(dbConfig, logger));
+    const sessionStore = options.sessionStore || new session.MemoryStore();
+    const otpStepUpWindowMs = Number(options.otpStepUpWindowMs || OTP_STEP_UP_WINDOW_MS);
+    const sessionSecrets = [crypto.randomBytes(48).toString('hex')];
+    const providedDatabase = options.database || null;
+    let providedDatabaseInitialized = false;
+
+    const runtime = {
+        auditLog,
+        configDir,
+        database: null,
+        databaseError: null,
+        initialized: false,
+        logger,
+        otpStepUpWindowMs,
+        registrationNonceCache: new Map(),
+        securityConfig: null,
+        securityStore,
+        serviceSettingsStore,
+        sessionSecrets,
+        writeAudit(req, entry) {
             try {
-                await database.updateAdminPasswordHash(adminPasswordHash);
-                console.log('默认管理员密码已保存到数据库');
+                auditLog.append({
+                    ...buildAuditMetadata(req),
+                    ...entry,
+                });
             } catch (error) {
-                console.error('保存默认密码到数据库失败:', error.message);
+                logger.error('写入审计日志失败:', error.message);
+            }
+        },
+    };
+
+    async function connectDatabase(dbConfig) {
+        const database = providedDatabase || databaseFactory(dbConfig);
+        if (!database) {
+            throw new Error('数据库实例创建失败');
+        }
+
+        if (!providedDatabase || !providedDatabaseInitialized) {
+            if (typeof database.initialize === 'function') {
+                await database.initialize();
+            }
+            if (providedDatabase) {
+                providedDatabaseInitialized = true;
             }
         }
-        
-        // 验证密码
-        const isValidPassword = await bcrypt.compare(password, adminPasswordHash);
-        
-        if (isValidPassword) {
-            req.session.isAuthenticated = true;
-            console.log(`[${new Date().toISOString()}] 登录成功`);
-            res.json({
-                success: true,
-                message: '登录成功'
+
+        runtime.database = database;
+        runtime.databaseError = null;
+        return database;
+    }
+
+    if (securityStore.isInitialized()) {
+        runtime.initialized = true;
+        runtime.securityConfig = securityStore.loadSecurityConfig();
+        sessionSecrets.unshift(runtime.securityConfig.sessionSecret);
+
+        try {
+            await connectDatabase(runtime.securityConfig.dbConfig);
+        } catch (error) {
+            runtime.database = null;
+            runtime.databaseError = error;
+            logger.error('启动时连接数据库失败:', error.message);
+        }
+    }
+
+    const app = express();
+    app.set('trust proxy', options.trustProxy ?? 1);
+    app.locals.runtime = runtime;
+
+    app.use(helmet({
+        contentSecurityPolicy: false,
+    }));
+
+    app.use((req, res, next) => {
+        const origin = req.headers.origin;
+        if (!origin) {
+            next();
+            return;
+        }
+
+        const allowedOrigins = runtime.initialized ? (runtime.securityConfig?.allowedOrigins || []) : [];
+        const originAllowed = allowedOrigins.includes('*') || allowedOrigins.includes(origin);
+
+        if (!originAllowed) {
+            res.status(403).json({ success: false, error: 'Origin 不在允许列表中' });
+            return;
+        }
+
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+        res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
+        res.setHeader('Vary', 'Origin');
+
+        if (req.method === 'OPTIONS') {
+            res.status(204).end();
+            return;
+        }
+
+        next();
+    });
+
+    app.use(express.json({ limit: '256kb' }));
+    app.use(express.urlencoded({ extended: false, limit: '64kb' }));
+    app.use(session({
+        name: 'vhdmount.sid',
+        secret: sessionSecrets,
+        resave: false,
+        saveUninitialized: false,
+        store: sessionStore,
+        cookie: {
+            httpOnly: true,
+            sameSite: 'strict',
+            secure: 'auto',
+            maxAge: 24 * 60 * 60 * 1000,
+        },
+    }));
+
+    const apiLimiter = rateLimit({
+        windowMs: 60 * 1000,
+        max: Number(process.env.API_RATE_LIMIT_MAX || 240),
+        standardHeaders: true,
+        legacyHeaders: false,
+    });
+    const loginLimiter = rateLimit({
+        windowMs: 10 * 60 * 1000,
+        max: Number(process.env.LOGIN_RATE_LIMIT_MAX || 20),
+        standardHeaders: true,
+        legacyHeaders: false,
+    });
+    const sensitiveLimiter = rateLimit({
+        windowMs: 10 * 60 * 1000,
+        max: Number(process.env.SENSITIVE_RATE_LIMIT_MAX || 40),
+        standardHeaders: true,
+        legacyHeaders: false,
+    });
+
+    app.use('/api', apiLimiter);
+
+    function requireInitialized(req, res, next) {
+        if (runtime.initialized) {
+            next();
+            return;
+        }
+
+        res.status(503).json({
+            success: false,
+            error: '服务尚未初始化',
+            initializeRequired: true,
+            pendingInitialization: !!securityStore.getPendingInitialization(),
+        });
+    }
+
+    function requireDatabase(req, res, next) {
+        if (runtime.database) {
+            next();
+            return;
+        }
+
+        res.status(503).json({
+            success: false,
+            error: '数据库当前不可用',
+            details: runtime.databaseError ? runtime.databaseError.message : '数据库尚未连接',
+        });
+    }
+
+    function requireAuth(req, res, next) {
+        if (!runtime.initialized) {
+            res.status(503).json({
+                success: false,
+                error: '服务尚未初始化',
+                initializeRequired: true,
             });
-        } else {
-            console.log(`[${new Date().toISOString()}] 登录失败: 密码错误`);
+            return;
+        }
+
+        if (req.session && req.session.isAuthenticated) {
+            next();
+            return;
+        }
+
+        res.status(401).json({
+            success: false,
+            message: '需要登录',
+            requireAuth: true,
+        });
+    }
+
+    function requireOtpStepUp(req, res, next) {
+        const otpVerifiedUntil = Number(req.session?.otpVerifiedUntil || 0);
+        if (otpVerifiedUntil >= Date.now()) {
+            next();
+            return;
+        }
+
+        res.status(403).json({
+            success: false,
+            error: '需要完成 OTP 二次验证',
+            requireOtp: true,
+        });
+    }
+
+    app.get('/api/init/status', (req, res) => {
+        const pendingInitialization = securityStore.getPendingInitialization();
+        res.json({
+            success: true,
+            initialized: runtime.initialized,
+            pendingInitialization: !!pendingInitialization,
+            pendingInitializationCreatedAt: pendingInitialization?.createdAt || null,
+            pendingOtpIssuer: pendingInitialization?.issuer || null,
+            pendingOtpAccountName: pendingInitialization?.accountName || null,
+            databaseReady: !!runtime.database,
+            databaseError: runtime.databaseError ? runtime.databaseError.message : null,
+            defaultVhdKeyword: serviceSettingsStore.getDefaultVhdKeyword(),
+            trustedRegistrationCertificateCount: runtime.initialized
+                ? (runtime.securityConfig?.trustedRegistrationCertificates || []).length
+                : 0,
+        });
+    });
+
+    app.post('/api/init/prepare', sensitiveLimiter, asyncHandler(async (req, res) => {
+        if (runtime.initialized) {
+            throw createJsonError(409, '服务已经初始化完成');
+        }
+
+        const setup = securityStore.beginInitialization({
+            issuer: req.body?.issuer,
+            accountName: req.body?.accountName,
+        });
+
+        runtime.writeAudit(req, {
+            type: 'init.prepare',
+            actor: 'bootstrap',
+            result: 'success',
+        });
+
+        res.status(201).json({
+            success: true,
+            ...setup,
+        });
+    }));
+
+    app.post('/api/init/complete', sensitiveLimiter, asyncHandler(async (req, res) => {
+        if (runtime.initialized) {
+            throw createJsonError(409, '服务已经初始化完成');
+        }
+
+        const config = securityStore.buildSecurityConfig({
+            adminPassword: req.body?.adminPassword,
+            sessionSecret: req.body?.sessionSecret,
+            totpCode: req.body?.totpCode,
+            dbConfig: req.body?.dbConfig,
+            allowedOrigins: req.body?.allowedOrigins,
+            trustedRegistrationCertificates: req.body?.trustedRegistrationCertificates,
+        });
+
+        let database = null;
+        try {
+            database = await connectDatabase(config.dbConfig);
+            securityStore.commitInitialization(config);
+            runtime.initialized = true;
+            runtime.securityConfig = securityStore.loadSecurityConfig();
+            if (!runtime.sessionSecrets.includes(config.sessionSecret)) {
+                runtime.sessionSecrets.unshift(config.sessionSecret);
+            }
+
+            const defaultVhdKeyword = req.body?.defaultVhdKeyword
+                ? assertVhdKeyword(req.body.defaultVhdKeyword)
+                : serviceSettingsStore.getDefaultVhdKeyword();
+            serviceSettingsStore.setDefaultVhdKeyword(defaultVhdKeyword);
+
+            runtime.writeAudit(req, {
+                type: 'init.complete',
+                actor: 'bootstrap',
+                result: 'success',
+                trustedRegistrationCertificateCount: (runtime.securityConfig.trustedRegistrationCertificates || []).length,
+            });
+
+            res.status(201).json({
+                success: true,
+                initialized: true,
+                defaultVhdKeyword,
+                trustedRegistrationCertificateCount: (runtime.securityConfig.trustedRegistrationCertificates || []).length,
+            });
+        } catch (error) {
+            if (database && !providedDatabase && typeof database.close === 'function') {
+                try {
+                    await database.close();
+                } catch (closeError) {
+                    logger.error('初始化失败后关闭数据库连接失败:', closeError.message);
+                }
+            }
+
+            runtime.database = null;
+            runtime.databaseError = error;
+            throw error;
+        }
+    }));
+
+    app.post('/api/auth/login', loginLimiter, asyncHandler(async (req, res) => {
+        if (!runtime.initialized) {
+            res.status(503).json({
+                success: false,
+                error: '服务尚未初始化',
+                initializeRequired: true,
+            });
+            return;
+        }
+
+        const password = String(req.body?.password || '');
+        if (!password) {
+            throw createJsonError(400, '请输入密码');
+        }
+
+        const passwordValid = securityStore.verifyPassword(password);
+        if (!passwordValid) {
+            runtime.writeAudit(req, {
+                type: 'auth.login',
+                actor: 'admin',
+                result: 'failure',
+            });
             res.status(401).json({
                 success: false,
-                message: '密码错误'
+                message: '密码错误',
             });
+            return;
         }
-    } catch (error) {
-        console.error('登录错误:', error);
-        res.status(500).json({
-            success: false,
-            message: '服务器错误'
-        });
-    }
-});
 
-app.post('/api/auth/logout', (req, res) => {
-    req.session.destroy((err) => {
-        if (err) {
-            console.error('登出错误:', err);
-            return res.status(500).json({
-                success: false,
-                message: '登出失败'
-            });
-        }
+        await regenerateSession(req);
+        req.session.isAuthenticated = true;
+        req.session.authenticatedAt = Date.now();
+        req.session.otpVerifiedUntil = 0;
+        await saveSession(req);
+
+        runtime.writeAudit(req, {
+            type: 'auth.login',
+            actor: 'admin',
+            result: 'success',
+        });
+
         res.json({
             success: true,
-            message: '已登出'
+            message: '登录成功',
+        });
+    }));
+
+    app.post('/api/auth/logout', asyncHandler(async (req, res) => {
+        if (req.session) {
+            await destroySession(req);
+        }
+
+        res.json({
+            success: true,
+            message: '已登出',
+        });
+    }));
+
+    app.get('/api/auth/check', (req, res) => {
+        res.json({
+            initialized: runtime.initialized,
+            isAuthenticated: !!req.session?.isAuthenticated,
+            otpVerified: Number(req.session?.otpVerifiedUntil || 0) >= Date.now(),
+            pendingInitialization: !runtime.initialized && !!securityStore.getPendingInitialization(),
         });
     });
-});
 
-app.get('/api/auth/check', (req, res) => {
-    res.json({
-        isAuthenticated: !!(req.session && req.session.isAuthenticated)
-    });
-});
+    app.post('/api/auth/change-password', requireAuth, asyncHandler(async (req, res) => {
+        const currentPassword = String(req.body?.currentPassword || '');
+        const newPassword = String(req.body?.newPassword || '');
+        const confirmPassword = String(req.body?.confirmPassword || '');
 
-// 修改管理员密码
-app.post('/api/auth/change-password', requireAuth, async (req, res) => {
-    try {
-        const { currentPassword, newPassword, confirmPassword } = req.body;
-        
-        console.log(`[${new Date().toISOString()}] 密码修改请求`);
-        
-        // 验证输入
         if (!currentPassword || !newPassword || !confirmPassword) {
-            return res.status(400).json({
-                success: false,
-                message: '请填写所有密码字段'
-            });
+            throw createJsonError(400, '请填写所有密码字段');
         }
-        
         if (newPassword !== confirmPassword) {
-            return res.status(400).json({
-                success: false,
-                message: '新密码和确认密码不匹配'
-            });
+            throw createJsonError(400, '新密码和确认密码不匹配');
         }
-        
-        if (newPassword.length < 6) {
-            return res.status(400).json({
-                success: false,
-                message: '新密码长度至少为6位'
-            });
+        if (newPassword.length < 12) {
+            throw createJsonError(400, '新密码长度至少为 12 位');
         }
-        
-        // 获取当前密码哈希
-        const currentPasswordHash = await database.getAdminPasswordHash();
-        if (!currentPasswordHash) {
-            return res.status(500).json({
-                success: false,
-                message: '无法获取当前密码信息'
+        if (!securityStore.verifyPassword(currentPassword)) {
+            runtime.writeAudit(req, {
+                type: 'auth.change-password',
+                actor: 'admin',
+                result: 'failure',
             });
+            throw createJsonError(401, '当前密码错误');
         }
-        
-        // 验证当前密码
-        const isCurrentPasswordValid = await bcrypt.compare(currentPassword, currentPasswordHash);
-        if (!isCurrentPasswordValid) {
-            console.log(`[${new Date().toISOString()}] 密码修改失败: 当前密码错误`);
-            return res.status(401).json({
-                success: false,
-                message: '当前密码错误'
-            });
-        }
-        
-        // 生成新密码哈希
-        const newPasswordHash = await bcrypt.hash(newPassword, 10);
-        
-        // 更新数据库中的密码
-        await database.updateAdminPasswordHash(newPasswordHash);
-        
-        console.log(`[${new Date().toISOString()}] 管理员密码修改成功`);
-        
+
+        securityStore.updatePassword(newPassword);
+        runtime.securityConfig = securityStore.loadSecurityConfig();
+        req.session.otpVerifiedUntil = 0;
+        await saveSession(req);
+
+        runtime.writeAudit(req, {
+            type: 'auth.change-password',
+            actor: 'admin',
+            result: 'success',
+        });
+
         res.json({
             success: true,
-            message: '密码修改成功'
+            message: '密码修改成功',
         });
-        
-    } catch (error) {
-        console.error('密码修改错误:', error);
-        res.status(500).json({
-            success: false,
-            message: '服务器错误，密码修改失败'
-        });
-    }
-});
+    }));
 
-// API路由
-
-// 获取当前VHD关键词 - 需要Machine ID验证
-app.get('/api/boot-image-select', async (req, res) => {
-    const machineId = req.query.machineId;
-    
-    console.log(`[${new Date().toISOString()}] API请求: GET /api/boot-image-select, Machine ID: ${machineId}`);
-    
-    if (!machineId) {
-        return res.status(400).json({
-            success: false,
-            error: 'Machine ID是必需的'
-        });
-    }
-    
-    try {
-        // 从数据库获取机台信息
-        let machine = await database.getMachine(machineId);
-        
-        // 如果机台不存在，创建新的机台记录
-        if (!machine) {
-            machine = await database.upsertMachine(machineId, false, currentVhdKeyword);
-            console.log(`[${new Date().toISOString()}] 创建新机台: ${machineId}`);
+    app.post('/api/auth/otp/verify', requireAuth, sensitiveLimiter, asyncHandler(async (req, res) => {
+        const code = assertString(req.body?.code, 'code', 6, 12);
+        if (!securityStore.verifyTotp(code)) {
+            runtime.writeAudit(req, {
+                type: 'auth.otp.verify',
+                actor: 'admin',
+                result: 'failure',
+            });
+            throw createJsonError(401, 'OTP 校验失败');
         }
-        // 更新最近在线时间
-        await database.updateMachineLastSeen(machineId);
-        
-        res.json({
-            success: true,
-            BootImageSelected: machine ? machine.vhd_keyword : currentVhdKeyword,
-            machineId: machineId,
-            timestamp: new Date().toISOString()
-        });
-    } catch (error) {
-        console.error('获取VHD关键词失败:', error.message);
-        // 降级到内存存储
-        res.json({
-            success: true,
-            BootImageSelected: currentVhdKeyword,
-            machineId: machineId,
-            timestamp: new Date().toISOString()
-        });
-    }
-});
 
-// 设置VHD关键词 (需要认证)
-app.post('/api/set-vhd', requireAuth, (req, res) => {
-    const { BootImageSelected } = req.body;
-    
-    if (!BootImageSelected || typeof BootImageSelected !== 'string') {
-        return res.status(400).json({
-            success: false,
-            error: 'VHD关键词不能为空且必须是字符串'
+        req.session.otpVerifiedUntil = Date.now() + otpStepUpWindowMs;
+        await saveSession(req);
+
+        runtime.writeAudit(req, {
+            type: 'auth.otp.verify',
+            actor: 'admin',
+            result: 'success',
         });
-    }
-    
-    // 验证关键词格式（可选：添加更严格的验证）
-    const trimmedKeyword = BootImageSelected.trim().toUpperCase();
-    if (trimmedKeyword.length === 0) {
-        return res.status(400).json({
-            success: false,
-            error: 'VHD关键词不能为空'
+
+        res.json({
+            success: true,
+            otpVerifiedUntil: req.session.otpVerifiedUntil,
         });
-    }
-    
-    currentVhdKeyword = trimmedKeyword;
-    saveConfig();
-    
-    console.log(`[${new Date().toISOString()}] VHD关键词已更新为: ${currentVhdKeyword}`);
-    
-    res.json({
-        success: true,
-        BootImageSelected: currentVhdKeyword,
-        message: 'VHD关键词更新成功'
+    }));
+
+    app.get('/api/auth/otp/status', requireAuth, (req, res) => {
+        const otpVerifiedUntil = Number(req.session?.otpVerifiedUntil || 0);
+        res.json({
+            success: true,
+            otpVerified: otpVerifiedUntil >= Date.now(),
+            otpVerifiedUntil,
+        });
     });
-});
 
-// 保护状态检查端点 - 需要Machine ID验证
-app.get('/api/protect', async (req, res) => {
-    const machineId = req.query.machineId;
-    
-    console.log(`[${new Date().toISOString()}] API请求: GET /api/protect, Machine ID: ${machineId}`);
-    
-    if (!machineId) {
-        return res.status(400).json({
-            success: false,
-            error: 'Machine ID是必需的'
+    app.get('/api/settings/default-vhd', requireAuth, (req, res) => {
+        res.json({
+            success: true,
+            defaultVhdKeyword: serviceSettingsStore.getDefaultVhdKeyword(),
         });
-    }
-    
-    try {
-        // 从数据库获取机台信息
-        const machine = await database.getMachine(machineId);
-        
-        // 如果机台不存在，直接返回错误，不自动创建
+    });
+
+    const updateDefaultVhdHandler = asyncHandler(async (req, res) => {
+        const nextKeyword = assertVhdKeyword(req.body?.vhdKeyword || req.body?.BootImageSelected);
+        const config = serviceSettingsStore.setDefaultVhdKeyword(nextKeyword);
+
+        runtime.writeAudit(req, {
+            type: 'settings.default-vhd.update',
+            actor: 'admin',
+            result: 'success',
+            defaultVhdKeyword: config.defaultVhdKeyword,
+        });
+
+        res.json({
+            success: true,
+            BootImageSelected: config.defaultVhdKeyword,
+            defaultVhdKeyword: config.defaultVhdKeyword,
+            message: '默认 VHD 关键词更新成功',
+        });
+    });
+
+    app.post('/api/settings/default-vhd', requireAuth, updateDefaultVhdHandler);
+    app.post('/api/set-vhd', requireAuth, updateDefaultVhdHandler);
+
+    app.get('/api/boot-image-select', requireInitialized, requireDatabase, asyncHandler(async (req, res) => {
+        const machineId = assertMachineId(req.query.machineId);
+        const defaultVhdKeyword = serviceSettingsStore.getDefaultVhdKeyword();
+        let machine = await runtime.database.getMachine(machineId);
+
         if (!machine) {
-            return res.status(404).json({
-                success: false,
-                error: '机台不存在',
-                machineId
-            });
+            machine = await runtime.database.upsertMachine(machineId, false, defaultVhdKeyword);
         }
-        
+
+        await runtime.database.updateMachineLastSeen(machineId);
+
+        res.json({
+            success: true,
+            BootImageSelected: machine ? machine.vhd_keyword : defaultVhdKeyword,
+            machineId,
+            timestamp: new Date().toISOString(),
+        });
+    }));
+
+    app.get('/api/protect', requireInitialized, requireDatabase, asyncHandler(async (req, res) => {
+        const machineId = assertMachineId(req.query.machineId);
+        const machine = await runtime.database.getMachine(machineId);
+        if (!machine) {
+            throw createJsonError(404, '机台不存在');
+        }
+
         res.json({
             success: true,
             protected: machine.protected,
             machineId,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
         });
-    } catch (error) {
-        console.error('获取保护状态失败:', error.message);
-        return res.status(500).json({
-            success: false,
-            error: '获取保护状态失败'
-        });
-    }
-});
+    }));
 
-// 设置机台保护状态
-app.post('/api/protect', requireAuth, async (req, res) => {
-    const { machineId, protected } = req.body;
-    
-    console.log(`[${new Date().toISOString()}] API请求: POST /api/protect, Machine ID: ${machineId}, Protected: ${protected}`);
-    
-    if (!machineId) {
-        return res.status(400).json({
-            success: false,
-            error: 'Machine ID是必需的'
-        });
-    }
-    
-    if (typeof protected !== 'boolean') {
-        return res.status(400).json({
-            success: false,
-            error: 'protected状态必须是布尔值'
-        });
-    }
-    
-    try {
-        // 更新机台保护状态
-        const machine = await database.updateMachineProtection(machineId, protected);
-        
-        if (!machine) {
-            // 如果机台不存在，返回错误，不自动创建
-            return res.status(404).json({
-                success: false,
-                error: '机台不存在',
-                machineId
-            });
+    app.post('/api/protect', requireAuth, requireDatabase, asyncHandler(async (req, res) => {
+        const machineId = assertMachineId(req.body?.machineId);
+        const protectedState = req.body?.protected;
+        if (typeof protectedState !== 'boolean') {
+            throw createJsonError(400, 'protected 状态必须是布尔值');
         }
-        
+
+        const machine = await runtime.database.updateMachineProtection(machineId, protectedState);
+        if (!machine) {
+            throw createJsonError(404, '机台不存在');
+        }
+
+        runtime.writeAudit(req, {
+            type: 'machine.protection.update',
+            actor: 'admin',
+            result: 'success',
+            machineId,
+            protected: protectedState,
+        });
+
         res.json({
             success: true,
             protected: machine.protected,
             machineId,
-            message: '机台保护状态已更新'
+            message: '机台保护状态已更新',
         });
-    } catch (error) {
-        console.error('设置保护状态失败:', error.message);
-        res.status(500).json({
-            success: false,
-            error: '设置保护状态失败'
-        });
-    }
-});
+    }));
 
-// 获取所有机台信息
-app.get('/api/machines', requireAuth, async (req, res) => {
-    console.log(`[${new Date().toISOString()}] API请求: GET /api/machines`);
-    
-    try {
-        const machines = await database.getAllMachines();
+    app.get('/api/machines', requireAuth, requireDatabase, asyncHandler(async (req, res) => {
+        const machines = await runtime.database.getAllMachines();
         res.json({
             success: true,
-            machines: machines,
+            machines,
             count: machines.length,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
         });
-    } catch (error) {
-        console.error('获取机台列表失败:', error.message);
-        res.status(500).json({
-            success: false,
-            error: '获取机台列表失败'
-        });
-    }
-});
+    }));
 
-// 客户端注册/更新机台公钥（开放，不需要登录）
-app.post('/api/machines/:machineId/keys', async (req, res) => {
-    const { machineId } = req.params;
-    const { keyId, keyType = 'RSA', pubkeyPem } = req.body || {};
-    console.log(`[${new Date().toISOString()}] API请求: POST /api/machines/${machineId}/keys`);
-    if (!keyId || typeof keyId !== 'string') {
-        return res.status(400).json({ success: false, error: 'keyId是必需的' });
-    }
-    if (!pubkeyPem || typeof pubkeyPem !== 'string') {
-        return res.status(400).json({ success: false, error: 'pubkeyPem是必需的(PKCS#1/PKCS#8 PEM)' });
-    }
-    if (keyType !== 'RSA') {
-        return res.status(400).json({ success: false, error: '目前仅支持RSA密钥' });
-    }
-    try {
-        const machine = await database.updateMachineKey(machineId, { keyId, keyType, pubkeyPem });
+    app.get('/api/machines/:machineId', requireAuth, requireDatabase, asyncHandler(async (req, res) => {
+        const machineId = assertMachineId(req.params.machineId);
+        const machine = await runtime.database.getMachine(machineId);
         if (!machine) {
-            return res.status(500).json({ success: false, error: '更新机台密钥失败' });
+            throw createJsonError(404, '机台不存在');
         }
-        // 注册密钥也视为机台最近在线
-        await database.updateMachineLastSeen(machineId);
+
         res.json({
+            success: true,
+            machine,
+        });
+    }));
+
+    app.post('/api/machines/:machineId/keys', sensitiveLimiter, requireInitialized, requireDatabase, asyncHandler(async (req, res) => {
+        const machineId = assertMachineId(req.params.machineId);
+        const keyId = assertKeyId(req.body?.keyId);
+        const keyType = String(req.body?.keyType || 'RSA').trim().toUpperCase();
+        const pubkeyPem = assertRsaPublicKeyPem(req.body?.pubkeyPem);
+
+        if (keyType !== 'RSA') {
+            throw createJsonError(400, '当前仅支持 RSA 密钥');
+        }
+
+        const verification = verifySignedRegistrationRequest({
+            machineId,
+            keyId,
+            keyType,
+            pubkeyPem,
+            registrationCertificatePem: assertString(req.body?.registrationCertificatePem, 'registrationCertificatePem', 64, 32768),
+            signature: assertString(req.body?.signature, 'signature', 32, 32768),
+            timestamp: req.body?.timestamp,
+            nonce: assertString(req.body?.nonce, 'nonce', 16, 256),
+            trustedCertificates: runtime.securityStore.listTrustedRegistrationCertificates(),
+            nonceCache: runtime.registrationNonceCache,
+        });
+
+        const machine = await runtime.database.updateMachineKey(machineId, {
+            keyId,
+            keyType,
+            pubkeyPem,
+            registrationCertFingerprint: verification.fingerprint256,
+            registrationCertSubject: verification.subject,
+        });
+
+        if (!machine) {
+            throw createJsonError(500, '注册机台公钥失败');
+        }
+
+        await runtime.database.updateMachineLastSeen(machineId);
+
+        runtime.writeAudit(req, {
+            type: 'machine.registration.submit',
+            actor: 'machine',
+            result: 'success',
+            machineId,
+            keyId,
+            registrationCertFingerprint: verification.fingerprint256,
+        });
+
+        res.status(202).json({
             success: true,
             machineId,
             keyId: machine.key_id,
             keyType: machine.key_type,
             approved: machine.approved,
             revoked: machine.revoked,
-            message: '机台公钥已注册，待管理员审批'
+            registrationCertFingerprint: machine.registration_cert_fingerprint,
+            message: '机台公钥已注册，待管理员审批',
         });
-    } catch (error) {
-        console.error('注册机台公钥失败:', error.message);
-        res.status(500).json({ success: false, error: '注册机台公钥失败' });
-    }
-});
+    }));
 
-// 管理员审批机台密钥
-app.post('/api/machines/:machineId/approve', requireAuth, async (req, res) => {
-    const { machineId } = req.params;
-    const { approved } = req.body || {};
-    console.log(`[${new Date().toISOString()}] API请求: POST /api/machines/${machineId}/approve`);
-    try {
-        const machine = await database.approveMachine(machineId, !!approved);
+    app.post('/api/machines/:machineId/approve', requireAuth, requireDatabase, asyncHandler(async (req, res) => {
+        const machineId = assertMachineId(req.params.machineId);
+        const approved = typeof req.body?.approved === 'boolean' ? req.body.approved : true;
+        const machine = await runtime.database.approveMachine(machineId, approved);
+
         if (!machine) {
-            return res.status(404).json({ success: false, error: '机台不存在或审批失败' });
+            throw createJsonError(404, '机台不存在或审批失败');
         }
+
+        runtime.writeAudit(req, {
+            type: 'machine.approval.update',
+            actor: 'admin',
+            result: 'success',
+            machineId,
+            approved,
+        });
+
         res.json({
             success: true,
             machineId,
             approved: machine.approved,
             approvedAt: machine.approved_at,
-            message: machine.approved ? '已审批通过' : '已取消审批'
+            message: approved ? '已审批通过' : '已取消审批',
         });
-    } catch (error) {
-        console.error('审批机台失败:', error.message);
-        res.status(500).json({ success: false, error: '审批机台失败' });
-    }
-});
+    }));
 
-// 管理员重置机台注册状态（删除密钥并重置审批为未审批）
-app.post('/api/machines/:machineId/revoke', requireAuth, async (req, res) => {
-    const { machineId } = req.params;
-    console.log(`[${new Date().toISOString()}] API请求: POST /api/machines/${machineId}/revoke (重置注册状态)`);
-    try {
-        const machine = await database.revokeMachineKey(machineId);
+    app.post('/api/machines/:machineId/revoke', requireAuth, requireDatabase, asyncHandler(async (req, res) => {
+        const machineId = assertMachineId(req.params.machineId);
+        const machine = await runtime.database.revokeMachineKey(machineId);
         if (!machine) {
-            return res.status(404).json({ success: false, error: '机台不存在或重置失败' });
+            throw createJsonError(404, '机台不存在或重置失败');
         }
+
+        runtime.writeAudit(req, {
+            type: 'machine.registration.reset',
+            actor: 'admin',
+            result: 'success',
+            machineId,
+        });
+
         res.json({
             success: true,
             machineId,
             approved: machine.approved,
             keyId: machine.key_id,
-            keyType: machine.key_type,
-            pubkeyPem: machine.pubkey_pem,
-            message: '已重置注册状态：密钥已删除，审批重置为未审批'
+            message: '已重置机台注册状态',
         });
-    } catch (error) {
-        console.error('重置机台注册状态失败:', error.message);
-        res.status(500).json({ success: false, error: '重置机台注册状态失败' });
-    }
-});
+    }));
 
-// 下发EVHD密码的RSA封装信封（公开，客户端使用）
-app.get('/api/evhd-envelope', async (req, res) => {
-    const machineId = req.query.machineId;
-    console.log(`[${new Date().toISOString()}] API请求: GET /api/evhd-envelope, Machine ID: ${machineId}`);
-    if (!machineId) {
-        return res.status(400).json({ success: false, error: 'Machine ID是必需的' });
-    }
-    try {
-        const machine = await database.getMachine(machineId);
+    app.post('/api/machines/:machineId/vhd', requireAuth, requireDatabase, asyncHandler(async (req, res) => {
+        const machineId = assertMachineId(req.params.machineId);
+        const vhdKeyword = assertVhdKeyword(req.body?.vhdKeyword);
+
+        let machine = await runtime.database.updateMachineVhdKeyword(machineId, vhdKeyword);
         if (!machine) {
-            return res.status(404).json({ success: false, error: '机台不存在' });
+            machine = await runtime.database.upsertMachine(machineId, false, vhdKeyword);
         }
-        // 无论审批/吊销状态如何，只要接触服务端即更新最近在线
-        await database.updateMachineLastSeen(machineId);
+
+        runtime.writeAudit(req, {
+            type: 'machine.vhd.update',
+            actor: 'admin',
+            result: 'success',
+            machineId,
+            vhdKeyword,
+        });
+
+        res.json({
+            success: true,
+            machineId,
+            vhdKeyword: machine.vhd_keyword,
+            message: '机台 VHD 关键词已更新',
+        });
+    }));
+
+    app.post('/api/machines/:machineId/evhd-password', requireAuth, requireDatabase, asyncHandler(async (req, res) => {
+        const machineId = assertMachineId(req.params.machineId);
+        const evhdPassword = req.body?.evhdPassword;
+        if (typeof evhdPassword !== 'string' || evhdPassword.length < 1 || evhdPassword.length > 512) {
+            throw createJsonError(400, 'EVHD 密码必须是 1-512 个字符');
+        }
+
+        let machine = await runtime.database.updateMachineEvhdPassword(machineId, evhdPassword);
+        if (!machine) {
+            await runtime.database.upsertMachine(machineId, false, serviceSettingsStore.getDefaultVhdKeyword());
+            machine = await runtime.database.updateMachineEvhdPassword(machineId, evhdPassword);
+        }
+
+        runtime.writeAudit(req, {
+            type: 'machine.evhd-password.update',
+            actor: 'admin',
+            result: 'success',
+            machineId,
+        });
+
+        res.json({
+            success: true,
+            machineId,
+            message: 'EVHD 密码已更新',
+        });
+    }));
+
+    app.get('/api/evhd-envelope', requireInitialized, requireDatabase, asyncHandler(async (req, res) => {
+        const machineId = assertMachineId(req.query.machineId);
+        const machine = await runtime.database.getMachine(machineId);
+
+        if (!machine) {
+            throw createJsonError(404, '机台不存在');
+        }
+
+        await runtime.database.updateMachineLastSeen(machineId);
+
         if (machine.revoked) {
-            return res.status(403).json({ success: false, error: '机台密钥已吊销', machineId, revoked: true });
+            throw createJsonError(403, '机台密钥已吊销');
         }
         if (!machine.approved) {
-            return res.status(403).json({ success: false, error: '机台密钥未审批', machineId, approved: false });
+            throw createJsonError(403, '机台密钥未审批');
         }
         if (!machine.pubkey_pem) {
-            return res.status(400).json({ success: false, error: '机台未注册公钥' });
+            throw createJsonError(400, '机台未注册公钥');
         }
-        const evhdPassword = await database.getMachineEvhdPassword(machineId);
-        const ciphertext = evhdPassword ? encryptWithPublicKeyRSA(machine.pubkey_pem, evhdPassword) : '';
+
+        const evhdPassword = await runtime.database.getMachineEvhdPassword(machineId);
+        if (!evhdPassword) {
+            throw createJsonError(404, '机台未配置 EVHD 密码');
+        }
+
+        const ciphertext = encryptWithPublicKeyRSA(machine.pubkey_pem, evhdPassword);
         res.json({
             success: true,
             machineId,
@@ -551,189 +924,260 @@ app.get('/api/evhd-envelope', async (req, res) => {
             revoked: machine.revoked,
             keyId: machine.key_id,
             keyType: machine.key_type,
-            ciphertext
+            ciphertext,
         });
-    } catch (error) {
-        console.error('获取EVHD封装信封失败:', error.message);
-        res.status(500).json({ success: false, error: '获取EVHD封装信封失败' });
-    }
-});
+    }));
 
-// 设置特定机台的VHD关键词
-app.post('/api/machines/:machineId/vhd', requireAuth, async (req, res) => {
-    const { machineId } = req.params;
-    const { vhdKeyword } = req.body;
-    
-    console.log(`[${new Date().toISOString()}] API请求: POST /api/machines/${machineId}/vhd, VHD: ${vhdKeyword}`);
-    
-    if (!vhdKeyword || typeof vhdKeyword !== 'string') {
-        return res.status(400).json({
-            success: false,
-            error: 'VHD关键词不能为空且必须是字符串'
-        });
-    }
-    
-    const trimmedKeyword = vhdKeyword.trim().toUpperCase();
-    if (trimmedKeyword.length === 0) {
-        return res.status(400).json({
-            success: false,
-            error: 'VHD关键词不能为空'
-        });
-    }
-    
-    try {
-        // 更新机台VHD关键词
-        let machine = await database.updateMachineVhdKeyword(machineId, trimmedKeyword);
-        
-        if (!machine) {
-            // 如果机台不存在，创建新的机台记录
-            machine = await database.upsertMachine(machineId, false, trimmedKeyword);
-        }
-        
-        res.json({
-            success: true,
-            machineId: machineId,
-            vhdKeyword: machine.vhd_keyword,
-            message: '机台VHD关键词已更新'
-        });
-    } catch (error) {
-        console.error('设置机台VHD关键词失败:', error.message);
-        res.status(500).json({
-            success: false,
-            error: '设置机台VHD关键词失败'
-        });
-    }
-});
-
-// 设置特定机台的EVHD密码（需登录）
-app.post('/api/machines/:machineId/evhd-password', requireAuth, async (req, res) => {
-    const { machineId } = req.params;
-    const { evhdPassword } = req.body;
-    console.log(`[${new Date().toISOString()}] API请求: POST /api/machines/${machineId}/evhd-password`);
-    if (typeof evhdPassword !== 'string') {
-        return res.status(400).json({ success: false, error: 'EVHD密码必须是字符串' });
-    }
-    try {
-        let machine = await database.updateMachineEvhdPassword(machineId, evhdPassword);
-        if (!machine) {
-            // 如果机台不存在，创建后更新
-            await database.upsertMachine(machineId, false, currentVhdKeyword);
-            machine = await database.updateMachineEvhdPassword(machineId, evhdPassword);
-        }
-        res.json({ success: true, machineId, message: 'EVHD密码已更新' });
-    } catch (error) {
-        console.error('设置机台EVHD密码失败:', error.message);
-        res.status(500).json({ success: false, error: '设置机台EVHD密码失败' });
-    }
-});
-
-// 管理员查询机台EVHD明文密码（需登录）
-app.get('/api/evhd-password/plain', requireAuth, async (req, res) => {
-    const machineId = (req.query.machineId || '').trim();
-    console.log(`[${new Date().toISOString()}] API请求: GET /api/evhd-password/plain?machineId=${machineId}`);
-    if (!machineId) {
-        return res.status(400).json({ success: false, error: 'machineId 不能为空' });
-    }
-    try {
-        const evhdPassword = await database.getMachineEvhdPassword(machineId);
+    app.get('/api/evhd-password/plain', requireAuth, requireOtpStepUp, requireDatabase, asyncHandler(async (req, res) => {
+        const machineId = assertMachineId(req.query.machineId);
+        const reason = assertOptionalReason(req.query.reason);
+        const evhdPassword = await runtime.database.getMachineEvhdPassword(machineId);
         if (!evhdPassword) {
-            return res.status(404).json({ success: false, error: '机台不存在或未设置EVHD密码' });
+            throw createJsonError(404, '机台不存在或未设置 EVHD 密码');
         }
-        res.json({ success: true, machineId, evhdPassword });
-    } catch (error) {
-        console.error('查询机台EVHD明文失败:', error.message);
-        res.status(500).json({ success: false, error: '查询机台EVHD明文失败' });
-    }
-});
 
-// 删除机台
-app.delete('/api/machines/:machineId', requireAuth, async (req, res) => {
-    const { machineId } = req.params;
-    
-    console.log(`[${new Date().toISOString()}] API请求: DELETE /api/machines/${machineId}`);
-    
-    try {
-        const deletedMachine = await database.deleteMachine(machineId);
-        
-        if (!deletedMachine) {
-            return res.status(404).json({
-                success: false,
-                error: '机台不存在'
-            });
-        }
-        
+        runtime.writeAudit(req, {
+            type: 'machine.evhd-password.read',
+            actor: 'admin',
+            result: 'success',
+            machineId,
+            reason,
+        });
+
         res.json({
             success: true,
-            machineId: machineId,
-            message: '机台已删除'
+            machineId,
+            evhdPassword,
         });
-    } catch (error) {
-        console.error('删除机台失败:', error.message);
-        res.status(500).json({
+    }));
+
+    app.delete('/api/machines/:machineId', requireAuth, requireDatabase, asyncHandler(async (req, res) => {
+        const machineId = assertMachineId(req.params.machineId);
+        const deletedMachine = await runtime.database.deleteMachine(machineId);
+        if (!deletedMachine) {
+            throw createJsonError(404, '机台不存在');
+        }
+
+        runtime.writeAudit(req, {
+            type: 'machine.delete',
+            actor: 'admin',
+            result: 'success',
+            machineId,
+        });
+
+        res.json({
+            success: true,
+            machineId,
+            message: '机台已删除',
+        });
+    }));
+
+    app.get('/api/security/trusted-certificates', requireAuth, requireOtpStepUp, (req, res) => {
+        res.json({
+            success: true,
+            certificates: securityStore.listTrustedRegistrationCertificates(),
+        });
+    });
+
+    app.post('/api/security/trusted-certificates', requireAuth, requireOtpStepUp, asyncHandler(async (req, res) => {
+        const certificatePem = assertString(req.body?.certificatePem, 'certificatePem', 64, 32768);
+        const name = req.body?.name ? assertString(req.body.name, 'name', 1, 128) : undefined;
+        const certificate = securityStore.addTrustedRegistrationCertificate({
+            name,
+            certificatePem,
+        });
+
+        runtime.securityConfig = securityStore.loadSecurityConfig();
+        runtime.writeAudit(req, {
+            type: 'security.trusted-certificate.add',
+            actor: 'admin',
+            result: 'success',
+            fingerprint256: certificate.fingerprint256,
+        });
+
+        res.status(201).json({
+            success: true,
+            certificate,
+        });
+    }));
+
+    app.delete('/api/security/trusted-certificates/:fingerprint', requireAuth, requireOtpStepUp, asyncHandler(async (req, res) => {
+        const fingerprint = normalizeFingerprint(req.params.fingerprint);
+        if (!fingerprint) {
+            throw createJsonError(400, '证书指纹不能为空');
+        }
+
+        const removed = securityStore.removeTrustedRegistrationCertificate(fingerprint);
+        if (!removed) {
+            throw createJsonError(404, '未找到对应的可信注册证书');
+        }
+
+        runtime.securityConfig = securityStore.loadSecurityConfig();
+        runtime.writeAudit(req, {
+            type: 'security.trusted-certificate.remove',
+            actor: 'admin',
+            result: 'success',
+            fingerprint256: fingerprint,
+        });
+
+        res.json({
+            success: true,
+            fingerprint256: fingerprint,
+        });
+    }));
+
+    app.get('/api/audit', requireAuth, asyncHandler(async (req, res) => {
+        const type = req.query.type ? assertString(req.query.type, 'type', 1, 64) : undefined;
+        const limit = parsePositiveInteger(req.query.limit, 100, 500);
+        const entries = auditLog.read({ type, limit });
+        res.json({
+            success: true,
+            entries,
+            count: entries.length,
+        });
+    }));
+
+    function buildStatusPayload(status) {
+        return {
+            success: true,
+            status,
+            version: APP_VERSION,
+            initialized: runtime.initialized,
+            databaseReady: !!runtime.database,
+            databaseError: runtime.databaseError ? runtime.databaseError.message : null,
+            defaultVhdKeyword: serviceSettingsStore.getDefaultVhdKeyword(),
+            trustedRegistrationCertificateCount: runtime.initialized
+                ? (runtime.securityConfig?.trustedRegistrationCertificates || []).length
+                : 0,
+            uptime: process.uptime(),
+            timestamp: new Date().toISOString(),
+        };
+    }
+
+    app.get('/api/health', (req, res) => {
+        res.json(buildStatusPayload('ok'));
+    });
+
+    app.get('/api/status', (req, res) => {
+        res.json(buildStatusPayload('running'));
+    });
+
+    app.get('/', (req, res) => {
+        res.status(410).json({
             success: false,
-            error: '删除机台失败'
+            error: '旧 Web 管理前端已废弃，请使用新的 Flutter 管理客户端。',
+        });
+    });
+
+    app.use((req, res) => {
+        res.status(404).json({
+            success: false,
+            error: '页面未找到',
+        });
+    });
+
+    app.use((error, req, res, next) => {
+        if (res.headersSent) {
+            next(error);
+            return;
+        }
+
+        const statusCode = Number(error.statusCode || 500);
+
+        if (statusCode >= 500) {
+            logger.error('服务器错误:', error);
+        }
+
+        if (error instanceof ValidationError || error instanceof RegistrationAuthError) {
+            res.status(error.statusCode || statusCode).json({
+                success: false,
+                error: error.message,
+            });
+            return;
+        }
+
+        res.status(statusCode).json({
+            success: false,
+            error: error.message || '服务器内部错误',
+            ...(error.initializeRequired ? { initializeRequired: true } : {}),
+            ...(error.requireAuth ? { requireAuth: true } : {}),
+        });
+    });
+
+    return {
+        app,
+        runtime,
+    };
+}
+
+async function startServer(options = {}) {
+    const logger = options.logger || console;
+    const { app, runtime } = await createApp(options);
+    const port = Number(options.port || DEFAULT_PORT);
+
+    const server = await new Promise((resolve, reject) => {
+        const instance = app.listen(port, () => resolve(instance));
+        instance.on('error', reject);
+    });
+
+    logger.log('='.repeat(60));
+    logger.log('VHD Select Server 已启动');
+    logger.log(`服务器地址: http://localhost:${port}`);
+    logger.log(`初始化状态: ${runtime.initialized ? '已完成' : '未初始化'}`);
+    logger.log(`默认 VHD 关键词: ${runtime.serviceSettingsStore.getDefaultVhdKeyword()}`);
+    logger.log('='.repeat(60));
+
+    async function closeServer(signal) {
+        logger.log(`${signal} received, shutting down...`);
+
+        await new Promise((resolve) => {
+            server.close(() => resolve());
+        });
+
+        if (runtime.database && !options.database && typeof runtime.database.close === 'function') {
+            await runtime.database.close();
+        }
+    }
+
+    if (!options.disableSignalHandlers) {
+        process.once('SIGINT', () => {
+            closeServer('SIGINT')
+                .then(() => process.exit(0))
+                .catch((error) => {
+                    logger.error('关闭服务器失败:', error);
+                    process.exit(1);
+                });
+        });
+
+        process.once('SIGTERM', () => {
+            closeServer('SIGTERM')
+                .then(() => process.exit(0))
+                .catch((error) => {
+                    logger.error('关闭服务器失败:', error);
+                    process.exit(1);
+                });
         });
     }
-});
 
-// 获取服务器状态
-app.get('/api/status', (req, res) => {
-    res.json({
-        success: true,
-        status: 'running',
-        BootImageSelected: currentVhdKeyword,
-        uptime: process.uptime(),
-        timestamp: new Date().toISOString(),
-        version: '1.2.1'
+    return {
+        app,
+        runtime,
+        server,
+        closeServer,
+    };
+}
+
+if (require.main === module) {
+    startServer().catch((error) => {
+        console.error('服务器启动失败:', error);
+        process.exit(1);
     });
-});
+}
 
-// 主页路由
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-// 404处理
-app.use((req, res) => {
-    res.status(404).json({
-        success: false,
-        error: '页面未找到'
-    });
-});
-
-// 错误处理
-app.use((err, req, res, next) => {
-    console.error('服务器错误:', err);
-    res.status(500).json({
-        success: false,
-        error: '服务器内部错误'
-    });
-});
-
-// 启动服务器
-loadConfig();
-
-app.listen(PORT, () => {
-    console.log('='.repeat(50));
-    console.log('🚀 VHD选择服务器已启动');
-    console.log(`📡 服务器地址: http://localhost:${PORT}`);
-    console.log(`🔧 API地址: http://localhost:${PORT}/api/boot-image-select`);
-    console.log(`📊 状态页面: http://localhost:${PORT}/api/status`);
-    console.log(`🎯 当前VHD关键词: ${currentVhdKeyword}`);
-    console.log('='.repeat(50));
-});
-
-// 优雅关闭
-process.on('SIGINT', async () => {
-    console.log('\n正在关闭服务器...');
-    saveConfig();
-    await database.close();
-    process.exit(0);
-});
-
-process.on('SIGTERM', async () => {
-    console.log('\n正在关闭服务器...');
-    saveConfig();
-    await database.close();
-    process.exit(0);
-});
+module.exports = {
+    APP_VERSION,
+    createApp,
+    createServiceSettingsStore,
+    encryptWithPublicKeyRSA,
+    startServer,
+};

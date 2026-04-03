@@ -6,6 +6,114 @@ log() {
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1"
 }
 
+normalize_postgres_data_dir() {
+    local requested_dir="${POSTGRES_DATA_DIR:-/var/lib/postgresql/data/pgdata}"
+    requested_dir="${requested_dir%/}"
+
+    if [ -z "$requested_dir" ] || [ "$requested_dir" = "/var/lib/postgresql/data" ]; then
+        requested_dir="/var/lib/postgresql/data/pgdata"
+    fi
+
+    export POSTGRES_DATA_DIR="$requested_dir"
+    export POSTGRES_DATA_PARENT_DIR="$(dirname "$POSTGRES_DATA_DIR")"
+}
+
+log_path_state() {
+    local target="$1"
+    if [ -e "$target" ]; then
+        local owner
+        local mode
+        owner="$(stat -c '%u:%g' "$target" 2>/dev/null || echo unknown)"
+        mode="$(stat -c '%a' "$target" 2>/dev/null || echo unknown)"
+        log "路径状态: $target owner=$owner mode=$mode"
+    else
+        log "路径状态: $target 不存在"
+    fi
+}
+
+prepare_embedded_db_dirs() {
+    normalize_postgres_data_dir
+
+    log "使用 PostgreSQL 数据目录: $POSTGRES_DATA_DIR"
+    mkdir -p "$POSTGRES_DATA_PARENT_DIR" "$POSTGRES_DATA_DIR" /run/postgresql || true
+    chown postgres:postgres "$POSTGRES_DATA_PARENT_DIR" "$POSTGRES_DATA_DIR" /run/postgresql 2>/dev/null || true
+    chmod 700 "$POSTGRES_DATA_DIR" 2>/dev/null || true
+    chmod 775 /run/postgresql || true
+    umask 077
+
+    log_path_state "$POSTGRES_DATA_PARENT_DIR"
+    log_path_state "$POSTGRES_DATA_DIR"
+
+    local mode
+    mode="$(stat -c '%a' "$POSTGRES_DATA_DIR" 2>/dev/null || echo unknown)"
+    if [ "$mode" != "700" ] && [ "$mode" != "750" ]; then
+        log "警告: PostgreSQL 数据目录权限当前为 $mode。对于宿主机 bind mount，请映射父目录到 /var/lib/postgresql/data，让实际 PGDATA 保持默认子目录 pgdata；Windows 环境优先使用 Docker named volume 或 WSL ext4 路径。"
+    fi
+}
+
+escape_sql_literal() {
+    printf "%s" "$1" | sed "s/'/''/g"
+}
+
+run_psql_as_postgres() {
+    local database="${1:-postgres}"
+    shift || true
+    su-exec postgres psql -v ON_ERROR_STOP=1 -d "$database" "$@"
+}
+
+repair_public_schema_ownership() {
+    local escaped_db_user
+    escaped_db_user="$(escape_sql_literal "$DB_USER")"
+
+    log "修复 public schema 对象所有权..."
+    run_psql_as_postgres "$DB_NAME" <<EOSQL
+GRANT USAGE, CREATE ON SCHEMA public TO "$DB_USER";
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO "$DB_USER";
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO "$DB_USER";
+
+DO \$\$
+DECLARE
+    table_record RECORD;
+    sequence_record RECORD;
+    function_record RECORD;
+BEGIN
+    EXECUTE format('ALTER SCHEMA public OWNER TO %I', '$escaped_db_user');
+
+    FOR table_record IN
+        SELECT tablename
+        FROM pg_tables
+        WHERE schemaname = 'public'
+    LOOP
+        EXECUTE format('ALTER TABLE public.%I OWNER TO %I', table_record.tablename, '$escaped_db_user');
+    END LOOP;
+
+    FOR sequence_record IN
+        SELECT sequencename
+        FROM pg_sequences
+        WHERE schemaname = 'public'
+    LOOP
+        EXECUTE format('ALTER SEQUENCE public.%I OWNER TO %I', sequence_record.sequencename, '$escaped_db_user');
+    END LOOP;
+
+    FOR function_record IN
+        SELECT p.proname,
+               pg_get_function_identity_arguments(p.oid) AS identity_args
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public'
+    LOOP
+        EXECUTE format(
+            'ALTER FUNCTION public.%I(%s) OWNER TO %I',
+            function_record.proname,
+            function_record.identity_args,
+            '$escaped_db_user'
+        );
+    END LOOP;
+END
+\$\$;
+EOSQL
+}
+
 # 等待外部数据库连接
 wait_for_external_db() {
     log "等待外部数据库连接..."
@@ -31,12 +139,9 @@ wait_for_external_db() {
 init_embedded_db() {
     log "初始化内置PostgreSQL数据库..."
     
-    # 持久化卷在运行时挂载会覆盖镜像内权限设置，这里在容器启动时修复权限
-    mkdir -p "$POSTGRES_DATA_DIR" /run/postgresql || true
-    chown -R postgres:postgres "$POSTGRES_DATA_DIR" /run/postgresql || true
-    chmod 700 "$POSTGRES_DATA_DIR" || true
-    chmod 775 /run/postgresql || true
-    umask 077
+    # 持久化卷在运行时挂载会覆盖镜像内权限设置，这里在容器启动时修复权限。
+    # 实际 PGDATA 使用子目录，避免把 PostgreSQL cluster 直接放在 bind mount 根目录上。
+    prepare_embedded_db_dirs
     
     # 检查数据目录是否已初始化
     if [ ! -f "$POSTGRES_DATA_DIR/PG_VERSION" ]; then
@@ -78,26 +183,19 @@ init_embedded_db() {
     fi
     
     # 创建数据库用户和数据库
-        log "创建数据库用户和数据库..."
-        su-exec postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASSWORD';" 2>/dev/null || true
-        su-exec postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;" 2>/dev/null || true
-        su-exec postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;" 2>/dev/null || true
+    log "创建数据库用户和数据库..."
+    su-exec postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASSWORD';" 2>/dev/null || true
+    su-exec postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;" 2>/dev/null || true
+    su-exec postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;" 2>/dev/null || true
     
     # 初始化数据库表结构
-        log "初始化数据库表结构..."
-        if [ -f "/app/scripts/init-db.sql" ]; then
-            # 使用应用数据库用户执行初始化脚本，确保表的所有权为 $DB_USER
-            PGPASSWORD="$DB_PASSWORD" psql -h localhost -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -f /app/scripts/init-db.sql
-            # 确保权限完整（所有权已由上述创建者继承，此处补充运行权限）
-            su-exec postgres psql -d "$DB_NAME" -c "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO $DB_USER;" || true
-            su-exec postgres psql -d "$DB_NAME" -c "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO $DB_USER;" || true
-            # 保障已有对象的所有权（适用于持久化数据卷复用场景）
-            su-exec postgres psql -d "$DB_NAME" -c "ALTER TABLE machines OWNER TO $DB_USER;" || true
-            su-exec postgres psql -d "$DB_NAME" -c "ALTER TABLE admin_settings OWNER TO $DB_USER;" || true
-            su-exec postgres psql -d "$DB_NAME" -c "ALTER SEQUENCE machines_id_seq OWNER TO $DB_USER;" || true
-            su-exec postgres psql -d "$DB_NAME" -c "ALTER SEQUENCE admin_settings_id_seq OWNER TO $DB_USER;" || true
-            su-exec postgres psql -d "$DB_NAME" -c "ALTER FUNCTION update_updated_at_column() OWNER TO $DB_USER;" || true
-        fi
+    log "初始化数据库表结构..."
+    if [ -f "/app/scripts/init-db.sql" ]; then
+        # 使用应用数据库用户执行初始化脚本，确保新对象默认由 $DB_USER 创建。
+        PGPASSWORD="$DB_PASSWORD" psql -v ON_ERROR_STOP=1 -h localhost -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -f /app/scripts/init-db.sql
+        # 对复用的数据卷，按当前 public schema 中真实存在的对象统一修复所有权与权限。
+        repair_public_schema_ownership
+    fi
     
     log "内置数据库初始化完成"
 }

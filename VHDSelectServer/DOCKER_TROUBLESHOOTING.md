@@ -69,6 +69,8 @@ docker-compose up -d
 
 **问题**: `permission denied`
 
+如果报错发生在 PostgreSQL 初始化阶段，并且你把宿主机目录 bind mount 到了 `/var/lib/postgresql/data`，常见根因不是镜像内权限没设，而是宿主机共享文件系统不保留 Linux 的 `chown/chmod` 结果。PostgreSQL 要求真实数据目录必须由 `postgres` 拥有，且权限为 `0700` 或 `0750`。
+
 **解决方案**:
 ```bash
 # Linux/macOS
@@ -78,6 +80,23 @@ chmod 755 ./config
 # Windows
 # 右键config文件夹 -> 属性 -> 安全 -> 编辑权限
 ```
+
+对于内置 PostgreSQL 数据目录，推荐这样挂载：
+
+```yaml
+volumes:
+  - ./postgres-data:/var/lib/postgresql/data
+environment:
+  - POSTGRES_DATA_DIR=/var/lib/postgresql/data/pgdata
+```
+
+不要把宿主机目录直接当作 PostgreSQL cluster 根目录。当前镜像已默认把实际 PGDATA 放在 `pgdata` 子目录，以兼容 Docker named volume 和大多数 bind mount 场景。
+
+如果仍然失败：
+
+- Windows 上优先使用 Docker named volume。
+- 或将宿主机目录放在 WSL2 的 ext4 文件系统路径下再挂载。
+- 避免使用不保留 POSIX 权限的网络共享目录。
 
 ### 4. 配置文件不持久化
 

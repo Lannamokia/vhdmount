@@ -2,10 +2,10 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net6.0-windows</TargetFramework>
+    <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <RuntimeIdentifier>win10-x64</RuntimeIdentifier>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
@@ -33,9 +33,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Remove="UpdatePackagerGUI\**\*.cs" />
-    <None Include="UpdatePackagerGUI\**\*.cs" />
-    <None Include="UpdatePackagerGUI\**\*.xaml" />
+    <Compile Remove="VHDMountAdminTools\**\*.cs" />
+    <None Include="VHDMountAdminTools\**\*.cs" />
+    <None Include="VHDMountAdminTools\**\*.xaml" />
   </ItemGroup>
 
   <ItemGroup>
