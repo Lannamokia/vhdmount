@@ -2,17 +2,21 @@ version: '3.8'
 
 services:
   vhd-select-server:
+    build:
+      context: .
     image: lty271104/vhd-select-server:latest
     ports:
       - "8080:8080"
     volumes:
+      # 服务配置持久化。映射父目录到 /app/config，实际配置写入 /app/config/data。
       - ./config:/app/config
       - ./vhd-data:/app/vhd-data
     environment:
       # 应用配置
       - NODE_ENV=production
       - PORT=8080
-      - CONFIG_PATH=/app/config
+      - CONFIG_ROOT_DIR=/app/config
+      - CONFIG_PATH=/app/config/data
       
       # 数据库配置 - 使用外部数据库
       - USE_EMBEDDED_DB=false

@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Management;
+using System.Net;
 using System.Threading.Tasks;
 using System.Text.RegularExpressions;
 using System.Net.Http;
@@ -67,6 +68,9 @@ namespace VHDMounter
         private int protectionCheckInterval;
         private bool isBlocking = false;
         private bool protectionWasRunning = false;
+        private bool hasLocalEvhdFiles;
+        private DateTimeOffset? nextPublicKeyRegistrationAttemptUtc;
+        private string pendingPublicKeyRegistrationBackoffMessage;
 
         // 加密EVHD挂载进程（需保持常驻直到主程序退出）
         private Process evhdMountProcess;
@@ -292,7 +296,7 @@ namespace VHDMounter
                 StatusChanged?.Invoke($"扫描USB设备时出错: {ex.Message}");
             }
 
-            return vhdFiles;
+            return FilterUsbFilesForCurrentChain(vhdFiles);
         }
 
         // 替换本地VHD文件
@@ -309,7 +313,7 @@ namespace VHDMounter
             bool anyReplaced = false;
             StatusChanged?.Invoke("正在替换本地VHD文件...");
             // 预扫描：构建可替换队列（排除占用或无法准备的项）
-            var copyQueue = new List<(string usbFile, string localFile, string destPath)>();
+            var copyQueue = new List<(string usbFile, string localFile, string destPath, bool deleteExisting)>();
             foreach (var usbFile in usbVhdFiles)
             {
                 string usbFileName = Path.GetFileName(usbFile);
@@ -323,9 +327,55 @@ namespace VHDMounter
                     var localName = Path.GetFileName(f);
                     var localExt = Path.GetExtension(f).ToLowerInvariant();
                     var sameKeyword = ExtractKeyword(localName) == usbKeyword;
-                    var typeAllowed = localExt == usbExt || (usbExt == ".evhd" && localExt == ".vhd");
+                    var typeAllowed = localExt == usbExt;
                     return sameKeyword && typeAllowed;
                 }).ToList();
+
+                if (matchingLocalFiles.Count == 0)
+                {
+                    var anchorDirectories = GetSupplementalDestinationDirectories(localVhdFiles, usbKeyword);
+
+                    if (anchorDirectories.Count == 0)
+                    {
+                        StatusChanged?.Invoke($"未找到可用于补充复制的本地目标目录，已跳过: {Path.GetFileName(usbFile)}");
+                        continue;
+                    }
+
+                    foreach (var anchorDirectory in anchorDirectories)
+                    {
+                        try
+                        {
+                            var destPath = Path.Combine(anchorDirectory ?? string.Empty, Path.GetFileName(usbFile));
+                            if (File.Exists(destPath))
+                            {
+                                if (IsFileInUse(destPath))
+                                {
+                                    StatusChanged?.Invoke($"文件被占用，无法替换: {Path.GetFileName(destPath)}");
+                                    continue;
+                                }
+
+                                if (!PrepareFileForReplacement(destPath))
+                                {
+                                    StatusChanged?.Invoke($"无法准备文件进行替换: {Path.GetFileName(destPath)}");
+                                    continue;
+                                }
+
+                                copyQueue.Add((usbFile, destPath, destPath, true));
+                            }
+                            else
+                            {
+                                copyQueue.Add((usbFile, destPath, destPath, false));
+                                StatusChanged?.Invoke($"本地缺少{GetVhdDisplayType(usbFile)}文件，将从USB补充复制: {Path.GetFileName(destPath)}");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            StatusChanged?.Invoke($"预扫描处理失败: {Path.GetFileName(usbFile)} - {ex.Message}");
+                        }
+                    }
+
+                    continue;
+                }
 
                 foreach (var localFile in matchingLocalFiles)
                 {
@@ -352,7 +402,7 @@ namespace VHDMounter
 
                         var destDir = Path.GetDirectoryName(localFile);
                         var destPath = Path.Combine(destDir ?? string.Empty, Path.GetFileName(usbFile));
-                        copyQueue.Add((usbFile, localFile, destPath));
+                        copyQueue.Add((usbFile, localFile, destPath, true));
                     }
                     catch (Exception ex)
                     {
@@ -414,22 +464,25 @@ namespace VHDMounter
                 var item = copyQueue[i];
                 try
                 {
-                    // 删除本地文件
-                    StatusChanged?.Invoke($"正在删除本地文件: {Path.GetFileName(item.localFile)}");
-                    if (File.Exists(item.localFile))
-                        File.Delete(item.localFile);
-
-                    int retryCount = 0;
-                    while (File.Exists(item.localFile) && retryCount < 10)
+                    if (item.deleteExisting)
                     {
-                        await Task.Delay(100);
-                        retryCount++;
-                    }
+                        // 删除本地文件
+                        StatusChanged?.Invoke($"正在删除本地文件: {Path.GetFileName(item.localFile)}");
+                        if (File.Exists(item.localFile))
+                            File.Delete(item.localFile);
 
-                    if (File.Exists(item.localFile))
-                    {
-                        StatusChanged?.Invoke($"删除文件失败，文件仍然存在: {Path.GetFileName(item.localFile)}");
-                        continue;
+                        int retryCount = 0;
+                        while (File.Exists(item.localFile) && retryCount < 10)
+                        {
+                            await Task.Delay(100);
+                            retryCount++;
+                        }
+
+                        if (File.Exists(item.localFile))
+                        {
+                            StatusChanged?.Invoke($"删除文件失败，文件仍然存在: {Path.GetFileName(item.localFile)}");
+                            continue;
+                        }
                     }
 
                     // 复制（带进度）
@@ -486,6 +539,8 @@ namespace VHDMounter
         {
             try
             {
+                usbVhdFiles = FilterUsbFilesForCurrentChain(usbVhdFiles);
+
                 if (usbVhdFiles == null || usbVhdFiles.Count == 0)
                 {
                     StatusChanged?.Invoke("USB中未找到可复制的VHD/EVHD文件");
@@ -960,6 +1015,76 @@ namespace VHDMounter
             
             return config;
         }
+
+        private static bool IsEvhdFile(string filePath)
+        {
+            return string.Equals(Path.GetExtension(filePath), ".evhd", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string GetVhdDisplayType(string filePath)
+        {
+            return IsEvhdFile(filePath) ? "EVHD" : "VHD";
+        }
+
+        private List<string> GetSupplementalDestinationDirectories(IEnumerable<string> localVhdFiles, string keyword, string fallbackDriveLetter = "D")
+        {
+            var sameKeywordDirectories = (localVhdFiles ?? Enumerable.Empty<string>())
+                .Where(file => ExtractKeyword(Path.GetFileName(file)) == keyword)
+                .Select(Path.GetDirectoryName)
+                .Where(dir => !string.IsNullOrWhiteSpace(dir))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (sameKeywordDirectories.Count > 0)
+            {
+                return sameKeywordDirectories;
+            }
+
+            var fallbackRoot = fallbackDriveLetter + @":\";
+            if (Directory.Exists(fallbackRoot))
+            {
+                return new List<string> { fallbackRoot };
+            }
+
+            return (localVhdFiles ?? Enumerable.Empty<string>())
+                .Select(Path.GetPathRoot)
+                .Where(root => !string.IsNullOrWhiteSpace(root) && Directory.Exists(root))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(1)
+                .ToList();
+        }
+
+        private List<string> FilterUsbFilesForCurrentChain(IEnumerable<string> sourceFiles)
+        {
+            var files = sourceFiles?.ToList() ?? new List<string>();
+            if (files.Count == 0)
+                return files;
+
+            if (!hasLocalEvhdFiles && files.Any(IsEvhdFile))
+            {
+                StatusChanged?.Invoke("本地未扫描到 .evhd 文件，但USB中存在 .evhd 文件，将在更新时一并复制");
+            }
+
+            return files;
+        }
+
+        private string SelectBestMatchByKeyword(IEnumerable<string> candidateFiles, string keyword)
+        {
+            var matches = (candidateFiles ?? Enumerable.Empty<string>())
+                .Where(file => ExtractKeyword(Path.GetFileName(file)).Equals(keyword, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (matches.Count == 0)
+                return null;
+
+            var vhdMatch = matches.FirstOrDefault(file => !IsEvhdFile(file));
+            if (!string.IsNullOrEmpty(vhdMatch))
+            {
+                return vhdMatch;
+            }
+
+            return hasLocalEvhdFiles ? matches.FirstOrDefault(IsEvhdFile) : null;
+        }
         
         // 远程获取VHD选择
         public async Task<string> GetRemoteVHDSelection()
@@ -1085,8 +1210,16 @@ namespace VHDMounter
                         {
                             var rsa = EnsureOrCreateTpmRsa(machineId);
                             var pubPem = ExportPublicKeyPem(rsa);
-                            StatusChanged?.Invoke("机台未注册公钥，正在注册后重试...");
-                            await RegisterPublicKeyAsync(url, machineId, pubPem);
+                            var registrationResult = await RegisterPublicKeyAsync(url, machineId, pubPem);
+                            if (!string.IsNullOrWhiteSpace(registrationResult.Message))
+                            {
+                                StatusChanged?.Invoke(registrationResult.Message);
+                            }
+
+                            if (!registrationResult.Submitted)
+                            {
+                                return null;
+                            }
 
                             var retry = await httpClient.GetAsync(requestUrl);
                             if (retry.IsSuccessStatusCode)
@@ -1233,8 +1366,11 @@ namespace VHDMounter
                             {
                                 if ((err ?? string.Empty).Contains("未注册公钥"))
                                 {
-                                    StatusChanged?.Invoke("机台未注册公钥，已提交注册，等待服务生效...");
-                                    await RegisterPublicKeyAsync(url, machineId, pubPem);
+                                    var registrationResult = await RegisterPublicKeyAsync(url, machineId, pubPem);
+                                    if (!string.IsNullOrWhiteSpace(registrationResult.Message))
+                                    {
+                                        StatusChanged?.Invoke(registrationResult.Message);
+                                    }
                                 }
                                 else
                                 {
@@ -1334,30 +1470,630 @@ namespace VHDMounter
             return sb.ToString();
         }
 
-        private async Task RegisterPublicKeyAsync(string envelopeUrl, string machineId, string pubkeyPem)
+        private string NormalizePemText(string pem)
         {
+            return string.IsNullOrWhiteSpace(pem) ? string.Empty : pem.Trim();
+        }
+
+        private string ResolveConfigPath(string rawPath)
+        {
+            if (string.IsNullOrWhiteSpace(rawPath))
+            {
+                return rawPath;
+            }
+
+            return Path.IsPathRooted(rawPath)
+                ? rawPath
+                : Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, rawPath));
+        }
+
+        private X509Certificate2 LoadRegistrationCertificate(Dictionary<string, string> config)
+        {
+            if (!config.TryGetValue("RegistrationCertificatePath", out var certificatePath) || string.IsNullOrWhiteSpace(certificatePath))
+            {
+                throw new InvalidOperationException("未配置 RegistrationCertificatePath，无法进行预配置证书签名注册");
+            }
+
+            var resolvedCertificatePath = ResolveConfigPath(certificatePath);
+            if (!File.Exists(resolvedCertificatePath))
+            {
+                throw new FileNotFoundException($"注册证书文件不存在: {resolvedCertificatePath}");
+            }
+
+            var password = config.TryGetValue("RegistrationCertificatePassword", out var passwordValue)
+                ? passwordValue
+                : string.Empty;
+
+            var certificate = new X509Certificate2(
+                resolvedCertificatePath,
+                password,
+                X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet);
+
+            if (!certificate.HasPrivateKey)
+            {
+                certificate.Dispose();
+                throw new InvalidOperationException("注册证书缺少私钥，无法签名注册请求");
+            }
+
+            return certificate;
+        }
+
+        private string BuildRegistrationSigningPayload(string machineId, string keyId, string keyType, string pubkeyPem, long timestamp, string nonce)
+        {
+            var canonicalMachineId = (machineId ?? string.Empty).Trim().ToUpperInvariant();
+            var canonicalKeyId = (keyId ?? string.Empty).Trim();
+            var canonicalKeyType = (keyType ?? string.Empty).Trim().ToUpperInvariant();
+            var canonicalPublicKeyPem = NormalizePemText(pubkeyPem);
+            var canonicalNonce = (nonce ?? string.Empty).Trim();
+
+            using var sha = SHA256.Create();
+            var hashBytes = sha.ComputeHash(Encoding.UTF8.GetBytes(canonicalPublicKeyPem));
+            var publicKeyHash = Convert.ToHexString(hashBytes).ToLowerInvariant();
+
+            return string.Join("\n", new[]
+            {
+                "VHDMounterRegistrationV1",
+                canonicalMachineId,
+                canonicalKeyId,
+                canonicalKeyType,
+                publicKeyHash,
+                timestamp.ToString(),
+                canonicalNonce,
+            });
+        }
+
+        private string ExportCertificatePem(X509Certificate2 certificate)
+        {
+            var certBytes = certificate.Export(X509ContentType.Cert);
+            var b64 = Convert.ToBase64String(certBytes);
+            var sb = new StringBuilder();
+            sb.AppendLine("-----BEGIN CERTIFICATE-----");
+            for (int i = 0; i < b64.Length; i += 64)
+            {
+                sb.AppendLine(b64.Substring(i, Math.Min(64, b64.Length - i)));
+            }
+            sb.AppendLine("-----END CERTIFICATE-----");
+            return sb.ToString().Trim();
+        }
+
+        private string GenerateRegistrationNonce()
+        {
+            var nonceBytes = RandomNumberGenerator.GetBytes(16);
+            return Convert.ToHexString(nonceBytes).ToLowerInvariant();
+        }
+
+        private sealed class PublicKeyRegistrationResult
+        {
+            public bool Submitted { get; init; }
+            public string Message { get; init; }
+        }
+
+        private static string FormatRetryDelay(TimeSpan delay)
+        {
+            if (delay.TotalMinutes >= 1)
+            {
+                return $"{Math.Max(1, (int)Math.Ceiling(delay.TotalMinutes))} 分钟";
+            }
+
+            return $"{Math.Max(1, (int)Math.Ceiling(delay.TotalSeconds))} 秒";
+        }
+
+        private static TimeSpan? TryGetRetryAfter(HttpResponseMessage response, JsonDocument parsedBody)
+        {
+            if (parsedBody != null && parsedBody.RootElement.TryGetProperty("retryAfterSeconds", out var retryAfterSecondsElement))
+            {
+                if (retryAfterSecondsElement.ValueKind == JsonValueKind.Number && retryAfterSecondsElement.TryGetInt32(out var retryAfterSeconds) && retryAfterSeconds > 0)
+                {
+                    return TimeSpan.FromSeconds(retryAfterSeconds);
+                }
+            }
+
+            if (response?.Headers?.RetryAfter?.Delta is TimeSpan retryAfter && retryAfter > TimeSpan.Zero)
+            {
+                return retryAfter;
+            }
+
+            if (response != null && response.Headers.TryGetValues("RateLimit-Reset", out var rateLimitResetValues))
+            {
+                var rawValue = rateLimitResetValues.FirstOrDefault();
+                if (double.TryParse(rawValue, out var resetSeconds) && resetSeconds > 0)
+                {
+                    return TimeSpan.FromSeconds(resetSeconds);
+                }
+            }
+
+            return null;
+        }
+
+        private void SetPublicKeyRegistrationBackoff(TimeSpan delay, string message)
+        {
+            nextPublicKeyRegistrationAttemptUtc = DateTimeOffset.UtcNow.Add(delay);
+            pendingPublicKeyRegistrationBackoffMessage = message;
+        }
+
+        private void ClearPublicKeyRegistrationBackoff()
+        {
+            nextPublicKeyRegistrationAttemptUtc = null;
+            pendingPublicKeyRegistrationBackoffMessage = null;
+        }
+
+        private async Task<PublicKeyRegistrationResult> RegisterPublicKeyAsync(string envelopeUrl, string machineId, string pubkeyPem)
+        {
+            var now = DateTimeOffset.UtcNow;
+            if (nextPublicKeyRegistrationAttemptUtc.HasValue && now < nextPublicKeyRegistrationAttemptUtc.Value)
+            {
+                var message = pendingPublicKeyRegistrationBackoffMessage;
+                pendingPublicKeyRegistrationBackoffMessage = null;
+                return new PublicKeyRegistrationResult { Submitted = false, Message = message };
+            }
+
             try
             {
+                var config = ReadConfig();
                 var baseUrl = envelopeUrl;
                 var idx = baseUrl.IndexOf("/api/", StringComparison.OrdinalIgnoreCase);
                 if (idx > 0) baseUrl = baseUrl.Substring(0, idx);
                 var regUrl = $"{baseUrl}/api/machines/{Uri.EscapeDataString(machineId)}/keys";
+
+                var keyId = $"VHDMounterKey_{machineId}";
+                var keyType = "RSA";
+                var normalizedPubkeyPem = NormalizePemText(pubkeyPem);
+                var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                var nonce = GenerateRegistrationNonce();
+
+                using var registrationCertificate = LoadRegistrationCertificate(config);
+                using var registrationPrivateKey = registrationCertificate.GetRSAPrivateKey();
+                if (registrationPrivateKey == null)
+                {
+                    throw new InvalidOperationException("注册证书不包含 RSA 私钥");
+                }
+
+                var signingPayload = BuildRegistrationSigningPayload(machineId, keyId, keyType, normalizedPubkeyPem, timestamp, nonce);
+                var signatureBytes = registrationPrivateKey.SignData(
+                    Encoding.UTF8.GetBytes(signingPayload),
+                    HashAlgorithmName.SHA256,
+                    RSASignaturePadding.Pkcs1);
+
                 var payload = new
                 {
-                    keyId = $"VHDMounterKey_{machineId}",
-                    keyType = "RSA",
-                    pubkeyPem = pubkeyPem
+                    keyId,
+                    keyType,
+                    pubkeyPem = normalizedPubkeyPem,
+                    registrationCertificatePem = ExportCertificatePem(registrationCertificate),
+                    signature = Convert.ToBase64String(signatureBytes),
+                    timestamp,
+                    nonce,
                 };
                 var json = JsonSerializer.Serialize(payload);
                 var req = new StringContent(json, Encoding.UTF8, "application/json");
                 var res = await httpClient.PostAsync(regUrl, req);
-                // 非严格要求成功（可能已注册），仅记录状态
-                StatusChanged?.Invoke(res.IsSuccessStatusCode ? "已注册机台公钥" : $"注册公钥失败: {res.StatusCode}");
+                var body = await res.Content.ReadAsStringAsync();
+
+                if (res.IsSuccessStatusCode)
+                {
+                    ClearPublicKeyRegistrationBackoff();
+                    return new PublicKeyRegistrationResult
+                    {
+                        Submitted = true,
+                        Message = "已提交机台公钥签名注册，等待管理员审批",
+                    };
+                }
+
+                string errorMessage = null;
+                JsonDocument parsedBody = null;
+                try
+                {
+                    parsedBody = JsonDocument.Parse(body);
+                    if (parsedBody.RootElement.TryGetProperty("error", out var errorElement))
+                    {
+                        errorMessage = errorElement.GetString();
+                    }
+                    else if (parsedBody.RootElement.TryGetProperty("message", out var messageElement))
+                    {
+                        errorMessage = messageElement.GetString();
+                    }
+                }
+                catch { }
+
+                if (res.StatusCode == HttpStatusCode.TooManyRequests)
+                {
+                    var retryAfter = TryGetRetryAfter(res, parsedBody) ?? TimeSpan.FromMinutes(10);
+                    var message = $"{(string.IsNullOrWhiteSpace(errorMessage) ? "机台公钥注册过于频繁" : errorMessage)}，将在 {FormatRetryDelay(retryAfter)} 后重试";
+                    SetPublicKeyRegistrationBackoff(retryAfter, message);
+                    parsedBody?.Dispose();
+                    return new PublicKeyRegistrationResult { Submitted = false, Message = message };
+                }
+
+                parsedBody?.Dispose();
+                SetPublicKeyRegistrationBackoff(TimeSpan.FromSeconds(30), errorMessage ?? $"注册公钥失败: {res.StatusCode}");
+                return new PublicKeyRegistrationResult
+                {
+                    Submitted = false,
+                    Message = errorMessage ?? $"注册公钥失败: {res.StatusCode}",
+                };
             }
             catch (Exception ex)
             {
-                StatusChanged?.Invoke($"注册公钥异常: {ex.Message}");
+                var message = $"注册公钥异常: {ex.Message}";
+                SetPublicKeyRegistrationBackoff(TimeSpan.FromSeconds(30), message);
+                return new PublicKeyRegistrationResult { Submitted = false, Message = message };
             }
+        }
+
+        private readonly record struct PasswordWriteInfo(
+            int OriginalLength,
+            int SentLength,
+            bool HadLeadingBom,
+            bool TrimmedTrailingTerminators);
+
+        private static string NormalizePasswordForMountStdin(
+            string password,
+            out int originalLength,
+            out bool hadLeadingBom,
+            out bool trimmedTrailingTerminators)
+        {
+            password ??= string.Empty;
+            originalLength = password.Length;
+            hadLeadingBom = password.Length > 0 && password[0] == '\uFEFF';
+
+            var normalized = hadLeadingBom ? password.Substring(1) : password;
+            var trimmed = normalized.TrimEnd('\r', '\n', '\0');
+            trimmedTrailingTerminators = trimmed.Length != normalized.Length;
+            return trimmed;
+        }
+
+        private async Task<PasswordWriteInfo> WritePasswordToMountToolAsync(Process process, string password)
+        {
+            if (process == null)
+            {
+                throw new ArgumentNullException(nameof(process));
+            }
+
+            if (process.HasExited)
+            {
+                throw new InvalidOperationException("加密VHD挂载工具在接收密码前已退出");
+            }
+
+            var normalizedPassword = NormalizePasswordForMountStdin(
+                password,
+                out var originalLength,
+                out var hadLeadingBom,
+                out var trimmedTrailingTerminators);
+
+            if (string.IsNullOrEmpty(normalizedPassword))
+            {
+                throw new InvalidOperationException("EVHD密码为空或仅包含换行/空字符，无法写入挂载工具");
+            }
+
+            await using (var writer = new StreamWriter(process.StandardInput.BaseStream, new UTF8Encoding(false), 1024, leaveOpen: false))
+            {
+                writer.NewLine = "\n";
+                await writer.WriteAsync(normalizedPassword);
+                await writer.WriteLineAsync();
+                await writer.FlushAsync();
+            }
+
+            return new PasswordWriteInfo(
+                OriginalLength: originalLength,
+                SentLength: normalizedPassword.Length,
+                HadLeadingBom: hadLeadingBom,
+                TrimmedTrailingTerminators: trimmedTrailingTerminators);
+        }
+
+        private static string NormalizeMountPoint(string mountPoint)
+        {
+            if (string.IsNullOrWhiteSpace(mountPoint))
+            {
+                return @"N:\";
+            }
+
+            var trimmed = mountPoint.Trim();
+            if (Regex.IsMatch(trimmed, "^[A-Za-z]:\\?$"))
+            {
+                return trimmed.EndsWith("\\", StringComparison.Ordinal) ? trimmed : trimmed + "\\";
+            }
+
+            return Path.GetFullPath(trimmed);
+        }
+
+        private List<string> BuildEvhdMountArguments(string evhdPath, string mountPoint)
+        {
+            var arguments = new List<string> { "--password-stdin" };
+
+            arguments.Add(evhdPath);
+            arguments.Add(mountPoint);
+            return arguments;
+        }
+
+        private static string ResolveExecutableFromPath(string executableName)
+        {
+            if (string.IsNullOrWhiteSpace(executableName))
+            {
+                return executableName;
+            }
+
+            if (Path.IsPathRooted(executableName) || executableName.Contains(Path.DirectorySeparatorChar) || executableName.Contains(Path.AltDirectorySeparatorChar))
+            {
+                return Path.GetFullPath(executableName);
+            }
+
+            var searchDirectories = new List<string>();
+            try
+            {
+                var currentDirectory = Environment.CurrentDirectory;
+                if (!string.IsNullOrWhiteSpace(currentDirectory))
+                {
+                    searchDirectories.Add(currentDirectory);
+                }
+            }
+            catch { }
+
+            if (!string.IsNullOrWhiteSpace(AppDomain.CurrentDomain.BaseDirectory))
+            {
+                searchDirectories.Add(AppDomain.CurrentDomain.BaseDirectory);
+            }
+
+            var pathValue = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+            searchDirectories.AddRange(
+                pathValue.Split(Path.PathSeparator)
+                    .Where(path => !string.IsNullOrWhiteSpace(path))
+                    .Select(path => path.Trim().Trim('"')));
+
+            foreach (var directory in searchDirectories.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    var candidate = Path.Combine(directory, executableName);
+                    if (File.Exists(candidate))
+                    {
+                        return Path.GetFullPath(candidate);
+                    }
+                }
+                catch { }
+            }
+
+            return executableName;
+        }
+
+        private static bool MountToolSupportsPasswordStdin(string executablePath, string workingDirectory, out string helpSummary)
+        {
+            helpSummary = string.Empty;
+
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = executablePath,
+                    WorkingDirectory = workingDirectory,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    StandardOutputEncoding = Encoding.UTF8,
+                    RedirectStandardError = true,
+                    StandardErrorEncoding = Encoding.UTF8
+                };
+                psi.ArgumentList.Add("--help");
+
+                using var process = new Process { StartInfo = psi };
+                if (!process.Start())
+                {
+                    helpSummary = "failed to start --help process";
+                    return false;
+                }
+
+                var stdoutTask = process.StandardOutput.ReadToEndAsync();
+                var stderrTask = process.StandardError.ReadToEndAsync();
+
+                if (!process.WaitForExit(5000))
+                {
+                    try { process.Kill(entireProcessTree: true); } catch { }
+                    helpSummary = "--help timed out";
+                    return false;
+                }
+
+                var stdout = stdoutTask.GetAwaiter().GetResult();
+                var stderr = stderrTask.GetAwaiter().GetResult();
+                var merged = (stdout ?? string.Empty) + Environment.NewLine + (stderr ?? string.Empty);
+                helpSummary = CompactDiagnosticText(merged, 600);
+
+                return merged.IndexOf("--password-stdin", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+            catch (Exception ex)
+            {
+                helpSummary = ex.Message;
+                return false;
+            }
+        }
+
+        private static string CompactDiagnosticText(string text, int maxLength)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return string.Empty;
+            }
+
+            var compact = Regex.Replace(text, "\\s+", " ").Trim();
+            if (compact.Length <= maxLength)
+            {
+                return compact;
+            }
+
+            return compact.Substring(0, maxLength) + "...";
+        }
+
+        private static string SanitizeSensitiveText(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return string.Empty;
+            }
+
+            var sanitized = text;
+            sanitized = Regex.Replace(
+                sanitized,
+                "(?i)(\\b(?:password|secret|token|authorization|ciphertext|totpsecret|totpcode|sessionsecret|evhdpassword|registrationcertificatepassword)\\b\\s*[:=]\\s*)([^\\s,;]+)",
+                "$1***");
+            sanitized = Regex.Replace(
+                sanitized,
+                "(?i)([?&](?:password|secret|token|ciphertext|totpSecret|totpCode|sessionSecret|evhdPassword|registrationCertificatePassword)=)([^&\\s]+)",
+                "$1***");
+            sanitized = Regex.Replace(
+                sanitized,
+                "(?i)(\"(?:password|secret|token|authorization|ciphertext|totpSecret|totpCode|sessionSecret|evhdPassword|registrationCertificatePassword)\"\\s*:\\s*\")([^\"]*)(\")",
+                "$1***$3");
+            return sanitized;
+        }
+
+        private static string FormatProcessArgumentsForLog(ProcessStartInfo startInfo)
+        {
+            return SanitizeSensitiveText(string.Join(" ", startInfo.ArgumentList.Select(argument =>
+            {
+                if (string.IsNullOrEmpty(argument))
+                {
+                    return "\"\"";
+                }
+
+                return argument.IndexOfAny(new[] { ' ', '\t', '"' }) >= 0
+                    ? $"\"{argument.Replace("\"", "\\\"") }\""
+                    : argument;
+            })));
+        }
+
+        private static void LogMountToolInvocation(ProcessStartInfo startInfo)
+        {
+            Trace.WriteLine($"EVHD_MOUNT_START: FileName={SanitizeSensitiveText(startInfo.FileName ?? string.Empty)}");
+            Trace.WriteLine($"EVHD_MOUNT_START: Arguments={FormatProcessArgumentsForLog(startInfo)}");
+            Trace.WriteLine($"EVHD_MOUNT_START: WorkingDirectory={SanitizeSensitiveText(startInfo.WorkingDirectory ?? string.Empty)}");
+            Trace.WriteLine($"EVHD_MOUNT_START: BaseDirectory={SanitizeSensitiveText(AppDomain.CurrentDomain.BaseDirectory)}");
+        }
+
+        private static void LogMountToolStreamLine(string streamName, string line)
+        {
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                return;
+            }
+
+            Trace.WriteLine($"EVHD_MOUNT_{streamName}: {SanitizeSensitiveText(line)}");
+        }
+
+        private static void LogMountToolSummary(string phase, int exitCode, string stdout, string stderr)
+        {
+            Trace.WriteLine($"EVHD_MOUNT_{phase}: ExitCode={exitCode}");
+
+            if (!string.IsNullOrWhiteSpace(stdout))
+            {
+                Trace.WriteLine($"EVHD_MOUNT_{phase}_STDOUT:\n{SanitizeSensitiveText(stdout.TrimEnd())}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(stderr))
+            {
+                Trace.WriteLine($"EVHD_MOUNT_{phase}_STDERR:\n{SanitizeSensitiveText(stderr.TrimEnd())}");
+            }
+        }
+
+        private static async Task PumpProcessStreamAsync(StreamReader reader, string streamName, StringBuilder target, object syncRoot)
+        {
+            var buffer = new char[1024];
+            var pending = new StringBuilder();
+
+            while (true)
+            {
+                var read = await reader.ReadAsync(buffer, 0, buffer.Length);
+                if (read <= 0)
+                {
+                    break;
+                }
+
+                var chunk = new string(buffer, 0, read);
+                lock (syncRoot)
+                {
+                    target.Append(chunk);
+                }
+
+                pending.Append(chunk);
+                while (true)
+                {
+                    var pendingText = pending.ToString();
+                    var newLineIndex = pendingText.IndexOfAny(new[] { '\r', '\n' });
+                    if (newLineIndex < 0)
+                    {
+                        break;
+                    }
+
+                    var line = pendingText.Substring(0, newLineIndex).TrimEnd('\r', '\n');
+                    if (!string.IsNullOrWhiteSpace(line))
+                    {
+                        LogMountToolStreamLine(streamName, line);
+                    }
+
+                    var removeLength = 1;
+                    if (newLineIndex + 1 < pendingText.Length)
+                    {
+                        var current = pendingText[newLineIndex];
+                        var next = pendingText[newLineIndex + 1];
+                        if ((current == '\r' && next == '\n') || (current == '\n' && next == '\r'))
+                        {
+                            removeLength = 2;
+                        }
+                    }
+
+                    pending.Remove(0, newLineIndex + removeLength);
+                }
+            }
+
+            var tail = pending.ToString().TrimEnd('\r', '\n');
+            if (!string.IsNullOrWhiteSpace(tail))
+            {
+                LogMountToolStreamLine(streamName, tail);
+            }
+        }
+
+        private static void LogDirectorySnapshot(string phase, string path, string searchPattern = "*", int limit = 20)
+        {
+            try
+            {
+                var exists = Directory.Exists(path);
+                Trace.WriteLine($"EVHD_MOUNT_{phase}: Directory={SanitizeSensitiveText(path)} Exists={exists}");
+                if (!exists)
+                {
+                    return;
+                }
+
+                var entries = Directory.EnumerateFileSystemEntries(path, searchPattern, SearchOption.TopDirectoryOnly)
+                    .Take(limit)
+                    .Select(Path.GetFileName)
+                    .Where(name => !string.IsNullOrWhiteSpace(name))
+                    .ToList();
+
+                Trace.WriteLine($"EVHD_MOUNT_{phase}: EntryCountSample={entries.Count}");
+                foreach (var entry in entries)
+                {
+                    Trace.WriteLine($"EVHD_MOUNT_{phase}_ENTRY: {SanitizeSensitiveText(entry)}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"EVHD_MOUNT_{phase}_SNAPSHOT_EXCEPTION: {SanitizeSensitiveText(ex.ToString())}");
+            }
+        }
+
+        private static string BuildMountToolFailureDetail(int exitCode, string stderr, string stdout)
+        {
+            var errorText = string.IsNullOrWhiteSpace(stderr) ? null : SanitizeSensitiveText(stderr.Trim());
+            var outputText = string.IsNullOrWhiteSpace(stdout) ? null : SanitizeSensitiveText(stdout.Trim());
+
+            if (!string.IsNullOrEmpty(errorText))
+            {
+                return $"EVHD挂载进程提前退出，退出码 {exitCode}: {errorText}";
+            }
+
+            if (!string.IsNullOrEmpty(outputText))
+            {
+                return $"EVHD挂载进程提前退出，退出码 {exitCode}: {outputText}";
+            }
+
+            return $"EVHD挂载进程提前退出，退出码 {exitCode}";
         }
 
         // 挂载EVHD到N盘，并从其中提取解密后的VHD再挂载
@@ -1381,26 +2117,55 @@ namespace VHDMounter
 
                 // 调用加密挂载工具
                 await ShowStatusAndWait("正在调用加密VHD挂载工具...");
-                var toolPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "encrypted-vhd-mount.exe");
-                var fileName = File.Exists(toolPath) ? toolPath : "encrypted-vhd-mount.exe";
+                var fileName = ResolveExecutableFromPath("encrypted-vhd-mount.exe");
+                var mountPoint = NormalizeMountPoint(@"N:");
+                var workingDirectory = Path.GetDirectoryName(fileName);
+                if (string.IsNullOrWhiteSpace(workingDirectory) || !Directory.Exists(workingDirectory))
+                {
+                    workingDirectory = AppDomain.CurrentDomain.BaseDirectory;
+                }
+
+                if (!MountToolSupportsPasswordStdin(fileName, workingDirectory, out var compatHelpSummary))
+                {
+                    Trace.WriteLine($"EVHD_MOUNT_COMPAT_ERROR: FileName={SanitizeSensitiveText(fileName)}, WorkingDirectory={SanitizeSensitiveText(workingDirectory)}, HelpSummary={SanitizeSensitiveText(compatHelpSummary)}");
+                    await ShowStatusAndWait("挂载工具版本过旧或不兼容：未检测到 --password-stdin 支持，请更新 encrypted-vhd-mount.exe");
+                    return false;
+                }
 
                 var psi = new ProcessStartInfo
                 {
                     FileName = fileName,
+                    WorkingDirectory = workingDirectory,
                     UseShellExecute = false,
                     CreateNoWindow = true,
+                    RedirectStandardInput = true,
+                    StandardInputEncoding = new UTF8Encoding(false),
                     RedirectStandardOutput = true,
-                    RedirectStandardError = true
+                    StandardOutputEncoding = Encoding.UTF8,
+                    RedirectStandardError = true,
+                    StandardErrorEncoding = Encoding.UTF8
                 };
-                // 使用 ArgumentList 逐项传参，确保密码中的特殊符号与空格不会造成截断
-                psi.ArgumentList.Add("/p");
-                psi.ArgumentList.Add(password);
-                psi.ArgumentList.Add(evhdPath);
-                psi.ArgumentList.Add("N:");
+                foreach (var argument in BuildEvhdMountArguments(evhdPath, mountPoint))
+                {
+                    psi.ArgumentList.Add(argument);
+                }
 
+                var stdoutBuilder = new StringBuilder();
+                var stderrBuilder = new StringBuilder();
+                var outputSync = new object();
                 var proc = new Process { StartInfo = psi };
 
+                LogMountToolInvocation(psi);
+                LogDirectorySnapshot("PRE_START_MOUNTPOINT", mountPoint);
+
                 proc.Start();
+                Trace.WriteLine($"EVHD_MOUNT_START: ProcessId={proc.Id}");
+                var stdoutTask = PumpProcessStreamAsync(proc.StandardOutput, "STDOUT", stdoutBuilder, outputSync);
+                var stderrTask = PumpProcessStreamAsync(proc.StandardError, "STDERR", stderrBuilder, outputSync);
+                var passwordWriteInfo = await WritePasswordToMountToolAsync(proc, password);
+                Trace.WriteLine($"EVHD_MOUNT_STDIN: Password payload written to stdin and stream closed, OriginalLength={passwordWriteInfo.OriginalLength}, SentLength={passwordWriteInfo.SentLength}, HadLeadingBom={passwordWriteInfo.HadLeadingBom}, TrimmedTrailingTerminators={passwordWriteInfo.TrimmedTrailingTerminators}");
+                password = null;
+
                 // 保存引用，确保工具在主程序生命周期内持续运行
                 evhdMountProcess = proc;
 
@@ -1408,14 +2173,34 @@ namespace VHDMounter
                 var timeoutMs = 60000;
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 bool nReady = false;
-                var nRoot = "N:";
+                var nRoot = mountPoint;
+                Trace.WriteLine($"EVHD_MOUNT_WAIT: Waiting for mount point {SanitizeSensitiveText(nRoot)} with timeout {timeoutMs}ms");
                 while (sw.ElapsedMilliseconds < timeoutMs)
                 {
                     // 成功条件：仅检测到 N: 盘存在
                     if (Directory.Exists(nRoot))
                     {
                         nReady = true;
+                        Trace.WriteLine($"EVHD_MOUNT_WAIT: Mount point became available after {sw.ElapsedMilliseconds}ms");
                         break;
+                    }
+
+                    if (proc.HasExited)
+                    {
+                        proc.WaitForExit();
+                        await Task.WhenAll(stdoutTask, stderrTask);
+                        evhdMountProcess = null;
+                        string stdout;
+                        string stderr;
+                        lock (outputSync)
+                        {
+                            stdout = stdoutBuilder.ToString();
+                            stderr = stderrBuilder.ToString();
+                        }
+                        LogDirectorySnapshot("EARLY_EXIT_MOUNTPOINT", nRoot);
+                        LogMountToolSummary("EARLY_EXIT", proc.ExitCode, stdout, stderr);
+                        await ShowStatusAndWait(BuildMountToolFailureDetail(proc.ExitCode, stderr, stdout));
+                        return false;
                     }
 
                     await Task.Delay(500);
@@ -1424,12 +2209,40 @@ namespace VHDMounter
                 // 未检测到 N:，视为超时失败（不主动结束加密挂载进程）
                 if (!nReady)
                 {
+                    if (proc.HasExited)
+                    {
+                        proc.WaitForExit();
+                        await Task.WhenAll(stdoutTask, stderrTask);
+                        evhdMountProcess = null;
+                        string stdout;
+                        string stderr;
+                        lock (outputSync)
+                        {
+                            stdout = stdoutBuilder.ToString();
+                            stderr = stderrBuilder.ToString();
+                        }
+                        LogDirectorySnapshot("TIMEOUT_EXIT_MOUNTPOINT", nRoot);
+                        LogMountToolSummary("TIMEOUT_EXIT", proc.ExitCode, stdout, stderr);
+                        await ShowStatusAndWait(BuildMountToolFailureDetail(proc.ExitCode, stderr, stdout));
+                        return false;
+                    }
+
+                    string runningStdout;
+                    string runningStderr;
+                    lock (outputSync)
+                    {
+                        runningStdout = stdoutBuilder.ToString();
+                        runningStderr = stderrBuilder.ToString();
+                    }
+                    LogDirectorySnapshot("TIMEOUT_RUNNING_MOUNTPOINT", nRoot);
+                    LogMountToolSummary("TIMEOUT_STILL_RUNNING", proc.HasExited ? proc.ExitCode : -1, runningStdout, runningStderr);
                     await ShowStatusAndWait("EVHD挂载超时（超过60秒），未检测到N盘");
                     return false;
                 }
 
                 // 在N盘根目录查找解密后的VHD（若刚出现，给它一点准备时间）
                 await ShowStatusAndWait("已检测到N盘，继续挂载解密后的VHD...");
+                LogDirectorySnapshot("MOUNTPOINT_READY", nRoot);
                 if (!Directory.Exists(nRoot))
                 {
                     await Task.Delay(1000);
@@ -1453,11 +2266,13 @@ namespace VHDMounter
 
                 if (decryptedVhds.Count == 0)
                 {
+                    LogDirectorySnapshot("NO_VHD_FOUND", nRoot, "*.vhd");
                     await ShowStatusAndWait("N盘中未找到解密后的VHD文件");
                     return false;
                 }
 
                 var vhdToAttach = decryptedVhds[0];
+                Trace.WriteLine($"EVHD_MOUNT_VHD_SELECTED: {SanitizeSensitiveText(vhdToAttach)}");
                 await ShowStatusAndWait($"找到解密后的VHD: {Path.GetFileName(vhdToAttach)}，准备挂载...");
 
                 // 使用现有MountVHD挂载到目标盘符
@@ -1465,6 +2280,7 @@ namespace VHDMounter
             }
             catch (Exception ex)
             {
+                Trace.WriteLine($"EVHD_MOUNT_EXCEPTION: {ex}");
                 await ShowStatusAndWait($"挂载EVHD失败: {ex.Message}");
                 return false;
             }
@@ -1507,9 +2323,8 @@ namespace VHDMounter
         {
             if (string.IsNullOrWhiteSpace(keyword) || vhdFiles == null || vhdFiles.Count == 0)
                 return null;
-                
-            var matchingFile = vhdFiles.FirstOrDefault(f => 
-                ExtractKeyword(Path.GetFileName(f)).Equals(keyword, StringComparison.OrdinalIgnoreCase));
+
+            var matchingFile = SelectBestMatchByKeyword(vhdFiles, keyword);
                 
             if (matchingFile != null)
             {
@@ -1568,6 +2383,11 @@ namespace VHDMounter
                     Debug.WriteLine($"找到文件: {file}");
                 }
             });
+
+            hasLocalEvhdFiles = vhdFiles.Any(IsEvhdFile);
+            StatusChanged?.Invoke(hasLocalEvhdFiles
+                ? "本地扫描检测到 .evhd 文件，EVHD 链路可用"
+                : "本地未扫描到 .evhd 文件，EVHD 链路保持关闭");
 
             return vhdFiles;
         }

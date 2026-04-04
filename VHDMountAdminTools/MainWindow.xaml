@@ -1,0 +1,133 @@
+<Window x:Class="VHDMountAdminTools.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="VHD Mount Admin Tools" Height="760" Width="920">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <Grid Margin="16">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="12"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="12"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="12"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <GroupBox Header="更新签名密钥" Grid.Row="0">
+                <Grid Margin="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="140"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Text="输出目录" VerticalAlignment="Center"/>
+                    <TextBox x:Name="KeyOutDir" Grid.Column="1" Margin="8,0"/>
+                    <Button Grid.Column="2" Content="浏览" Padding="12,2" Click="BrowseFolderKeyOut"/>
+                    <TextBlock Grid.Row="2" Text="KeyId" VerticalAlignment="Center"/>
+                    <TextBox x:Name="KeyIdBox" Grid.Row="2" Grid.Column="1" Margin="8,0" Text="update-key-2026-q2"/>
+                    <Button Grid.Row="2" Grid.Column="2" Content="生成签名密钥" Padding="12,2" Click="GenerateSigningKey"/>
+                </Grid>
+            </GroupBox>
+
+            <GroupBox Header="清单打包与签名" Grid.Row="2">
+                <Grid Margin="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="140"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Text="payload 目录" VerticalAlignment="Center"/>
+                    <TextBox x:Name="PayloadDir" Grid.Column="1" Margin="8,0"/>
+                    <Button Grid.Column="2" Content="浏览" Padding="12,2" Click="BrowseFolderPayload"/>
+
+                    <TextBlock Grid.Row="2" Text="输出目录" VerticalAlignment="Center"/>
+                    <TextBox x:Name="ManifestOutDir" Grid.Row="2" Grid.Column="1" Margin="8,0"/>
+                    <Button Grid.Row="2" Grid.Column="2" Content="浏览" Padding="12,2" Click="BrowseFolderManifestOut"/>
+
+                    <TextBlock Grid.Row="4" Text="私钥文件" VerticalAlignment="Center"/>
+                    <TextBox x:Name="PrivateKeyPath" Grid.Row="4" Grid.Column="1" Margin="8,0"/>
+                    <Button Grid.Row="4" Grid.Column="2" Content="选择" Padding="12,2" Click="BrowsePrivateKey"/>
+
+                    <TextBlock Grid.Row="6" Text="类型" VerticalAlignment="Center"/>
+                    <ComboBox x:Name="TypeBox" Grid.Row="6" Grid.Column="1" Margin="8,0">
+                        <ComboBoxItem Content="app-update" IsSelected="True"/>
+                        <ComboBoxItem Content="vhd-data"/>
+                    </ComboBox>
+
+                    <TextBlock Grid.Row="8" Text="最小版本" VerticalAlignment="Center"/>
+                    <TextBox x:Name="MinVersionBox" Grid.Row="8" Grid.Column="1" Margin="8,0" Text="1.5.0"/>
+
+                    <TextBlock Grid.Row="10" Text="版本" VerticalAlignment="Center"/>
+                    <TextBox x:Name="VersionBox" Grid.Row="10" Grid.Column="1" Margin="8,0"/>
+                    <Button Grid.Row="10" Grid.Column="2" Content="生成清单并签名" Padding="12,2" Click="MakeManifest"/>
+                </Grid>
+            </GroupBox>
+
+            <GroupBox Header="预配置注册证书包" Grid.Row="4">
+                <Grid Margin="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="140"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Text="输出目录" VerticalAlignment="Center"/>
+                    <TextBox x:Name="RegistrationOutDir" Grid.Column="1" Margin="8,0"/>
+                    <Button Grid.Column="2" Content="浏览" Padding="12,2" Click="BrowseFolderRegistrationOut"/>
+
+                    <TextBlock Grid.Row="2" Text="Bundle 名称" VerticalAlignment="Center"/>
+                    <TextBox x:Name="RegistrationBundleNameBox" Grid.Row="2" Grid.Column="1" Margin="8,0" Text="machine-registration"/>
+
+                    <TextBlock Grid.Row="4" Text="证书主题 CN" VerticalAlignment="Center"/>
+                    <TextBox x:Name="RegistrationSubjectBox" Grid.Row="4" Grid.Column="1" Margin="8,0" Text="VHDMount Machine Registration"/>
+
+                    <TextBlock Grid.Row="6" Text="PFX 密码" VerticalAlignment="Center"/>
+                    <PasswordBox x:Name="RegistrationPasswordBox" Grid.Row="6" Grid.Column="1" Margin="8,0"/>
+
+                    <TextBlock Grid.Row="8" Text="有效天数" VerticalAlignment="Center"/>
+                    <TextBox x:Name="RegistrationValidDaysBox" Grid.Row="8" Grid.Column="1" Margin="8,0" Text="365"/>
+
+                    <TextBlock Grid.Row="10" Grid.Column="1" Margin="8,0,8,0" TextWrapping="Wrap"
+                               Text="将输出 .pfx、.pem、可信证书 JSON 和客户端配置片段，供服务器初始化与 VHDMounter 配置使用。"/>
+                    <Button Grid.Row="10" Grid.Column="2" Content="生成证书包" Padding="12,2" Click="GenerateRegistrationBundle"/>
+                </Grid>
+            </GroupBox>
+
+            <StackPanel Grid.Row="6" Orientation="Horizontal" HorizontalAlignment="Right">
+                <TextBlock x:Name="StatusText" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                <Button Content="关闭" Padding="16,4" Width="100" Click="CloseApp"/>
+            </StackPanel>
+        </Grid>
+    </ScrollViewer>
+</Window>

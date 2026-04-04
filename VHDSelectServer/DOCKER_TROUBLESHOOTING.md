@@ -69,15 +69,48 @@ docker-compose up -d
 
 **问题**: `permission denied`
 
+如果报错发生在 PostgreSQL 初始化阶段，并且你把宿主机目录 bind mount 到了 `/var/lib/postgresql/data`，常见根因不是镜像内权限没设，而是宿主机共享文件系统不保留 Linux 的 `chown/chmod` 结果。PostgreSQL 要求真实数据目录必须由 `postgres` 拥有，且权限为 `0700` 或 `0750`。
+
+如果报错发生在 OTP 初始化或服务配置保存阶段，并且日志里出现 `/app/config/data/*.tmp`、`server-pending-init.json.tmp`、`server-security.json.tmp` 或 `vhd-config.json.tmp`，根因通常是 `/app/config` 被 bind mount 后覆盖了镜像内原本的所有权设置，而应用实际是以 `nodejs` 用户写入 `/app/config/data` 这个子目录。
+
 **解决方案**:
 ```bash
-# Linux/macOS
-sudo chown -R $USER:$USER ./config
+# 配置目录（bind mount）
+# Linux/macOS: 映射父目录，实际配置交给子目录 /app/config/data
+mkdir -p ./config
+mkdir -p ./config/data
 chmod 755 ./config
+chmod 777 ./config/data
 
-# Windows
-# 右键config文件夹 -> 属性 -> 安全 -> 编辑权限
+# 生产环境更推荐 Docker named volume，而不是宿主机 bind mount：
+# volumes:
+#   - vhd_config:/app/config
+
+# Windows/macOS bind mount 仍然有问题时：
+# 1. 确认 Docker Desktop 已授予该目录文件共享权限
+# 2. 避免使用网络共享目录
+# 3. Windows 上优先使用 WSL2 的 ext4 路径后再挂载
 ```
+
+说明：当前镜像默认把宿主机目录当作 `CONFIG_ROOT_DIR=/app/config`，真正写入的配置目录是 `CONFIG_PATH=/app/config/data`。容器启动时会先创建或修复这个子目录，并在首次升级时自动把旧版 `/app/config` 根目录里的配置文件迁移进去；随后再以 `nodejs` 用户对 `CONFIG_PATH` 做写入探测。如果这一步失败，容器会直接退出，而不是等到 OTP 初始化时才报模糊的 `.tmp` 写入错误。
+
+对于内置 PostgreSQL 数据目录，推荐这样挂载：
+
+```yaml
+volumes:
+  - ./postgres-data:/var/lib/postgresql/data
+environment:
+  - POSTGRES_DATA_DIR=/var/lib/postgresql/data/pgdata
+```
+
+不要把宿主机目录直接当作 PostgreSQL cluster 根目录。当前镜像已默认把实际 PGDATA 放在 `pgdata` 子目录，以兼容 Docker named volume 和大多数 bind mount 场景。
+
+如果仍然失败：
+
+- Windows 上优先使用 Docker named volume。
+- 配置目录 bind mount 失败时，优先把 `./config` 改成 Docker named volume，或改挂到 WSL2/ext4 路径。
+- 或将宿主机目录放在 WSL2 的 ext4 文件系统路径下再挂载。
+- 避免使用不保留 POSIX 权限的网络共享目录。
 
 ### 4. 配置文件不持久化
 
@@ -91,15 +124,22 @@ docker inspect vhd-select-server
 
 # 检查配置目录
 ls -la ./config/
+ls -la ./config/data/
 ```
 
 **解决方案**:
 ```bash
 # 确保config目录存在
 mkdir -p config
+mkdir -p config/data
 
 # 检查docker-compose.yml中的volumes配置
 # 应该包含: - ./config:/app/config
+
+# 检查环境变量
+# 应该包含:
+#   - CONFIG_ROOT_DIR=/app/config
+#   - CONFIG_PATH=/app/config/data
 ```
 
 ### 5. 容器无法启动

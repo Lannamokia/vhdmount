@@ -27,7 +27,7 @@ RUN if [ -f package-lock.json ]; then \
 COPY . .
 
 # 创建必要的目录
-RUN mkdir -p /app/config /var/lib/postgresql/data /app/scripts
+RUN mkdir -p /app/config/data /var/lib/postgresql/data/pgdata /app/scripts
 
 # 复制数据库初始化脚本
 COPY init-db.sql /app/scripts/
@@ -42,7 +42,8 @@ EXPOSE 8080
 # 设置环境变量
 ENV NODE_ENV=production
 ENV PORT=8080
-ENV CONFIG_PATH=/app/config
+ENV CONFIG_ROOT_DIR=/app/config
+ENV CONFIG_PATH=/app/config/data
 # 数据库配置环境变量
 ENV USE_EMBEDDED_DB=true
 ENV DB_HOST=localhost
@@ -50,7 +51,7 @@ ENV DB_PORT=5432
 ENV DB_NAME=vhd_select
 ENV DB_USER=vhd_user
 ENV DB_PASSWORD=vhd_password
-ENV POSTGRES_DATA_DIR=/var/lib/postgresql/data
+ENV POSTGRES_DATA_DIR=/var/lib/postgresql/data/pgdata
 
 # 创建postgres用户和nodejs用户
 RUN addgroup -S postgres || true && \
@@ -59,12 +60,15 @@ RUN addgroup -S postgres || true && \
     adduser -S nodejs -G nodejs || true
 
 # 创建PostgreSQL数据目录和运行时目录并设置权限
-RUN mkdir -p /var/lib/postgresql/data /run/postgresql && \
+RUN mkdir -p /var/lib/postgresql/data /var/lib/postgresql/data/pgdata /run/postgresql && \
     chown -R postgres:postgres /var/lib/postgresql /run/postgresql && \
-    chmod 700 /var/lib/postgresql/data
+    chmod 700 /var/lib/postgresql/data/pgdata
 
 # 更改应用文件所有权
 RUN chown -R nodejs:nodejs /app
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -fsS http://localhost:8080/api/health || exit 1
 
 # 启动脚本（覆盖基础镜像的 ENTRYPOINT）
 ENTRYPOINT ["/app/scripts/docker-entrypoint.sh"]

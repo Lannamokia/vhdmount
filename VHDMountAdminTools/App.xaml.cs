@@ -1,6 +1,6 @@
 using System.Windows;
 
-namespace UpdatePackagerGUI
+namespace VHDMountAdminTools
 {
     public partial class App : Application
     {

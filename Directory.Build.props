@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'VHDDebugger'">
+    <BaseIntermediateOutputPath>obj\VHDDebugger\</BaseIntermediateOutputPath>
+    <MSBuildProjectExtensionsPath>obj\VHDDebugger\</MSBuildProjectExtensionsPath>
+  </PropertyGroup>
+</Project>

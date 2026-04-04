@@ -165,9 +165,9 @@ namespace VHDMounter
                 // 阶段：正在准备游戏文件（远程关键词获取 + 扫描）
                 SetStage(UiStage.PrepareGameFiles);
                 string remoteSelectedKeyword = await vhdManager.GetRemoteVHDSelection();
+                var localVhdFiles = await vhdManager.ScanForVHDFiles();
                 var nxInsUSB = vhdManager.FindNXInsUSBDrive();
                 List<string> usbVhdFiles = nxInsUSB != null ? vhdManager.ScanUSBForVHDFiles(nxInsUSB) : new List<string>();
-                var localVhdFiles = await vhdManager.ScanForVHDFiles();
 
                 // 如果找到USB设备和VHD文件，替换本地文件
                 if (nxInsUSB != null && usbVhdFiles.Count > 0 && localVhdFiles.Count > 0)
@@ -208,6 +208,10 @@ namespace VHDMounter
                         await ProcessSelectedVHD(selectedVHD);
                         return;
                     }
+
+                    OnStatusChanged("游戏资源缺失");
+                    await ShowFatalErrorAndShutdownAfterDelay();
+                    return;
                 }
                 
                 if (localVhdFiles.Count == 1)
