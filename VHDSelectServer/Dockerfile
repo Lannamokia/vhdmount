@@ -27,7 +27,7 @@ RUN if [ -f package-lock.json ]; then \
 COPY . .
 
 # 创建必要的目录
-RUN mkdir -p /app/config /var/lib/postgresql/data/pgdata /app/scripts
+RUN mkdir -p /app/config/data /var/lib/postgresql/data/pgdata /app/scripts
 
 # 复制数据库初始化脚本
 COPY init-db.sql /app/scripts/
@@ -42,7 +42,8 @@ EXPOSE 8080
 # 设置环境变量
 ENV NODE_ENV=production
 ENV PORT=8080
-ENV CONFIG_PATH=/app/config
+ENV CONFIG_ROOT_DIR=/app/config
+ENV CONFIG_PATH=/app/config/data
 # 数据库配置环境变量
 ENV USE_EMBEDDED_DB=true
 ENV DB_HOST=localhost

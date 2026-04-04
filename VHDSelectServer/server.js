@@ -9,6 +9,7 @@ const rateLimit = require('express-rate-limit');
 const session = require('express-session');
 
 const { AuditLog } = require('./auditLog');
+const { ensureWritableDirectory, writeJsonAtomic } = require('./configStoreUtils');
 const { createDatabase } = require('./database');
 const { RegistrationAuthError, verifySignedRegistrationRequest } = require('./registrationAuth');
 const { SecurityStore } = require('./securityStore');
@@ -27,19 +28,11 @@ const DEFAULT_VHD_KEYWORD = 'SDEZ';
 const OTP_STEP_UP_WINDOW_MS = 60 * 1000;
 const APP_VERSION = '2.0.0';
 
-function writeJsonAtomic(filePath, data) {
-    const tempFile = `${filePath}.tmp`;
-    fs.writeFileSync(tempFile, JSON.stringify(data, null, 2), 'utf8');
-    fs.renameSync(tempFile, filePath);
-}
-
 function createServiceSettingsStore(configDir, logger = console) {
     const settingsFile = path.join(configDir, 'vhd-config.json');
 
     function ensureDir() {
-        if (!fs.existsSync(configDir)) {
-            fs.mkdirSync(configDir, { recursive: true });
-        }
+        ensureWritableDirectory(configDir);
     }
 
     function load() {

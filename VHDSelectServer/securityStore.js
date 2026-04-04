@@ -4,13 +4,8 @@ const fs = require('fs');
 const path = require('path');
 const { authenticator } = require('otplib');
 
+const { ensureWritableDirectory, writeJsonAtomic } = require('./configStoreUtils');
 const { normalizeDbConfig } = require('./database');
-
-function writeJsonAtomic(filePath, data) {
-    const tempFile = `${filePath}.tmp`;
-    fs.writeFileSync(tempFile, JSON.stringify(data, null, 2), 'utf8');
-    fs.renameSync(tempFile, filePath);
-}
 
 function normalizeOrigins(origins) {
     if (!Array.isArray(origins)) {
@@ -55,9 +50,7 @@ class SecurityStore {
     }
 
     ensureConfigDir() {
-        if (!fs.existsSync(this.configDir)) {
-            fs.mkdirSync(this.configDir, { recursive: true });
-        }
+        ensureWritableDirectory(this.configDir);
     }
 
     getPaths() {

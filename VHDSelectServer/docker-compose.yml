@@ -8,6 +8,7 @@ services:
     ports:
       - "8082:8080"
     volumes:
+      # 服务配置持久化。映射父目录到 /app/config，实际配置写入 /app/config/data。
       - ./config:/app/config
       - ./vhd-data:/app/vhd-data
       # 内置数据库数据持久化。若要改为宿主机 bind mount，请映射父目录到 /var/lib/postgresql/data，
@@ -18,7 +19,8 @@ services:
       # 应用配置
       - NODE_ENV=production
       - PORT=8080
-      - CONFIG_PATH=/app/config
+      - CONFIG_ROOT_DIR=/app/config
+      - CONFIG_PATH=/app/config/data
       
       # 数据库配置 - 使用内置数据库
       - USE_EMBEDDED_DB=true

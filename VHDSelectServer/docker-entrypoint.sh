@@ -18,6 +18,25 @@ normalize_postgres_data_dir() {
     export POSTGRES_DATA_PARENT_DIR="$(dirname "$POSTGRES_DATA_DIR")"
 }
 
+normalize_config_dir() {
+    local requested_root="${CONFIG_ROOT_DIR:-/app/config}"
+    local requested_dir="${CONFIG_PATH:-$requested_root/data}"
+
+    requested_root="${requested_root%/}"
+    requested_dir="${requested_dir%/}"
+
+    if [ -z "$requested_root" ]; then
+        requested_root="/app/config"
+    fi
+
+    if [ -z "$requested_dir" ] || [ "$requested_dir" = "$requested_root" ]; then
+        requested_dir="$requested_root/data"
+    fi
+
+    export CONFIG_ROOT_DIR="$requested_root"
+    export CONFIG_PATH="$requested_dir"
+}
+
 log_path_state() {
     local target="$1"
     if [ -e "$target" ]; then
@@ -28,6 +47,45 @@ log_path_state() {
         log "路径状态: $target owner=$owner mode=$mode"
     else
         log "路径状态: $target 不存在"
+    fi
+}
+
+prepare_config_dir() {
+    normalize_config_dir
+
+    local config_root_dir="$CONFIG_ROOT_DIR"
+    local config_dir="$CONFIG_PATH"
+    local probe_file="$config_dir/.nodejs-write-test-$$"
+    local legacy_files="server-security.json server-initialized.lock server-pending-init.json server-audit.log vhd-config.json"
+
+    log "使用配置根目录: $config_root_dir"
+    log "使用实际配置目录: $config_dir"
+    mkdir -p "$config_root_dir" "$config_dir" || true
+    chown nodejs:nodejs "$config_root_dir" "$config_dir" 2>/dev/null || true
+    chmod 755 "$config_root_dir" 2>/dev/null || true
+    chmod 775 "$config_dir" 2>/dev/null || true
+    log_path_state "$config_root_dir"
+    log_path_state "$config_dir"
+
+    if [ "$config_dir" != "$config_root_dir" ]; then
+        for file_name in $legacy_files; do
+            local legacy_path="$config_root_dir/$file_name"
+            local current_path="$config_dir/$file_name"
+
+            if [ -f "$legacy_path" ] && [ ! -e "$current_path" ]; then
+                log "迁移旧版配置文件: $legacy_path -> $current_path"
+                mv "$legacy_path" "$current_path"
+            elif [ -f "$legacy_path" ] && [ -e "$current_path" ]; then
+                log "警告: 旧版根目录和当前子目录同时存在 $file_name，保留子目录版本。"
+            fi
+        done
+    fi
+
+    if ! su-exec nodejs sh -c "touch \"$probe_file\" && rm -f \"$probe_file\""; then
+        log "错误: CONFIG_PATH 对容器内 nodejs 用户不可写。OTP 初始化和服务配置保存会尝试在该目录创建 *.tmp 临时文件。"
+        log "建议将宿主机目录映射到 CONFIG_ROOT_DIR，让实际配置保持在其子目录 CONFIG_PATH，例如 /app/config/data。"
+        log "建议: 1) 优先使用 Docker named volume；2) 如果必须 bind mount，确保宿主机目录允许容器内 nodejs 用户写入；3) Windows/macOS 上优先使用 WSL2/ext4 路径或 Docker Desktop managed volume。"
+        exit 1
     fi
 }
 
@@ -247,6 +305,7 @@ trap cleanup SIGTERM SIGINT
 # 主逻辑
 log "VHD Select Server Docker容器启动"
 log "USE_EMBEDDED_DB: $USE_EMBEDDED_DB"
+prepare_config_dir
 
 if [ "$USE_EMBEDDED_DB" = "true" ]; then
     log "使用内置PostgreSQL数据库"

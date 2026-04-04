@@ -1,13 +1,13 @@
 const fs = require('fs');
 const path = require('path');
 
+const { ensureWritableDirectory } = require('./configStoreUtils');
+
 class AuditLog {
     constructor(filePath) {
         this.filePath = filePath;
         const dir = path.dirname(filePath);
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-        }
+        ensureWritableDirectory(dir);
     }
 
     append(entry) {

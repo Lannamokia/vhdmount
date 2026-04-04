@@ -29,6 +29,18 @@ docker-compose up -d
 docker-compose logs -f
 ```
 
+如果需要把服务配置持久化到宿主机目录，请像 PostgreSQL 一样映射父目录到 `/app/config`，让实际配置保持在子目录 `/app/config/data`。例如：
+
+```yaml
+volumes:
+	- ./config:/app/config
+environment:
+	- CONFIG_ROOT_DIR=/app/config
+	- CONFIG_PATH=/app/config/data
+```
+
+原因：Docker Desktop/部分 bind mount 文件系统不会稳定保留挂载根目录上的 Linux 所有权与权限。把真正写入的配置文件放到子目录，可以在容器启动时由 root 创建并修复这个子目录，再交给 `nodejs` 用户写入，和内置 PostgreSQL 使用 `pgdata` 子目录的思路一致。首次升级到这个布局时，入口脚本会自动把旧版直接放在 `/app/config` 根目录的配置文件迁移到子目录。
+
 如果需要把 PostgreSQL 数据持久化到宿主机目录，请映射父目录到 `/var/lib/postgresql/data`，让实际 cluster 保持在容器内的 `pgdata` 子目录。例如：
 
 ```yaml
