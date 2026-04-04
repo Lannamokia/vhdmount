@@ -306,6 +306,28 @@ async function createApp(options = {}) {
         standardHeaders: true,
         legacyHeaders: false,
     });
+    const machineRegistrationLimiter = rateLimit({
+        windowMs: 10 * 60 * 1000,
+        max: Number(process.env.MACHINE_REGISTRATION_RATE_LIMIT_MAX || 20),
+        standardHeaders: true,
+        legacyHeaders: false,
+        keyGenerator: (req) => {
+            const machineId = String(req.params?.machineId || '').trim().toUpperCase();
+            return machineId ? `machine-registration:${machineId}` : `machine-registration-ip:${rateLimit.ipKeyGenerator(req.ip)}`;
+        },
+        handler: (req, res, _next, options) => {
+            const resetTime = req.rateLimit?.resetTime instanceof Date
+                ? req.rateLimit.resetTime.getTime()
+                : Date.now() + options.windowMs;
+            const retryAfterSeconds = Math.max(1, Math.ceil(Math.max(resetTime - Date.now(), 0) / 1000));
+            res.setHeader('Retry-After', String(retryAfterSeconds));
+            res.status(options.statusCode).json({
+                success: false,
+                error: '机台公钥注册过于频繁，请稍后重试',
+                retryAfterSeconds,
+            });
+        },
+    });
 
     app.use('/api', apiLimiter);
 
@@ -770,7 +792,7 @@ async function createApp(options = {}) {
         });
     }));
 
-    app.post('/api/machines/:machineId/keys', sensitiveLimiter, requireInitialized, requireDatabase, asyncHandler(async (req, res) => {
+    app.post('/api/machines/:machineId/keys', machineRegistrationLimiter, requireInitialized, requireDatabase, asyncHandler(async (req, res) => {
         const machineId = assertMachineId(req.params.machineId);
         const keyId = assertKeyId(req.body?.keyId);
         const keyType = String(req.body?.keyType || 'RSA').trim().toUpperCase();

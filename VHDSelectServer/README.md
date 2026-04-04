@@ -152,6 +152,7 @@ GET /api/init/status
 
 - `PORT`：服务端口，默认 `8080`
 - `NODE_ENV`：运行环境，默认 `production`
+- `MACHINE_REGISTRATION_RATE_LIMIT_MAX`：机台公钥注册接口在 10 分钟窗口内的单机限流阈值，默认 `20`
 
 数据库配置：
 

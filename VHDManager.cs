@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Management;
+using System.Net;
 using System.Threading.Tasks;
 using System.Text.RegularExpressions;
 using System.Net.Http;
@@ -68,6 +69,8 @@ namespace VHDMounter
         private bool isBlocking = false;
         private bool protectionWasRunning = false;
         private bool hasLocalEvhdFiles;
+        private DateTimeOffset? nextPublicKeyRegistrationAttemptUtc;
+        private string pendingPublicKeyRegistrationBackoffMessage;
 
         // 加密EVHD挂载进程（需保持常驻直到主程序退出）
         private Process evhdMountProcess;
@@ -1207,8 +1210,16 @@ namespace VHDMounter
                         {
                             var rsa = EnsureOrCreateTpmRsa(machineId);
                             var pubPem = ExportPublicKeyPem(rsa);
-                            StatusChanged?.Invoke("机台未注册公钥，正在注册后重试...");
-                            await RegisterPublicKeyAsync(url, machineId, pubPem);
+                            var registrationResult = await RegisterPublicKeyAsync(url, machineId, pubPem);
+                            if (!string.IsNullOrWhiteSpace(registrationResult.Message))
+                            {
+                                StatusChanged?.Invoke(registrationResult.Message);
+                            }
+
+                            if (!registrationResult.Submitted)
+                            {
+                                return null;
+                            }
 
                             var retry = await httpClient.GetAsync(requestUrl);
                             if (retry.IsSuccessStatusCode)
@@ -1355,8 +1366,11 @@ namespace VHDMounter
                             {
                                 if ((err ?? string.Empty).Contains("未注册公钥"))
                                 {
-                                    StatusChanged?.Invoke("机台未注册公钥，已提交注册，等待服务生效...");
-                                    await RegisterPublicKeyAsync(url, machineId, pubPem);
+                                    var registrationResult = await RegisterPublicKeyAsync(url, machineId, pubPem);
+                                    if (!string.IsNullOrWhiteSpace(registrationResult.Message))
+                                    {
+                                        StatusChanged?.Invoke(registrationResult.Message);
+                                    }
                                 }
                                 else
                                 {
@@ -1548,8 +1562,71 @@ namespace VHDMounter
             return Convert.ToHexString(nonceBytes).ToLowerInvariant();
         }
 
-        private async Task<bool> RegisterPublicKeyAsync(string envelopeUrl, string machineId, string pubkeyPem)
+        private sealed class PublicKeyRegistrationResult
         {
+            public bool Submitted { get; init; }
+            public string Message { get; init; }
+        }
+
+        private static string FormatRetryDelay(TimeSpan delay)
+        {
+            if (delay.TotalMinutes >= 1)
+            {
+                return $"{Math.Max(1, (int)Math.Ceiling(delay.TotalMinutes))} 分钟";
+            }
+
+            return $"{Math.Max(1, (int)Math.Ceiling(delay.TotalSeconds))} 秒";
+        }
+
+        private static TimeSpan? TryGetRetryAfter(HttpResponseMessage response, JsonDocument parsedBody)
+        {
+            if (parsedBody != null && parsedBody.RootElement.TryGetProperty("retryAfterSeconds", out var retryAfterSecondsElement))
+            {
+                if (retryAfterSecondsElement.ValueKind == JsonValueKind.Number && retryAfterSecondsElement.TryGetInt32(out var retryAfterSeconds) && retryAfterSeconds > 0)
+                {
+                    return TimeSpan.FromSeconds(retryAfterSeconds);
+                }
+            }
+
+            if (response?.Headers?.RetryAfter?.Delta is TimeSpan retryAfter && retryAfter > TimeSpan.Zero)
+            {
+                return retryAfter;
+            }
+
+            if (response != null && response.Headers.TryGetValues("RateLimit-Reset", out var rateLimitResetValues))
+            {
+                var rawValue = rateLimitResetValues.FirstOrDefault();
+                if (double.TryParse(rawValue, out var resetSeconds) && resetSeconds > 0)
+                {
+                    return TimeSpan.FromSeconds(resetSeconds);
+                }
+            }
+
+            return null;
+        }
+
+        private void SetPublicKeyRegistrationBackoff(TimeSpan delay, string message)
+        {
+            nextPublicKeyRegistrationAttemptUtc = DateTimeOffset.UtcNow.Add(delay);
+            pendingPublicKeyRegistrationBackoffMessage = message;
+        }
+
+        private void ClearPublicKeyRegistrationBackoff()
+        {
+            nextPublicKeyRegistrationAttemptUtc = null;
+            pendingPublicKeyRegistrationBackoffMessage = null;
+        }
+
+        private async Task<PublicKeyRegistrationResult> RegisterPublicKeyAsync(string envelopeUrl, string machineId, string pubkeyPem)
+        {
+            var now = DateTimeOffset.UtcNow;
+            if (nextPublicKeyRegistrationAttemptUtc.HasValue && now < nextPublicKeyRegistrationAttemptUtc.Value)
+            {
+                var message = pendingPublicKeyRegistrationBackoffMessage;
+                pendingPublicKeyRegistrationBackoffMessage = null;
+                return new PublicKeyRegistrationResult { Submitted = false, Message = message };
+            }
+
             try
             {
                 var config = ReadConfig();
@@ -1594,28 +1671,52 @@ namespace VHDMounter
 
                 if (res.IsSuccessStatusCode)
                 {
-                    StatusChanged?.Invoke("已提交机台公钥签名注册，等待管理员审批");
-                    return true;
+                    ClearPublicKeyRegistrationBackoff();
+                    return new PublicKeyRegistrationResult
+                    {
+                        Submitted = true,
+                        Message = "已提交机台公钥签名注册，等待管理员审批",
+                    };
                 }
 
                 string errorMessage = null;
+                JsonDocument parsedBody = null;
                 try
                 {
-                    using var doc = JsonDocument.Parse(body);
-                    if (doc.RootElement.TryGetProperty("error", out var errorElement))
+                    parsedBody = JsonDocument.Parse(body);
+                    if (parsedBody.RootElement.TryGetProperty("error", out var errorElement))
                     {
                         errorMessage = errorElement.GetString();
+                    }
+                    else if (parsedBody.RootElement.TryGetProperty("message", out var messageElement))
+                    {
+                        errorMessage = messageElement.GetString();
                     }
                 }
                 catch { }
 
-                StatusChanged?.Invoke(errorMessage ?? $"注册公钥失败: {res.StatusCode}");
-                return false;
+                if (res.StatusCode == HttpStatusCode.TooManyRequests)
+                {
+                    var retryAfter = TryGetRetryAfter(res, parsedBody) ?? TimeSpan.FromMinutes(10);
+                    var message = $"{(string.IsNullOrWhiteSpace(errorMessage) ? "机台公钥注册过于频繁" : errorMessage)}，将在 {FormatRetryDelay(retryAfter)} 后重试";
+                    SetPublicKeyRegistrationBackoff(retryAfter, message);
+                    parsedBody?.Dispose();
+                    return new PublicKeyRegistrationResult { Submitted = false, Message = message };
+                }
+
+                parsedBody?.Dispose();
+                SetPublicKeyRegistrationBackoff(TimeSpan.FromSeconds(30), errorMessage ?? $"注册公钥失败: {res.StatusCode}");
+                return new PublicKeyRegistrationResult
+                {
+                    Submitted = false,
+                    Message = errorMessage ?? $"注册公钥失败: {res.StatusCode}",
+                };
             }
             catch (Exception ex)
             {
-                StatusChanged?.Invoke($"注册公钥异常: {ex.Message}");
-                return false;
+                var message = $"注册公钥异常: {ex.Message}";
+                SetPublicKeyRegistrationBackoff(TimeSpan.FromSeconds(30), message);
+                return new PublicKeyRegistrationResult { Submitted = false, Message = message };
             }
         }
 
