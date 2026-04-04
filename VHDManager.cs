@@ -1834,6 +1834,63 @@ namespace VHDMounter
             }
         }
 
+        private static async Task PumpProcessStreamAsync(StreamReader reader, string streamName, StringBuilder target, object syncRoot)
+        {
+            var buffer = new char[1024];
+            var pending = new StringBuilder();
+
+            while (true)
+            {
+                var read = await reader.ReadAsync(buffer, 0, buffer.Length);
+                if (read <= 0)
+                {
+                    break;
+                }
+
+                var chunk = new string(buffer, 0, read);
+                lock (syncRoot)
+                {
+                    target.Append(chunk);
+                }
+
+                pending.Append(chunk);
+                while (true)
+                {
+                    var pendingText = pending.ToString();
+                    var newLineIndex = pendingText.IndexOfAny(new[] { '\r', '\n' });
+                    if (newLineIndex < 0)
+                    {
+                        break;
+                    }
+
+                    var line = pendingText.Substring(0, newLineIndex).TrimEnd('\r', '\n');
+                    if (!string.IsNullOrWhiteSpace(line))
+                    {
+                        LogMountToolStreamLine(streamName, line);
+                    }
+
+                    var removeLength = 1;
+                    if (newLineIndex + 1 < pendingText.Length)
+                    {
+                        var current = pendingText[newLineIndex];
+                        var next = pendingText[newLineIndex + 1];
+                        if ((current == '\r' && next == '\n') || (current == '\n' && next == '\r'))
+                        {
+                            removeLength = 2;
+                        }
+                    }
+
+                    pending.Remove(0, newLineIndex + removeLength);
+                }
+            }
+
+            var tail = pending.ToString().TrimEnd('\r', '\n');
+            if (!string.IsNullOrWhiteSpace(tail))
+            {
+                LogMountToolStreamLine(streamName, tail);
+            }
+        }
+
         private static void LogDirectorySnapshot(string phase, string path, string searchPattern = "*", int limit = 20)
         {
             try
@@ -1930,34 +1987,10 @@ namespace VHDMounter
                 LogMountToolInvocation(psi);
                 LogDirectorySnapshot("PRE_START_MOUNTPOINT", mountPoint);
 
-                proc.OutputDataReceived += (_, args) =>
-                {
-                    if (!string.IsNullOrEmpty(args.Data))
-                    {
-                        lock (outputSync)
-                        {
-                            stdoutBuilder.AppendLine(args.Data);
-                        }
-                        LogMountToolStreamLine("STDOUT", args.Data);
-                    }
-                };
-
-                proc.ErrorDataReceived += (_, args) =>
-                {
-                    if (!string.IsNullOrEmpty(args.Data))
-                    {
-                        lock (outputSync)
-                        {
-                            stderrBuilder.AppendLine(args.Data);
-                        }
-                        LogMountToolStreamLine("STDERR", args.Data);
-                    }
-                };
-
                 proc.Start();
                 Trace.WriteLine($"EVHD_MOUNT_START: ProcessId={proc.Id}");
-                proc.BeginOutputReadLine();
-                proc.BeginErrorReadLine();
+                var stdoutTask = PumpProcessStreamAsync(proc.StandardOutput, "STDOUT", stdoutBuilder, outputSync);
+                var stderrTask = PumpProcessStreamAsync(proc.StandardError, "STDERR", stderrBuilder, outputSync);
                 await WritePasswordToMountToolAsync(proc, password);
                 Trace.WriteLine($"EVHD_MOUNT_STDIN: Password payload written to stdin and stream closed, Length={(password ?? string.Empty).Length}");
                 password = null;
@@ -1984,6 +2017,7 @@ namespace VHDMounter
                     if (proc.HasExited)
                     {
                         proc.WaitForExit();
+                        await Task.WhenAll(stdoutTask, stderrTask);
                         evhdMountProcess = null;
                         string stdout;
                         string stderr;
@@ -2007,6 +2041,7 @@ namespace VHDMounter
                     if (proc.HasExited)
                     {
                         proc.WaitForExit();
+                        await Task.WhenAll(stdoutTask, stderrTask);
                         evhdMountProcess = null;
                         string stdout;
                         string stderr;
