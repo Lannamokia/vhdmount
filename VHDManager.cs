@@ -1763,6 +1763,56 @@ namespace VHDMounter
             return arguments;
         }
 
+        private static string ResolveExecutableFromPath(string executableName)
+        {
+            if (string.IsNullOrWhiteSpace(executableName))
+            {
+                return executableName;
+            }
+
+            if (Path.IsPathRooted(executableName) || executableName.Contains(Path.DirectorySeparatorChar) || executableName.Contains(Path.AltDirectorySeparatorChar))
+            {
+                return Path.GetFullPath(executableName);
+            }
+
+            var searchDirectories = new List<string>();
+            try
+            {
+                var currentDirectory = Environment.CurrentDirectory;
+                if (!string.IsNullOrWhiteSpace(currentDirectory))
+                {
+                    searchDirectories.Add(currentDirectory);
+                }
+            }
+            catch { }
+
+            if (!string.IsNullOrWhiteSpace(AppDomain.CurrentDomain.BaseDirectory))
+            {
+                searchDirectories.Add(AppDomain.CurrentDomain.BaseDirectory);
+            }
+
+            var pathValue = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+            searchDirectories.AddRange(
+                pathValue.Split(Path.PathSeparator)
+                    .Where(path => !string.IsNullOrWhiteSpace(path))
+                    .Select(path => path.Trim().Trim('"')));
+
+            foreach (var directory in searchDirectories.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    var candidate = Path.Combine(directory, executableName);
+                    if (File.Exists(candidate))
+                    {
+                        return Path.GetFullPath(candidate);
+                    }
+                }
+                catch { }
+            }
+
+            return executableName;
+        }
+
         private static string SanitizeSensitiveText(string text)
         {
             if (string.IsNullOrEmpty(text))
@@ -1959,16 +2009,22 @@ namespace VHDMounter
 
                 // 调用加密挂载工具
                 await ShowStatusAndWait("正在调用加密VHD挂载工具...");
-                var fileName = "encrypted-vhd-mount.exe";
+                var fileName = ResolveExecutableFromPath("encrypted-vhd-mount.exe");
                 var mountPoint = NormalizeMountPoint(@"N:");
+                var workingDirectory = Path.GetDirectoryName(fileName);
+                if (string.IsNullOrWhiteSpace(workingDirectory) || !Directory.Exists(workingDirectory))
+                {
+                    workingDirectory = AppDomain.CurrentDomain.BaseDirectory;
+                }
 
                 var psi = new ProcessStartInfo
                 {
                     FileName = fileName,
+                    WorkingDirectory = workingDirectory,
                     UseShellExecute = false,
                     CreateNoWindow = true,
                     RedirectStandardInput = true,
-                    StandardInputEncoding = Encoding.UTF8,
+                    StandardInputEncoding = new UTF8Encoding(false),
                     RedirectStandardOutput = true,
                     StandardOutputEncoding = Encoding.UTF8,
                     RedirectStandardError = true,
