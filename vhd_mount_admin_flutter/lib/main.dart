@@ -1,17 +1,15 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(
-    AdminApp(
-      controller: AppController(api: HttpAdminApi()),
-    ),
-  );
+  runApp(AdminApp(controller: AppController(api: HttpAdminApi())));
 }
 
 String describeError(Object error) {
@@ -22,9 +20,13 @@ String describeError(Object error) {
 }
 
 String generateSessionSecret([int length = 48]) {
-  const alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#\$%^&*()-_=+';
+  const alphabet =
+      'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#\$%^&*()-_=+';
   final random = Random.secure();
-  return List.generate(length, (_) => alphabet[random.nextInt(alphabet.length)]).join();
+  return List.generate(
+    length,
+    (_) => alphabet[random.nextInt(alphabet.length)],
+  ).join();
 }
 
 String normalizeOtpauthUrl(String value) {
@@ -39,6 +41,43 @@ String normalizeOtpauthUrl(String value) {
     return trimmed.replaceFirst(RegExp(r'^otpauth:/+'), 'otpauth://');
   }
   return trimmed;
+}
+
+String normalizeBaseUrl(String value) {
+  final trimmed = value.trim();
+  if (trimmed.isEmpty) {
+    return '';
+  }
+  return trimmed.replaceAll(RegExp(r'/+$'), '');
+}
+
+List<String> mergeRememberedBaseUrls(
+  Iterable<String> existing, {
+  String? preferredFirst,
+  int maxItems = 8,
+}) {
+  final merged = <String>[];
+
+  void addUrl(String value) {
+    final normalized = normalizeBaseUrl(value);
+    if (normalized.isEmpty || merged.contains(normalized)) {
+      return;
+    }
+    merged.add(normalized);
+  }
+
+  if (preferredFirst != null) {
+    addUrl(preferredFirst);
+  }
+
+  for (final value in existing) {
+    addUrl(value);
+    if (merged.length >= maxItems) {
+      break;
+    }
+  }
+
+  return merged;
 }
 
 class AdminApiException implements Exception {
@@ -131,10 +170,7 @@ class InitializationPreparation {
 }
 
 class OtpStatus {
-  const OtpStatus({
-    required this.verified,
-    required this.verifiedUntil,
-  });
+  const OtpStatus({required this.verified, required this.verifiedUntil});
 
   final bool verified;
   final int verifiedUntil;
@@ -142,8 +178,99 @@ class OtpStatus {
   factory OtpStatus.fromJson(Map<String, dynamic> json) {
     final verifiedUntil = (json['otpVerifiedUntil'] as num?)?.toInt() ?? 0;
     return OtpStatus(
-      verified: json['otpVerified'] == true || verifiedUntil > DateTime.now().millisecondsSinceEpoch,
+      verified:
+          json['otpVerified'] == true ||
+          verifiedUntil > DateTime.now().millisecondsSinceEpoch,
       verifiedUntil: verifiedUntil,
+    );
+  }
+}
+
+class ClientConfig {
+  const ClientConfig({
+    this.lastBaseUrl = '',
+    this.serverHistory = const <String>[],
+  });
+
+  final String lastBaseUrl;
+  final List<String> serverHistory;
+
+  factory ClientConfig.fromJson(Map<String, dynamic> json) {
+    final rawHistory =
+        (json['serverHistory'] as List<dynamic>? ?? const <dynamic>[])
+            .map((value) => value.toString())
+            .toList();
+    final lastBaseUrl = normalizeBaseUrl(
+      (json['lastBaseUrl'] as String?) ??
+          (rawHistory.isNotEmpty ? rawHistory.first : ''),
+    );
+    return ClientConfig(
+      lastBaseUrl: lastBaseUrl,
+      serverHistory: mergeRememberedBaseUrls(
+        rawHistory,
+        preferredFirst: lastBaseUrl,
+      ),
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'lastBaseUrl': lastBaseUrl,
+      'serverHistory': serverHistory,
+    };
+  }
+}
+
+abstract class ClientConfigStore {
+  Future<ClientConfig> load();
+
+  Future<void> save(ClientConfig config);
+}
+
+class FileClientConfigStore implements ClientConfigStore {
+  FileClientConfigStore({
+    Future<Directory> Function()? directoryProvider,
+    this.fileName = 'vhd_mount_admin_client.json',
+  }) : _directoryProvider = directoryProvider ?? getApplicationSupportDirectory;
+
+  final Future<Directory> Function() _directoryProvider;
+  final String fileName;
+
+  Future<File> _getConfigFile() async {
+    final directory = await _directoryProvider();
+    return File('${directory.path}${Platform.pathSeparator}$fileName');
+  }
+
+  @override
+  Future<ClientConfig> load() async {
+    try {
+      final file = await _getConfigFile();
+      if (!await file.exists()) {
+        return const ClientConfig();
+      }
+
+      final content = await file.readAsString();
+      if (content.trim().isEmpty) {
+        return const ClientConfig();
+      }
+
+      final decoded = jsonDecode(content);
+      if (decoded is Map<String, dynamic>) {
+        return ClientConfig.fromJson(decoded);
+      }
+    } catch (_) {
+      return const ClientConfig();
+    }
+
+    return const ClientConfig();
+  }
+
+  @override
+  Future<void> save(ClientConfig config) async {
+    final file = await _getConfigFile();
+    await file.parent.create(recursive: true);
+    await file.writeAsString(
+      '${const JsonEncoder.withIndent('  ').convert(config.toJson())}\n',
     );
   }
 }
@@ -183,7 +310,8 @@ class MachineRecord {
       revoked: json['revoked'] == true,
       keyId: json['key_id'] as String?,
       keyType: json['key_type'] as String?,
-      registrationCertFingerprint: json['registration_cert_fingerprint'] as String?,
+      registrationCertFingerprint:
+          json['registration_cert_fingerprint'] as String?,
       lastSeen: json['last_seen'] as String?,
     );
   }
@@ -285,7 +413,8 @@ abstract class AdminApi {
     required String dbName,
     required String dbUser,
     required String dbPassword,
-    List<Map<String, String>> trustedCertificates = const <Map<String, String>>[],
+    List<Map<String, String>> trustedCertificates =
+        const <Map<String, String>>[],
   });
 
   Future<void> login(String password);
@@ -339,11 +468,13 @@ class HttpAdminApi implements AdminApi {
 
   @override
   void updateBaseUrl(String baseUrl) {
-    _baseUrl = baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    _baseUrl = normalizeBaseUrl(baseUrl);
   }
 
   Uri _resolve(String path) {
-    final normalizedBase = _baseUrl.isEmpty ? 'http://localhost:8080' : _baseUrl;
+    final normalizedBase = _baseUrl.isEmpty
+        ? 'http://localhost:8080'
+        : _baseUrl;
     return Uri.parse('$normalizedBase$path');
   }
 
@@ -353,7 +484,9 @@ class HttpAdminApi implements AdminApi {
     }
     request.headers.set(
       HttpHeaders.cookieHeader,
-      _cookies.values.map((cookie) => '${cookie.name}=${cookie.value}').join('; '),
+      _cookies.values
+          .map((cookie) => '${cookie.name}=${cookie.value}')
+          .join('; '),
     );
   }
 
@@ -435,10 +568,7 @@ class HttpAdminApi implements AdminApi {
     final json = await _requestJson(
       'POST',
       '/api/init/prepare',
-      body: <String, dynamic>{
-        'issuer': issuer,
-        'accountName': accountName,
-      },
+      body: <String, dynamic>{'issuer': issuer, 'accountName': accountName},
     );
     return InitializationPreparation.fromJson(json);
   }
@@ -454,7 +584,8 @@ class HttpAdminApi implements AdminApi {
     required String dbName,
     required String dbUser,
     required String dbPassword,
-    List<Map<String, String>> trustedCertificates = const <Map<String, String>>[],
+    List<Map<String, String>> trustedCertificates =
+        const <Map<String, String>>[],
   }) async {
     await _requestJson(
       'POST',
@@ -541,7 +672,10 @@ class HttpAdminApi implements AdminApi {
   }
 
   @override
-  Future<void> setMachineProtection(String machineId, bool protectedState) async {
+  Future<void> setMachineProtection(
+    String machineId,
+    bool protectedState,
+  ) async {
     await _requestJson(
       'POST',
       '/api/protect',
@@ -567,7 +701,10 @@ class HttpAdminApi implements AdminApi {
   }
 
   @override
-  Future<void> setMachineEvhdPassword(String machineId, String evhdPassword) async {
+  Future<void> setMachineEvhdPassword(
+    String machineId,
+    String evhdPassword,
+  ) async {
     await _requestJson(
       'POST',
       '/api/machines/$machineId/evhd-password',
@@ -593,7 +730,10 @@ class HttpAdminApi implements AdminApi {
 
   @override
   Future<List<TrustedCertificateRecord>> getTrustedCertificates() async {
-    final json = await _requestJson('GET', '/api/security/trusted-certificates');
+    final json = await _requestJson(
+      'GET',
+      '/api/security/trusted-certificates',
+    );
     return (json['certificates'] as List<dynamic>? ?? <dynamic>[])
         .whereType<Map<String, dynamic>>()
         .map(TrustedCertificateRecord.fromJson)
@@ -605,16 +745,16 @@ class HttpAdminApi implements AdminApi {
     await _requestJson(
       'POST',
       '/api/security/trusted-certificates',
-      body: <String, dynamic>{
-        'name': name,
-        'certificatePem': certificatePem,
-      },
+      body: <String, dynamic>{'name': name, 'certificatePem': certificatePem},
     );
   }
 
   @override
   Future<void> removeTrustedCertificate(String fingerprint) async {
-    await _requestJson('DELETE', '/api/security/trusted-certificates/$fingerprint');
+    await _requestJson(
+      'DELETE',
+      '/api/security/trusted-certificates/$fingerprint',
+    );
   }
 
   @override
@@ -636,7 +776,10 @@ class HttpAdminApi implements AdminApi {
   }
 
   @override
-  Future<void> changePassword(String currentPassword, String newPassword) async {
+  Future<void> changePassword(
+    String currentPassword,
+    String newPassword,
+  ) async {
     await _requestJson(
       'POST',
       '/api/auth/change-password',
@@ -650,9 +793,14 @@ class HttpAdminApi implements AdminApi {
 }
 
 class AppController extends ChangeNotifier {
-  AppController({required this.api});
+  AppController({required this.api, ClientConfigStore? clientConfigStore})
+    : clientConfigStore = clientConfigStore ?? FileClientConfigStore();
 
   final AdminApi api;
+  final ClientConfigStore clientConfigStore;
+
+  Timer? _otpExpiryTimer;
+  bool _clientConfigLoaded = false;
 
   bool isLoading = true;
   bool isWorking = false;
@@ -660,16 +808,104 @@ class AppController extends ChangeNotifier {
   ServerStatus? serverStatus;
   bool isAuthenticated = false;
   bool otpVerified = false;
+  int otpVerifiedUntil = 0;
   InitializationPreparation? initializationPreparation;
   List<MachineRecord> machines = <MachineRecord>[];
   List<TrustedCertificateRecord> certificates = <TrustedCertificateRecord>[];
   List<AuditEntry> auditEntries = <AuditEntry>[];
+  List<String> rememberedBaseUrls = <String>[];
 
   String get baseUrl => api.baseUrl;
 
   void updateBaseUrl(String value) {
     api.updateBaseUrl(value);
     notifyListeners();
+  }
+
+  Future<void> _ensureClientConfigLoaded() async {
+    if (_clientConfigLoaded) {
+      return;
+    }
+
+    final config = await clientConfigStore.load();
+    rememberedBaseUrls = config.serverHistory;
+    if (config.lastBaseUrl.isNotEmpty) {
+      api.updateBaseUrl(config.lastBaseUrl);
+    }
+    _clientConfigLoaded = true;
+  }
+
+  Future<void> _rememberCurrentBaseUrl() async {
+    final normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+    if (normalizedBaseUrl.isEmpty) {
+      return;
+    }
+
+    rememberedBaseUrls = mergeRememberedBaseUrls(
+      rememberedBaseUrls,
+      preferredFirst: normalizedBaseUrl,
+    );
+
+    await clientConfigStore.save(
+      ClientConfig(
+        lastBaseUrl: normalizedBaseUrl,
+        serverHistory: rememberedBaseUrls,
+      ),
+    );
+  }
+
+  Future<void> _rememberCurrentBaseUrlSilently() async {
+    try {
+      await _rememberCurrentBaseUrl();
+    } catch (_) {
+      return;
+    }
+  }
+
+  void _clearOtpVerification({bool notify = true}) {
+    _otpExpiryTimer?.cancel();
+    _otpExpiryTimer = null;
+    otpVerified = false;
+    otpVerifiedUntil = 0;
+    certificates = <TrustedCertificateRecord>[];
+    if (notify) {
+      notifyListeners();
+    }
+  }
+
+  void _scheduleOtpExpiryTimer() {
+    _otpExpiryTimer?.cancel();
+    _otpExpiryTimer = null;
+
+    if (!otpVerified || otpVerifiedUntil <= 0) {
+      return;
+    }
+
+    final remainingMilliseconds =
+        otpVerifiedUntil - DateTime.now().millisecondsSinceEpoch;
+    if (remainingMilliseconds <= 0) {
+      otpVerified = false;
+      otpVerifiedUntil = 0;
+      certificates = <TrustedCertificateRecord>[];
+      return;
+    }
+
+    _otpExpiryTimer = Timer(
+      Duration(milliseconds: remainingMilliseconds + 1),
+      _clearOtpVerification,
+    );
+  }
+
+  void _applyOtpStatus(OtpStatus otpStatus, {bool notify = true}) {
+    otpVerified = otpStatus.verified;
+    otpVerifiedUntil = otpStatus.verified ? otpStatus.verifiedUntil : 0;
+    if (!otpVerified) {
+      certificates = <TrustedCertificateRecord>[];
+    }
+    _scheduleOtpExpiryTimer();
+    if (notify) {
+      notifyListeners();
+    }
   }
 
   Future<T> _runAction<T>(Future<T> Function() action) async {
@@ -693,15 +929,17 @@ class AppController extends ChangeNotifier {
     errorMessage = null;
     notifyListeners();
     try {
+      await _ensureClientConfigLoaded();
       serverStatus = await api.getServerStatus();
       final authStatus = await api.getAuthStatus();
       isAuthenticated = authStatus.isAuthenticated;
-      otpVerified = authStatus.otpVerified;
 
       if (isAuthenticated) {
+        _applyOtpStatus(await api.getOtpStatus(), notify: false);
         machines = await api.getMachines();
         auditEntries = await api.getAuditEntries();
       } else {
+        _clearOtpVerification(notify: false);
         machines = <MachineRecord>[];
         certificates = <TrustedCertificateRecord>[];
         auditEntries = <AuditEntry>[];
@@ -733,7 +971,8 @@ class AppController extends ChangeNotifier {
     required String dbName,
     required String dbUser,
     required String dbPassword,
-    List<Map<String, String>> trustedCertificates = const <Map<String, String>>[],
+    List<Map<String, String>> trustedCertificates =
+        const <Map<String, String>>[],
   }) async {
     await _runAction(
       () => api.completeInitialization(
@@ -750,23 +989,25 @@ class AppController extends ChangeNotifier {
       ),
     );
     initializationPreparation = null;
+    await _rememberCurrentBaseUrlSilently();
     await bootstrap();
   }
 
   Future<void> login(String password) async {
     await _runAction(() => api.login(password));
+    await _rememberCurrentBaseUrlSilently();
     await bootstrap();
   }
 
   Future<void> logout() async {
     await _runAction(api.logout);
+    _clearOtpVerification(notify: false);
     await bootstrap();
   }
 
   Future<void> verifyOtp(String code) async {
     final otpStatus = await _runAction(() => api.verifyOtp(code));
-    otpVerified = otpStatus.verified;
-    notifyListeners();
+    _applyOtpStatus(otpStatus);
 
     if (!otpVerified) {
       return;
@@ -781,16 +1022,9 @@ class AppController extends ChangeNotifier {
 
   Future<void> refreshOtpStatus() async {
     try {
-      final otpStatus = await api.getOtpStatus();
-      otpVerified = otpStatus.verified;
-      if (!otpVerified) {
-        certificates = <TrustedCertificateRecord>[];
-      }
-      notifyListeners();
+      _applyOtpStatus(await api.getOtpStatus());
     } catch (_) {
-      otpVerified = false;
-      certificates = <TrustedCertificateRecord>[];
-      notifyListeners();
+      _clearOtpVerification();
     }
   }
 
@@ -819,7 +1053,10 @@ class AppController extends ChangeNotifier {
     await loadMachines();
   }
 
-  Future<void> setMachineProtection(String machineId, bool protectedState) async {
+  Future<void> setMachineProtection(
+    String machineId,
+    bool protectedState,
+  ) async {
     await _runAction(() => api.setMachineProtection(machineId, protectedState));
     await loadMachines();
   }
@@ -834,7 +1071,10 @@ class AppController extends ChangeNotifier {
     await loadMachines();
   }
 
-  Future<void> setMachineEvhdPassword(String machineId, String evhdPassword) async {
+  Future<void> setMachineEvhdPassword(
+    String machineId,
+    String evhdPassword,
+  ) async {
     await _runAction(() => api.setMachineEvhdPassword(machineId, evhdPassword));
     await loadMachines();
   }
@@ -864,8 +1104,17 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> changePassword(String currentPassword, String newPassword) async {
+  Future<void> changePassword(
+    String currentPassword,
+    String newPassword,
+  ) async {
     await _runAction(() => api.changePassword(currentPassword, newPassword));
+  }
+
+  @override
+  void dispose() {
+    _otpExpiryTimer?.cancel();
+    super.dispose();
   }
 }
 
@@ -1006,6 +1255,53 @@ class SplashScreen extends StatelessWidget {
   }
 }
 
+class ServerAddressField extends StatelessWidget {
+  const ServerAddressField({
+    super.key,
+    required this.controller,
+    required this.rememberedBaseUrls,
+  });
+
+  final TextEditingController controller;
+  final List<String> rememberedBaseUrls;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      decoration: InputDecoration(
+        labelText: '服务器地址',
+        helperText: rememberedBaseUrls.isEmpty ? null : '可从右侧历史中选择已登录过的服务端地址',
+        suffixIcon: rememberedBaseUrls.isEmpty
+            ? null
+            : PopupMenuButton<String>(
+                tooltip: '已保存的服务器地址',
+                icon: const Icon(Icons.history_rounded),
+                onSelected: (value) {
+                  controller.value = TextEditingValue(
+                    text: value,
+                    selection: TextSelection.collapsed(offset: value.length),
+                  );
+                },
+                itemBuilder: (context) {
+                  return rememberedBaseUrls
+                      .map(
+                        (value) => PopupMenuItem<String>(
+                          value: value,
+                          child: SizedBox(
+                            width: 260,
+                            child: Text(value, overflow: TextOverflow.ellipsis),
+                          ),
+                        ),
+                      )
+                      .toList();
+                },
+              ),
+      ),
+    );
+  }
+}
+
 class ConnectionScreen extends StatefulWidget {
   const ConnectionScreen({super.key, required this.controller});
 
@@ -1047,9 +1343,9 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                   if (widget.controller.errorMessage != null)
                     ErrorBanner(message: widget.controller.errorMessage!),
                   const SizedBox(height: 12),
-                  TextField(
+                  ServerAddressField(
                     controller: _baseUrlController,
-                    decoration: const InputDecoration(labelText: '服务器地址'),
+                    rememberedBaseUrls: widget.controller.rememberedBaseUrls,
                   ),
                   const SizedBox(height: 16),
                   FilledButton.icon(
@@ -1104,14 +1400,18 @@ class _InitializationScreenState extends State<InitializationScreen> {
     _accountNameController = TextEditingController(text: 'admin');
     _adminPasswordController = TextEditingController();
     _confirmPasswordController = TextEditingController();
-    _sessionSecretController = TextEditingController(text: generateSessionSecret());
+    _sessionSecretController = TextEditingController(
+      text: generateSessionSecret(),
+    );
     _dbHostController = TextEditingController(text: 'localhost');
     _dbPortController = TextEditingController(text: '5432');
     _dbNameController = TextEditingController(text: 'vhd_select');
     _dbUserController = TextEditingController(text: 'postgres');
     _dbPasswordController = TextEditingController();
     _defaultVhdController = TextEditingController(text: 'SDEZ');
-    _trustedCertificateNameController = TextEditingController(text: 'machine-registration');
+    _trustedCertificateNameController = TextEditingController(
+      text: 'machine-registration',
+    );
     _trustedCertificatePemController = TextEditingController();
     _totpCodeController = TextEditingController();
   }
@@ -1208,7 +1508,9 @@ class _InitializationScreenState extends State<InitializationScreen> {
               children: <Widget>[
                 Text(
                   '优先扫码导入；如果验证器不支持扫码，再使用下方密钥或 URI 手动添加。',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(height: 1.5),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(height: 1.5),
                 ),
                 const SizedBox(height: 12),
                 SelectableText('Issuer: ${preparation.issuer}'),
@@ -1245,19 +1547,23 @@ class _InitializationScreenState extends State<InitializationScreen> {
                   if (widget.controller.errorMessage != null)
                     ErrorBanner(message: widget.controller.errorMessage!),
                   _buildFieldRow(
-                    child: TextField(
+                    child: ServerAddressField(
                       controller: _baseUrlController,
-                      decoration: const InputDecoration(labelText: '服务器地址'),
+                      rememberedBaseUrls: widget.controller.rememberedBaseUrls,
                     ),
                   ),
                   _buildFieldRow(
                     left: TextField(
                       controller: _issuerController,
-                      decoration: const InputDecoration(labelText: 'OTP issuer'),
+                      decoration: const InputDecoration(
+                        labelText: 'OTP issuer',
+                      ),
                     ),
                     right: TextField(
                       controller: _accountNameController,
-                      decoration: const InputDecoration(labelText: 'OTP account'),
+                      decoration: const InputDecoration(
+                        labelText: 'OTP account',
+                      ),
                     ),
                   ),
                   _buildFieldRow(
@@ -1279,7 +1585,8 @@ class _InitializationScreenState extends State<InitializationScreen> {
                         labelText: 'Session Secret',
                         suffixIcon: IconButton(
                           onPressed: () {
-                            _sessionSecretController.text = generateSessionSecret();
+                            _sessionSecretController.text =
+                                generateSessionSecret();
                           },
                           icon: const Icon(Icons.casino_rounded),
                         ),
@@ -1310,11 +1617,15 @@ class _InitializationScreenState extends State<InitializationScreen> {
                     left: TextField(
                       controller: _dbPasswordController,
                       obscureText: true,
-                      decoration: const InputDecoration(labelText: 'DB Password'),
+                      decoration: const InputDecoration(
+                        labelText: 'DB Password',
+                      ),
                     ),
                     right: TextField(
                       controller: _defaultVhdController,
-                      decoration: const InputDecoration(labelText: '默认 VHD 关键词'),
+                      decoration: const InputDecoration(
+                        labelText: '默认 VHD 关键词',
+                      ),
                     ),
                   ),
                   _buildFieldRow(
@@ -1343,7 +1654,9 @@ class _InitializationScreenState extends State<InitializationScreen> {
                     children: <Widget>[
                       FilledButton.icon(
                         onPressed: () async {
-                          widget.controller.updateBaseUrl(_baseUrlController.text);
+                          widget.controller.updateBaseUrl(
+                            _baseUrlController.text,
+                          );
                           try {
                             await widget.controller.prepareInitialization(
                               issuer: _issuerController.text.trim(),
@@ -1353,7 +1666,9 @@ class _InitializationScreenState extends State<InitializationScreen> {
                               return;
                             }
                             ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('OTP 准备完成，请在验证器中导入密钥后填写验证码。')),
+                              const SnackBar(
+                                content: Text('OTP 准备完成，请在验证器中导入密钥后填写验证码。'),
+                              ),
                             );
                           } catch (error) {
                             if (!context.mounted) {
@@ -1369,7 +1684,9 @@ class _InitializationScreenState extends State<InitializationScreen> {
                       ),
                       OutlinedButton.icon(
                         onPressed: () async {
-                          widget.controller.updateBaseUrl(_baseUrlController.text);
+                          widget.controller.updateBaseUrl(
+                            _baseUrlController.text,
+                          );
                           await widget.controller.bootstrap();
                         },
                         icon: const Icon(Icons.sync_rounded),
@@ -1384,7 +1701,8 @@ class _InitializationScreenState extends State<InitializationScreen> {
                   const SizedBox(height: 18),
                   FilledButton.tonalIcon(
                     onPressed: () async {
-                      if (_adminPasswordController.text != _confirmPasswordController.text) {
+                      if (_adminPasswordController.text !=
+                          _confirmPasswordController.text) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(content: Text('管理员密码与确认密码不一致。')),
                         );
@@ -1392,12 +1710,19 @@ class _InitializationScreenState extends State<InitializationScreen> {
                       }
 
                       final trustedCertificates = <Map<String, String>>[];
-                      if (_trustedCertificatePemController.text.trim().isNotEmpty) {
+                      if (_trustedCertificatePemController.text
+                          .trim()
+                          .isNotEmpty) {
                         trustedCertificates.add(<String, String>{
-                          'name': _trustedCertificateNameController.text.trim().isEmpty
+                          'name':
+                              _trustedCertificateNameController.text
+                                  .trim()
+                                  .isEmpty
                               ? 'machine-registration'
                               : _trustedCertificateNameController.text.trim(),
-                          'certificatePem': _trustedCertificatePemController.text.trim(),
+                          'certificatePem': _trustedCertificatePemController
+                              .text
+                              .trim(),
                         });
                       }
 
@@ -1409,7 +1734,9 @@ class _InitializationScreenState extends State<InitializationScreen> {
                           totpCode: _totpCodeController.text.trim(),
                           defaultVhdKeyword: _defaultVhdController.text.trim(),
                           dbHost: _dbHostController.text.trim(),
-                          dbPort: int.tryParse(_dbPortController.text.trim()) ?? 5432,
+                          dbPort:
+                              int.tryParse(_dbPortController.text.trim()) ??
+                              5432,
                           dbName: _dbNameController.text.trim(),
                           dbUser: _dbUserController.text.trim(),
                           dbPassword: _dbPasswordController.text,
@@ -1444,10 +1771,7 @@ class _InitializationScreenState extends State<InitializationScreen> {
 
   Widget _buildFieldRow({Widget? left, Widget? right, Widget? child}) {
     if (child != null) {
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 12),
-        child: child,
-      );
+      return Padding(padding: const EdgeInsets.only(bottom: 12), child: child);
     }
 
     return Padding(
@@ -1516,9 +1840,9 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                     ),
                   const SizedBox(height: 12),
-                  TextField(
+                  ServerAddressField(
                     controller: _baseUrlController,
-                    decoration: const InputDecoration(labelText: '服务器地址'),
+                    rememberedBaseUrls: widget.controller.rememberedBaseUrls,
                   ),
                   const SizedBox(height: 12),
                   TextField(
@@ -1533,9 +1857,13 @@ class _LoginScreenState extends State<LoginScreen> {
                     children: <Widget>[
                       FilledButton.icon(
                         onPressed: () async {
-                          widget.controller.updateBaseUrl(_baseUrlController.text);
+                          widget.controller.updateBaseUrl(
+                            _baseUrlController.text,
+                          );
                           try {
-                            await widget.controller.login(_passwordController.text);
+                            await widget.controller.login(
+                              _passwordController.text,
+                            );
                           } catch (error) {
                             if (!context.mounted) {
                               return;
@@ -1550,7 +1878,9 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                       OutlinedButton.icon(
                         onPressed: () async {
-                          widget.controller.updateBaseUrl(_baseUrlController.text);
+                          widget.controller.updateBaseUrl(
+                            _baseUrlController.text,
+                          );
                           await widget.controller.bootstrap();
                         },
                         icon: const Icon(Icons.sync_rounded),
@@ -1598,7 +1928,9 @@ class DashboardScreen extends StatelessWidget {
             child: Center(
               child: StatusChip(
                 label: controller.otpVerified ? 'OTP 已验证' : 'OTP 未验证',
-                color: controller.otpVerified ? const Color(0xFF24785F) : const Color(0xFF8A6F2A),
+                color: controller.otpVerified
+                    ? const Color(0xFF24785F)
+                    : const Color(0xFF8A6F2A),
               ),
             ),
           ),
@@ -1619,16 +1951,16 @@ class DashboardScreen extends StatelessWidget {
                 if (!context.mounted) {
                   return;
                 }
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('OTP 验证成功。')),
-                );
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(const SnackBar(content: Text('OTP 验证成功。')));
               } catch (error) {
                 if (!context.mounted) {
                   return;
                 }
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(describeError(error))),
-                );
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text(describeError(error))));
               }
             },
             icon: const Icon(Icons.key_rounded),
@@ -1686,13 +2018,16 @@ class DashboardScreen extends StatelessWidget {
                     runSpacing: 10,
                     children: <Widget>[
                       StatusChip(
-                        label: controller.serverStatus?.databaseReady == true ? '数据库已连接' : '数据库异常',
+                        label: controller.serverStatus?.databaseReady == true
+                            ? '数据库已连接'
+                            : '数据库异常',
                         color: controller.serverStatus?.databaseReady == true
                             ? const Color(0xFF24785F)
                             : const Color(0xFF9D3C2D),
                       ),
                       StatusChip(
-                        label: '默认 VHD: ${controller.serverStatus?.defaultVhdKeyword ?? 'SDEZ'}',
+                        label:
+                            '默认 VHD: ${controller.serverStatus?.defaultVhdKeyword ?? 'SDEZ'}',
                         color: const Color(0xFF385B72),
                       ),
                     ],
@@ -1725,16 +2060,14 @@ class MachinesView extends StatelessWidget {
       children: <Widget>[
         Row(
           children: <Widget>[
-            Text(
-              '机器管理',
-              style: Theme.of(context).textTheme.headlineSmall,
-            ),
+            Text('机器管理', style: Theme.of(context).textTheme.headlineSmall),
             const Spacer(),
             FilledButton.icon(
               onPressed: () async {
                 final draft = await showAddMachineDialog(
                   context,
-                  defaultVhdKeyword: controller.serverStatus?.defaultVhdKeyword ?? 'SDEZ',
+                  defaultVhdKeyword:
+                      controller.serverStatus?.defaultVhdKeyword ?? 'SDEZ',
                 );
                 if (draft == null) {
                   return;
@@ -1751,9 +2084,9 @@ class MachinesView extends StatelessWidget {
                   if (!context.mounted) {
                     return;
                   }
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text(describeError(error))),
-                  );
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(SnackBar(content: Text(describeError(error))));
                 }
               },
               icon: const Icon(Icons.add_rounded),
@@ -1769,11 +2102,7 @@ class MachinesView extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         if (controller.machines.isEmpty)
-          const Expanded(
-            child: Center(
-              child: Text('当前还没有机器记录。'),
-            ),
-          )
+          const Expanded(child: Center(child: Text('当前还没有机器记录。')))
         else
           Expanded(
             child: ListView.separated(
@@ -1819,7 +2148,9 @@ class MachinesView extends StatelessWidget {
                                   : const Color(0xFF4A6D4E),
                             ),
                             StatusChip(
-                              label: machine.evhdPasswordConfigured ? 'EVHD 已配置' : 'EVHD 未配置',
+                              label: machine.evhdPasswordConfigured
+                                  ? 'EVHD 已配置'
+                                  : 'EVHD 未配置',
                               color: machine.evhdPasswordConfigured
                                   ? const Color(0xFF24785F)
                                   : const Color(0xFF8A6F2A),
@@ -1839,19 +2170,28 @@ class MachinesView extends StatelessWidget {
                             FilledButton.tonal(
                               onPressed: () async {
                                 try {
-                                  await controller.setMachineApproval(machine.machineId, !machine.approved);
+                                  await controller.setMachineApproval(
+                                    machine.machineId,
+                                    !machine.approved,
+                                  );
                                   if (!context.mounted) {
                                     return;
                                   }
                                   ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text(machine.approved ? '已取消审批。' : '已审批通过。')),
+                                    SnackBar(
+                                      content: Text(
+                                        machine.approved ? '已取消审批。' : '已审批通过。',
+                                      ),
+                                    ),
                                   );
                                 } catch (error) {
                                   if (!context.mounted) {
                                     return;
                                   }
                                   ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text(describeError(error))),
+                                    SnackBar(
+                                      content: Text(describeError(error)),
+                                    ),
                                   );
                                 }
                               },
@@ -1870,7 +2210,9 @@ class MachinesView extends StatelessWidget {
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     SnackBar(
                                       content: Text(
-                                        machine.protectedState ? '已关闭保护。' : '已开启保护。',
+                                        machine.protectedState
+                                            ? '已关闭保护。'
+                                            : '已开启保护。',
                                       ),
                                     ),
                                   );
@@ -1879,22 +2221,30 @@ class MachinesView extends StatelessWidget {
                                     return;
                                   }
                                   ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text(describeError(error))),
+                                    SnackBar(
+                                      content: Text(describeError(error)),
+                                    ),
                                   );
                                 }
                               },
-                              child: Text(machine.protectedState ? '关闭保护' : '开启保护'),
+                              child: Text(
+                                machine.protectedState ? '关闭保护' : '开启保护',
+                              ),
                             ),
                             OutlinedButton(
                               onPressed: () async {
                                 try {
-                                  await controller.resetMachineRegistration(machine.machineId);
+                                  await controller.resetMachineRegistration(
+                                    machine.machineId,
+                                  );
                                 } catch (error) {
                                   if (!context.mounted) {
                                     return;
                                   }
                                   ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text(describeError(error))),
+                                    SnackBar(
+                                      content: Text(describeError(error)),
+                                    ),
                                   );
                                 }
                               },
@@ -1912,13 +2262,18 @@ class MachinesView extends StatelessWidget {
                                   return;
                                 }
                                 try {
-                                  await controller.setMachineVhd(machine.machineId, value.trim().toUpperCase());
+                                  await controller.setMachineVhd(
+                                    machine.machineId,
+                                    value.trim().toUpperCase(),
+                                  );
                                 } catch (error) {
                                   if (!context.mounted) {
                                     return;
                                   }
                                   ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text(describeError(error))),
+                                    SnackBar(
+                                      content: Text(describeError(error)),
+                                    ),
                                   );
                                 }
                               },
@@ -1936,13 +2291,18 @@ class MachinesView extends StatelessWidget {
                                   return;
                                 }
                                 try {
-                                  await controller.setMachineEvhdPassword(machine.machineId, value);
+                                  await controller.setMachineEvhdPassword(
+                                    machine.machineId,
+                                    value,
+                                  );
                                 } catch (error) {
                                   if (!context.mounted) {
                                     return;
                                   }
                                   ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text(describeError(error))),
+                                    SnackBar(
+                                      content: Text(describeError(error)),
+                                    ),
                                   );
                                 }
                               },
@@ -1960,7 +2320,11 @@ class MachinesView extends StatelessWidget {
                                   return;
                                 }
                                 try {
-                                  final password = await controller.readPlainEvhdPassword(machine.machineId, reason.trim());
+                                  final password = await controller
+                                      .readPlainEvhdPassword(
+                                        machine.machineId,
+                                        reason.trim(),
+                                      );
                                   if (!context.mounted) {
                                     return;
                                   }
@@ -1971,7 +2335,8 @@ class MachinesView extends StatelessWidget {
                                       content: SelectableText(password),
                                       actions: <Widget>[
                                         TextButton(
-                                          onPressed: () => Navigator.of(context).pop(),
+                                          onPressed: () =>
+                                              Navigator.of(context).pop(),
                                           child: const Text('关闭'),
                                         ),
                                       ],
@@ -1982,7 +2347,9 @@ class MachinesView extends StatelessWidget {
                                     return;
                                   }
                                   ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text(describeError(error))),
+                                    SnackBar(
+                                      content: Text(describeError(error)),
+                                    ),
                                   );
                                 }
                               },
@@ -1993,26 +2360,35 @@ class MachinesView extends StatelessWidget {
                                 final confirmed = await showConfirmDialog(
                                   context,
                                   title: '删除机台',
-                                  message: '确认删除 ${machine.machineId} 吗？这会移除该机台的管理记录与已保存的 EVHD 密码。',
+                                  message:
+                                      '确认删除 ${machine.machineId} 吗？这会移除该机台的管理记录与已保存的 EVHD 密码。',
                                   confirmLabel: '删除',
                                 );
                                 if (confirmed != true) {
                                   return;
                                 }
                                 try {
-                                  await controller.deleteMachine(machine.machineId);
+                                  await controller.deleteMachine(
+                                    machine.machineId,
+                                  );
                                   if (!context.mounted) {
                                     return;
                                   }
                                   ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('机台 ${machine.machineId} 已删除。')),
+                                    SnackBar(
+                                      content: Text(
+                                        '机台 ${machine.machineId} 已删除。',
+                                      ),
+                                    ),
                                   );
                                 } catch (error) {
                                   if (!context.mounted) {
                                     return;
                                   }
                                   ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text(describeError(error))),
+                                    SnackBar(
+                                      content: Text(describeError(error)),
+                                    ),
                                   );
                                 }
                               },
@@ -2045,10 +2421,7 @@ class CertificatesView extends StatelessWidget {
       children: <Widget>[
         Row(
           children: <Widget>[
-            Text(
-              '可信注册证书',
-              style: Theme.of(context).textTheme.headlineSmall,
-            ),
+            Text('可信注册证书', style: Theme.of(context).textTheme.headlineSmall),
             const Spacer(),
             OutlinedButton.icon(
               onPressed: controller.otpVerified
@@ -2078,14 +2451,17 @@ class CertificatesView extends StatelessWidget {
                   return;
                 }
                 try {
-                  await controller.addTrustedCertificate(values.first.trim(), values.last.trim());
+                  await controller.addTrustedCertificate(
+                    values.first.trim(),
+                    values.last.trim(),
+                  );
                 } catch (error) {
                   if (!context.mounted) {
                     return;
                   }
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text(describeError(error))),
-                  );
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(SnackBar(content: Text(describeError(error))));
                 }
               },
               icon: const Icon(Icons.add_rounded),
@@ -2100,9 +2476,7 @@ class CertificatesView extends StatelessWidget {
             body: Text('证书管理属于高敏感操作。请先在右上角完成 OTP 验证，再刷新证书列表。'),
           )
         else if (controller.certificates.isEmpty)
-          const Expanded(
-            child: Center(child: Text('当前没有可信注册证书。')),
-          )
+          const Expanded(child: Center(child: Text('当前没有可信注册证书。')))
         else
           Expanded(
             child: ListView.separated(
@@ -2127,13 +2501,17 @@ class CertificatesView extends StatelessWidget {
                             IconButton(
                               onPressed: () async {
                                 try {
-                                  await controller.removeTrustedCertificate(certificate.fingerprint256);
+                                  await controller.removeTrustedCertificate(
+                                    certificate.fingerprint256,
+                                  );
                                 } catch (error) {
                                   if (!context.mounted) {
                                     return;
                                   }
                                   ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text(describeError(error))),
+                                    SnackBar(
+                                      content: Text(describeError(error)),
+                                    ),
                                   );
                                 }
                               },
@@ -2143,7 +2521,9 @@ class CertificatesView extends StatelessWidget {
                         ),
                         Text('Subject: ${certificate.subject}'),
                         Text('Fingerprint: ${certificate.fingerprint256}'),
-                        Text('Valid: ${certificate.validFrom} -> ${certificate.validTo}'),
+                        Text(
+                          'Valid: ${certificate.validFrom} -> ${certificate.validTo}',
+                        ),
                       ],
                     ),
                   ),
@@ -2168,10 +2548,7 @@ class AuditView extends StatelessWidget {
       children: <Widget>[
         Row(
           children: <Widget>[
-            Text(
-              '审计日志',
-              style: Theme.of(context).textTheme.headlineSmall,
-            ),
+            Text('审计日志', style: Theme.of(context).textTheme.headlineSmall),
             const Spacer(),
             OutlinedButton.icon(
               onPressed: controller.loadAudit,
@@ -2182,9 +2559,7 @@ class AuditView extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         if (controller.auditEntries.isEmpty)
-          const Expanded(
-            child: Center(child: Text('暂时没有审计记录。')),
-          )
+          const Expanded(child: Center(child: Text('暂时没有审计记录。')))
         else
           Expanded(
             child: ListView.separated(
@@ -2195,7 +2570,9 @@ class AuditView extends StatelessWidget {
                 return Card(
                   child: ListTile(
                     title: Text(entry.type),
-                    subtitle: Text('${entry.timestamp}\n${entry.actor} · ${entry.result} · ${entry.ip}\n${entry.path}'),
+                    subtitle: Text(
+                      '${entry.timestamp}\n${entry.actor} · ${entry.result} · ${entry.ip}\n${entry.path}',
+                    ),
                     isThreeLine: true,
                   ),
                 );
@@ -2218,9 +2595,11 @@ class SettingsView extends StatefulWidget {
 
 class _SettingsViewState extends State<SettingsView> {
   late final TextEditingController _defaultVhdController;
-  final TextEditingController _currentPasswordController = TextEditingController();
+  final TextEditingController _currentPasswordController =
+      TextEditingController();
   final TextEditingController _newPasswordController = TextEditingController();
-  final TextEditingController _confirmPasswordController = TextEditingController();
+  final TextEditingController _confirmPasswordController =
+      TextEditingController();
 
   @override
   void initState() {
@@ -2258,7 +2637,9 @@ class _SettingsViewState extends State<SettingsView> {
               FilledButton.icon(
                 onPressed: () async {
                   try {
-                    await widget.controller.updateDefaultVhd(_defaultVhdController.text.trim().toUpperCase());
+                    await widget.controller.updateDefaultVhd(
+                      _defaultVhdController.text.trim().toUpperCase(),
+                    );
                   } catch (error) {
                     if (!context.mounted) {
                       return;
@@ -2305,7 +2686,8 @@ class _SettingsViewState extends State<SettingsView> {
               const SizedBox(height: 12),
               FilledButton.tonalIcon(
                 onPressed: () async {
-                  if (_newPasswordController.text != _confirmPasswordController.text) {
+                  if (_newPasswordController.text !=
+                      _confirmPasswordController.text) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(content: Text('两次输入的新密码不一致。')),
                     );
@@ -2319,9 +2701,9 @@ class _SettingsViewState extends State<SettingsView> {
                     if (!context.mounted) {
                       return;
                     }
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('管理员密码已更新。')),
-                    );
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(const SnackBar(content: Text('管理员密码已更新。')));
                   } catch (error) {
                     if (!context.mounted) {
                       return;
@@ -2442,7 +2824,10 @@ class StatusChip extends StatelessWidget {
       ),
       child: Text(
         label,
-        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }
@@ -2522,7 +2907,9 @@ Future<List<String>?> showTwoFieldDialog(
           child: const Text('取消'),
         ),
         FilledButton(
-          onPressed: () => Navigator.of(context).pop(<String>[firstController.text, secondController.text]),
+          onPressed: () => Navigator.of(
+            context,
+          ).pop(<String>[firstController.text, secondController.text]),
           child: const Text('确定'),
         ),
       ],

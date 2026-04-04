@@ -3,13 +3,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vhd_mount_admin_flutter/main.dart';
 
 void main() {
-  test('otp status uses otpVerifiedUntil when verify response omits otpVerified', () {
-    final status = OtpStatus.fromJson(<String, dynamic>{
-      'otpVerifiedUntil': DateTime.now().millisecondsSinceEpoch + 60000,
-    });
+  test(
+    'otp status uses otpVerifiedUntil when verify response omits otpVerified',
+    () {
+      final status = OtpStatus.fromJson(<String, dynamic>{
+        'otpVerifiedUntil': DateTime.now().millisecondsSinceEpoch + 60000,
+      });
 
-    expect(status.verified, isTrue);
-  });
+      expect(status.verified, isTrue);
+    },
+  );
 
   test('controller verifyOtp refreshes unlocked certificate data', () async {
     final api = FakeAdminApi(
@@ -32,11 +35,15 @@ void main() {
           subject: 'CN=Test',
           validFrom: '2026-04-01T00:00:00Z',
           validTo: '2027-04-01T00:00:00Z',
-          certificatePem: '-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----',
+          certificatePem:
+              '-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----',
         ),
       ],
     );
-    final controller = AppController(api: api);
+    final controller = AppController(
+      api: api,
+      clientConfigStore: FakeClientConfigStore(),
+    );
 
     await controller.bootstrap();
     expect(controller.otpVerified, isFalse);
@@ -49,7 +56,130 @@ void main() {
     expect(api.getTrustedCertificatesCalls, 1);
   });
 
-  testWidgets('shows initialization screen when server is not initialized', (tester) async {
+  testWidgets('controller clears otp state when otp window expires', (
+    tester,
+  ) async {
+    final api = FakeAdminApi(
+      serverStatus: const ServerStatus(
+        initialized: true,
+        pendingInitialization: false,
+        databaseReady: true,
+        defaultVhdKeyword: 'SAFEBOOT',
+        trustedRegistrationCertificateCount: 1,
+      ),
+      authStatus: const AuthStatus(
+        initialized: true,
+        isAuthenticated: true,
+        otpVerified: false,
+      ),
+      certificates: const <TrustedCertificateRecord>[
+        TrustedCertificateRecord(
+          name: 'cert-01',
+          fingerprint256: 'ABC123',
+          subject: 'CN=Test',
+          validFrom: '2026-04-01T00:00:00Z',
+          validTo: '2027-04-01T00:00:00Z',
+          certificatePem:
+              '-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----',
+        ),
+      ],
+      verifyOtpResponse: OtpStatus(
+        verified: true,
+        verifiedUntil: DateTime.now().millisecondsSinceEpoch + 50,
+      ),
+    );
+    final controller = AppController(
+      api: api,
+      clientConfigStore: FakeClientConfigStore(),
+    );
+
+    await controller.bootstrap();
+    await controller.verifyOtp('123456');
+
+    expect(controller.otpVerified, isTrue);
+    expect(controller.certificates, hasLength(1));
+
+    await tester.pump(const Duration(milliseconds: 80));
+
+    expect(controller.otpVerified, isFalse);
+    expect(controller.otpVerifiedUntil, 0);
+    expect(controller.certificates, isEmpty);
+  });
+
+  test(
+    'controller remembers successful server addresses in local config',
+    () async {
+      final configStore = FakeClientConfigStore();
+      final controller = AppController(
+        api: FakeAdminApi(
+          serverStatus: const ServerStatus(
+            initialized: true,
+            pendingInitialization: false,
+            databaseReady: true,
+            defaultVhdKeyword: 'SAFEBOOT',
+            trustedRegistrationCertificateCount: 1,
+          ),
+          authStatus: const AuthStatus(
+            initialized: true,
+            isAuthenticated: false,
+            otpVerified: false,
+          ),
+        ),
+        clientConfigStore: configStore,
+      );
+
+      controller.updateBaseUrl('http://server-a:8080/');
+      await controller.login('ComplexPassword123!');
+
+      expect(configStore.saveCalls, 1);
+      expect(configStore.config.lastBaseUrl, 'http://server-a:8080');
+      expect(configStore.config.serverHistory, <String>[
+        'http://server-a:8080',
+      ]);
+      expect(controller.rememberedBaseUrls, <String>['http://server-a:8080']);
+    },
+  );
+
+  test(
+    'bootstrap restores saved server address before probing server status',
+    () async {
+      final api = FakeAdminApi(
+        serverStatus: const ServerStatus(
+          initialized: true,
+          pendingInitialization: false,
+          databaseReady: true,
+          defaultVhdKeyword: 'SAFEBOOT',
+          trustedRegistrationCertificateCount: 1,
+        ),
+        authStatus: const AuthStatus(
+          initialized: true,
+          isAuthenticated: false,
+          otpVerified: false,
+        ),
+      );
+      final controller = AppController(
+        api: api,
+        clientConfigStore: FakeClientConfigStore(
+          const ClientConfig(
+            lastBaseUrl: 'http://saved-server:8080',
+            serverHistory: <String>['http://saved-server:8080'],
+          ),
+        ),
+      );
+
+      await controller.bootstrap();
+
+      expect(api.baseUrl, 'http://saved-server:8080');
+      expect(controller.baseUrl, 'http://saved-server:8080');
+      expect(controller.rememberedBaseUrls, <String>[
+        'http://saved-server:8080',
+      ]);
+    },
+  );
+
+  testWidgets('shows initialization screen when server is not initialized', (
+    tester,
+  ) async {
     final controller = AppController(
       api: FakeAdminApi(
         serverStatus: const ServerStatus(
@@ -65,6 +195,7 @@ void main() {
           otpVerified: false,
         ),
       ),
+      clientConfigStore: FakeClientConfigStore(),
     );
 
     await tester.pumpWidget(AdminApp(controller: controller));
@@ -114,6 +245,7 @@ void main() {
           ),
         ],
       ),
+      clientConfigStore: FakeClientConfigStore(),
     );
 
     await tester.pumpWidget(AdminApp(controller: controller));
@@ -132,6 +264,8 @@ class FakeAdminApi implements AdminApi {
     this.machines = const <MachineRecord>[],
     this.certificates = const <TrustedCertificateRecord>[],
     this.auditEntries = const <AuditEntry>[],
+    this.getOtpStatusResponse,
+    this.verifyOtpResponse,
   });
 
   ServerStatus serverStatus;
@@ -139,6 +273,8 @@ class FakeAdminApi implements AdminApi {
   List<MachineRecord> machines;
   List<TrustedCertificateRecord> certificates;
   List<AuditEntry> auditEntries;
+  OtpStatus? getOtpStatusResponse;
+  OtpStatus? verifyOtpResponse;
   int getTrustedCertificatesCalls = 0;
   String _baseUrl = 'http://localhost:8080';
 
@@ -170,10 +306,16 @@ class FakeAdminApi implements AdminApi {
   }
 
   @override
-  Future<void> addTrustedCertificate(String name, String certificatePem) async {}
+  Future<void> addTrustedCertificate(
+    String name,
+    String certificatePem,
+  ) async {}
 
   @override
-  Future<void> changePassword(String currentPassword, String newPassword) async {}
+  Future<void> changePassword(
+    String currentPassword,
+    String newPassword,
+  ) async {}
 
   @override
   Future<void> completeInitialization({
@@ -186,7 +328,8 @@ class FakeAdminApi implements AdminApi {
     required String dbName,
     required String dbUser,
     required String dbPassword,
-    List<Map<String, String>> trustedCertificates = const <Map<String, String>>[],
+    List<Map<String, String>> trustedCertificates =
+        const <Map<String, String>>[],
   }) async {}
 
   @override
@@ -199,10 +342,13 @@ class FakeAdminApi implements AdminApi {
   Future<List<MachineRecord>> getMachines() async => machines;
 
   @override
-  Future<String> getPlainEvhdPassword(String machineId, String reason) async => 'secret';
+  Future<String> getPlainEvhdPassword(String machineId, String reason) async =>
+      'secret';
 
   @override
-  Future<OtpStatus> getOtpStatus() async => OtpStatus(verified: authStatus.otpVerified, verifiedUntil: 0);
+  Future<OtpStatus> getOtpStatus() async =>
+      getOtpStatusResponse ??
+      OtpStatus(verified: authStatus.otpVerified, verifiedUntil: 0);
 
   @override
   Future<ServerStatus> getServerStatus() async => serverStatus;
@@ -215,16 +361,27 @@ class FakeAdminApi implements AdminApi {
 
   @override
   Future<void> login(String password) async {
-    authStatus = const AuthStatus(initialized: true, isAuthenticated: true, otpVerified: false);
+    authStatus = const AuthStatus(
+      initialized: true,
+      isAuthenticated: true,
+      otpVerified: false,
+    );
   }
 
   @override
   Future<void> logout() async {
-    authStatus = const AuthStatus(initialized: true, isAuthenticated: false, otpVerified: false);
+    authStatus = const AuthStatus(
+      initialized: true,
+      isAuthenticated: false,
+      otpVerified: false,
+    );
   }
 
   @override
-  Future<InitializationPreparation> prepareInitialization({required String issuer, required String accountName}) async {
+  Future<InitializationPreparation> prepareInitialization({
+    required String issuer,
+    required String accountName,
+  }) async {
     return const InitializationPreparation(
       issuer: 'VHDMountServer',
       accountName: 'admin',
@@ -241,14 +398,19 @@ class FakeAdminApi implements AdminApi {
 
   @override
   Future<void> deleteMachine(String machineId) async {
-    machines = machines.where((machine) => machine.machineId != machineId).toList();
+    machines = machines
+        .where((machine) => machine.machineId != machineId)
+        .toList();
   }
 
   @override
   Future<void> setMachineApproval(String machineId, bool approved) async {}
 
   @override
-  Future<void> setMachineProtection(String machineId, bool protectedState) async {
+  Future<void> setMachineProtection(
+    String machineId,
+    bool protectedState,
+  ) async {
     machines = machines
         .map(
           (machine) => machine.machineId == machineId
@@ -261,7 +423,8 @@ class FakeAdminApi implements AdminApi {
                   revoked: machine.revoked,
                   keyId: machine.keyId,
                   keyType: machine.keyType,
-                  registrationCertFingerprint: machine.registrationCertFingerprint,
+                  registrationCertFingerprint:
+                      machine.registrationCertFingerprint,
                   lastSeen: machine.lastSeen,
                 )
               : machine,
@@ -270,7 +433,10 @@ class FakeAdminApi implements AdminApi {
   }
 
   @override
-  Future<void> setMachineEvhdPassword(String machineId, String evhdPassword) async {}
+  Future<void> setMachineEvhdPassword(
+    String machineId,
+    String evhdPassword,
+  ) async {}
 
   @override
   Future<void> setMachineVhd(String machineId, String vhdKeyword) async {}
@@ -280,7 +446,28 @@ class FakeAdminApi implements AdminApi {
 
   @override
   Future<OtpStatus> verifyOtp(String code) async {
-    authStatus = const AuthStatus(initialized: true, isAuthenticated: true, otpVerified: true);
-    return const OtpStatus(verified: true, verifiedUntil: 0);
+    authStatus = const AuthStatus(
+      initialized: true,
+      isAuthenticated: true,
+      otpVerified: true,
+    );
+    return verifyOtpResponse ??
+        const OtpStatus(verified: true, verifiedUntil: 0);
+  }
+}
+
+class FakeClientConfigStore implements ClientConfigStore {
+  FakeClientConfigStore([this.config = const ClientConfig()]);
+
+  ClientConfig config;
+  int saveCalls = 0;
+
+  @override
+  Future<ClientConfig> load() async => config;
+
+  @override
+  Future<void> save(ClientConfig nextConfig) async {
+    saveCalls += 1;
+    config = nextConfig;
   }
 }
