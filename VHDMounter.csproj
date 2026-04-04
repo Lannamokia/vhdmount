@@ -39,6 +39,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Remove="EVHDMountProbe\**\*.cs" />
+    <None Include="EVHDMountProbe\**\*.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Content Include="vhdmonter_config.ini">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>Always</CopyToPublishDirectory>

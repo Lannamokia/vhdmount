@@ -1720,7 +1720,29 @@ namespace VHDMounter
             }
         }
 
-        private async Task WritePasswordToMountToolAsync(Process process, string password)
+        private readonly record struct PasswordWriteInfo(
+            int OriginalLength,
+            int SentLength,
+            bool HadLeadingBom,
+            bool TrimmedTrailingTerminators);
+
+        private static string NormalizePasswordForMountStdin(
+            string password,
+            out int originalLength,
+            out bool hadLeadingBom,
+            out bool trimmedTrailingTerminators)
+        {
+            password ??= string.Empty;
+            originalLength = password.Length;
+            hadLeadingBom = password.Length > 0 && password[0] == '\uFEFF';
+
+            var normalized = hadLeadingBom ? password.Substring(1) : password;
+            var trimmed = normalized.TrimEnd('\r', '\n', '\0');
+            trimmedTrailingTerminators = trimmed.Length != normalized.Length;
+            return trimmed;
+        }
+
+        private async Task<PasswordWriteInfo> WritePasswordToMountToolAsync(Process process, string password)
         {
             if (process == null)
             {
@@ -1732,10 +1754,30 @@ namespace VHDMounter
                 throw new InvalidOperationException("加密VHD挂载工具在接收密码前已退出");
             }
 
-            process.StandardInput.NewLine = "\n";
-            await process.StandardInput.WriteLineAsync(password ?? string.Empty);
-            await process.StandardInput.FlushAsync();
-            process.StandardInput.Close();
+            var normalizedPassword = NormalizePasswordForMountStdin(
+                password,
+                out var originalLength,
+                out var hadLeadingBom,
+                out var trimmedTrailingTerminators);
+
+            if (string.IsNullOrEmpty(normalizedPassword))
+            {
+                throw new InvalidOperationException("EVHD密码为空或仅包含换行/空字符，无法写入挂载工具");
+            }
+
+            await using (var writer = new StreamWriter(process.StandardInput.BaseStream, new UTF8Encoding(false), 1024, leaveOpen: false))
+            {
+                writer.NewLine = "\n";
+                await writer.WriteAsync(normalizedPassword);
+                await writer.WriteLineAsync();
+                await writer.FlushAsync();
+            }
+
+            return new PasswordWriteInfo(
+                OriginalLength: originalLength,
+                SentLength: normalizedPassword.Length,
+                HadLeadingBom: hadLeadingBom,
+                TrimmedTrailingTerminators: trimmedTrailingTerminators);
         }
 
         private static string NormalizeMountPoint(string mountPoint)
@@ -1811,6 +1853,72 @@ namespace VHDMounter
             }
 
             return executableName;
+        }
+
+        private static bool MountToolSupportsPasswordStdin(string executablePath, string workingDirectory, out string helpSummary)
+        {
+            helpSummary = string.Empty;
+
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = executablePath,
+                    WorkingDirectory = workingDirectory,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    StandardOutputEncoding = Encoding.UTF8,
+                    RedirectStandardError = true,
+                    StandardErrorEncoding = Encoding.UTF8
+                };
+                psi.ArgumentList.Add("--help");
+
+                using var process = new Process { StartInfo = psi };
+                if (!process.Start())
+                {
+                    helpSummary = "failed to start --help process";
+                    return false;
+                }
+
+                var stdoutTask = process.StandardOutput.ReadToEndAsync();
+                var stderrTask = process.StandardError.ReadToEndAsync();
+
+                if (!process.WaitForExit(5000))
+                {
+                    try { process.Kill(entireProcessTree: true); } catch { }
+                    helpSummary = "--help timed out";
+                    return false;
+                }
+
+                var stdout = stdoutTask.GetAwaiter().GetResult();
+                var stderr = stderrTask.GetAwaiter().GetResult();
+                var merged = (stdout ?? string.Empty) + Environment.NewLine + (stderr ?? string.Empty);
+                helpSummary = CompactDiagnosticText(merged, 600);
+
+                return merged.IndexOf("--password-stdin", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+            catch (Exception ex)
+            {
+                helpSummary = ex.Message;
+                return false;
+            }
+        }
+
+        private static string CompactDiagnosticText(string text, int maxLength)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return string.Empty;
+            }
+
+            var compact = Regex.Replace(text, "\\s+", " ").Trim();
+            if (compact.Length <= maxLength)
+            {
+                return compact;
+            }
+
+            return compact.Substring(0, maxLength) + "...";
         }
 
         private static string SanitizeSensitiveText(string text)
@@ -2017,6 +2125,13 @@ namespace VHDMounter
                     workingDirectory = AppDomain.CurrentDomain.BaseDirectory;
                 }
 
+                if (!MountToolSupportsPasswordStdin(fileName, workingDirectory, out var compatHelpSummary))
+                {
+                    Trace.WriteLine($"EVHD_MOUNT_COMPAT_ERROR: FileName={SanitizeSensitiveText(fileName)}, WorkingDirectory={SanitizeSensitiveText(workingDirectory)}, HelpSummary={SanitizeSensitiveText(compatHelpSummary)}");
+                    await ShowStatusAndWait("挂载工具版本过旧或不兼容：未检测到 --password-stdin 支持，请更新 encrypted-vhd-mount.exe");
+                    return false;
+                }
+
                 var psi = new ProcessStartInfo
                 {
                     FileName = fileName,
@@ -2047,8 +2162,8 @@ namespace VHDMounter
                 Trace.WriteLine($"EVHD_MOUNT_START: ProcessId={proc.Id}");
                 var stdoutTask = PumpProcessStreamAsync(proc.StandardOutput, "STDOUT", stdoutBuilder, outputSync);
                 var stderrTask = PumpProcessStreamAsync(proc.StandardError, "STDERR", stderrBuilder, outputSync);
-                await WritePasswordToMountToolAsync(proc, password);
-                Trace.WriteLine($"EVHD_MOUNT_STDIN: Password payload written to stdin and stream closed, Length={(password ?? string.Empty).Length}");
+                var passwordWriteInfo = await WritePasswordToMountToolAsync(proc, password);
+                Trace.WriteLine($"EVHD_MOUNT_STDIN: Password payload written to stdin and stream closed, OriginalLength={passwordWriteInfo.OriginalLength}, SentLength={passwordWriteInfo.SentLength}, HadLeadingBom={passwordWriteInfo.HadLeadingBom}, TrimmedTrailingTerminators={passwordWriteInfo.TrimmedTrailingTerminators}");
                 password = null;
 
                 // 保存引用，确保工具在主程序生命周期内持续运行
