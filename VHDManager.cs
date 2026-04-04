@@ -1732,9 +1732,35 @@ namespace VHDMounter
                 throw new InvalidOperationException("加密VHD挂载工具在接收密码前已退出");
             }
 
-            await process.StandardInput.WriteAsync(password ?? string.Empty);
+            process.StandardInput.NewLine = "\n";
+            await process.StandardInput.WriteLineAsync(password ?? string.Empty);
             await process.StandardInput.FlushAsync();
             process.StandardInput.Close();
+        }
+
+        private static string NormalizeMountPoint(string mountPoint)
+        {
+            if (string.IsNullOrWhiteSpace(mountPoint))
+            {
+                return @"N:\";
+            }
+
+            var trimmed = mountPoint.Trim();
+            if (Regex.IsMatch(trimmed, "^[A-Za-z]:\\?$"))
+            {
+                return trimmed.EndsWith("\\", StringComparison.Ordinal) ? trimmed : trimmed + "\\";
+            }
+
+            return Path.GetFullPath(trimmed);
+        }
+
+        private List<string> BuildEvhdMountArguments(string evhdPath, string mountPoint)
+        {
+            var arguments = new List<string> { "--password-stdin" };
+
+            arguments.Add(evhdPath);
+            arguments.Add(mountPoint);
+            return arguments;
         }
 
         private static string BuildMountToolFailureDetail(int exitCode, string stderr, string stdout)
@@ -1776,8 +1802,8 @@ namespace VHDMounter
 
                 // 调用加密挂载工具
                 await ShowStatusAndWait("正在调用加密VHD挂载工具...");
-                var toolPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "encrypted-vhd-mount.exe");
-                var fileName = File.Exists(toolPath) ? toolPath : "encrypted-vhd-mount.exe";
+                var fileName = "encrypted-vhd-mount.exe";
+                var mountPoint = NormalizeMountPoint(@"N:");
 
                 var psi = new ProcessStartInfo
                 {
@@ -1791,9 +1817,10 @@ namespace VHDMounter
                     RedirectStandardError = true,
                     StandardErrorEncoding = Encoding.UTF8
                 };
-                psi.ArgumentList.Add("--password-stdin");
-                psi.ArgumentList.Add(evhdPath);
-                psi.ArgumentList.Add("N:");
+                foreach (var argument in BuildEvhdMountArguments(evhdPath, mountPoint))
+                {
+                    psi.ArgumentList.Add(argument);
+                }
 
                 var stdoutBuilder = new StringBuilder();
                 var stderrBuilder = new StringBuilder();
@@ -1828,7 +1855,7 @@ namespace VHDMounter
                 var timeoutMs = 60000;
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 bool nReady = false;
-                var nRoot = "N:";
+                var nRoot = mountPoint;
                 while (sw.ElapsedMilliseconds < timeoutMs)
                 {
                     // 成功条件：仅检测到 N: 盘存在
