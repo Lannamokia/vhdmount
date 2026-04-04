@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -24,6 +25,20 @@ String generateSessionSecret([int length = 48]) {
   const alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#\$%^&*()-_=+';
   final random = Random.secure();
   return List.generate(length, (_) => alphabet[random.nextInt(alphabet.length)]).join();
+}
+
+String normalizeOtpauthUrl(String value) {
+  final trimmed = value.trim();
+  if (trimmed.isEmpty) {
+    return '';
+  }
+  if (trimmed.startsWith('otpauth://')) {
+    return trimmed;
+  }
+  if (trimmed.startsWith('otpauth:')) {
+    return trimmed.replaceFirst(RegExp(r'^otpauth:/+'), 'otpauth://');
+  }
+  return trimmed;
 }
 
 class AdminApiException implements Exception {
@@ -1121,6 +1136,96 @@ class _InitializationScreenState extends State<InitializationScreen> {
     super.dispose();
   }
 
+  Widget _buildOtpImportPanel(InitializationPreparation preparation) {
+    final otpauthUrl = normalizeOtpauthUrl(preparation.otpauthUrl);
+
+    return InfoPanel(
+      title: 'OTP 导入信息',
+      body: Wrap(
+        spacing: 20,
+        runSpacing: 20,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: <Widget>[
+          Container(
+            width: 232,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF8FBF8),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: const Color(0xFFD6E6DD)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                const Text(
+                  '扫描二维码导入',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 12),
+                if (otpauthUrl.isNotEmpty)
+                  QrImageView(
+                    data: otpauthUrl,
+                    version: QrVersions.auto,
+                    size: 180,
+                    backgroundColor: Colors.white,
+                    eyeStyle: const QrEyeStyle(
+                      eyeShape: QrEyeShape.square,
+                      color: Color(0xFF16322B),
+                    ),
+                    dataModuleStyle: const QrDataModuleStyle(
+                      dataModuleShape: QrDataModuleShape.square,
+                      color: Color(0xFF165A4A),
+                    ),
+                  )
+                else
+                  Container(
+                    width: 180,
+                    height: 180,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0xFFD6E6DD)),
+                    ),
+                    child: const Text('未返回 otpauth URI'),
+                  ),
+                const SizedBox(height: 12),
+                Text(
+                  '使用手机验证器扫描此二维码即可添加 TOTP。',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: const Color(0xFF476257),
+                    height: 1.45,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          ConstrainedBox(
+            constraints: const BoxConstraints(minWidth: 280, maxWidth: 520),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  '优先扫码导入；如果验证器不支持扫码，再使用下方密钥或 URI 手动添加。',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(height: 1.5),
+                ),
+                const SizedBox(height: 12),
+                SelectableText('Issuer: ${preparation.issuer}'),
+                const SizedBox(height: 6),
+                SelectableText('Account: ${preparation.accountName}'),
+                const SizedBox(height: 6),
+                SelectableText('Secret: ${preparation.totpSecret}'),
+                const SizedBox(height: 6),
+                SelectableText('URI: $otpauthUrl'),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final preparation = widget.controller.initializationPreparation;
@@ -1274,21 +1379,7 @@ class _InitializationScreenState extends State<InitializationScreen> {
                   ),
                   if (preparation != null) ...<Widget>[
                     const SizedBox(height: 18),
-                    InfoPanel(
-                      title: 'OTP 导入信息',
-                      body: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: <Widget>[
-                          SelectableText('Issuer: ${preparation.issuer}'),
-                          const SizedBox(height: 6),
-                          SelectableText('Account: ${preparation.accountName}'),
-                          const SizedBox(height: 6),
-                          SelectableText('Secret: ${preparation.totpSecret}'),
-                          const SizedBox(height: 6),
-                          SelectableText('otpauth:// ${preparation.otpauthUrl}'),
-                        ],
-                      ),
-                    ),
+                    _buildOtpImportPanel(preparation),
                   ],
                   const SizedBox(height: 18),
                   FilledButton.tonalIcon(

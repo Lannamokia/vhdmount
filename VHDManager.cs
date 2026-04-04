@@ -1763,10 +1763,110 @@ namespace VHDMounter
             return arguments;
         }
 
+        private static string SanitizeSensitiveText(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return string.Empty;
+            }
+
+            var sanitized = text;
+            sanitized = Regex.Replace(
+                sanitized,
+                "(?i)(\\b(?:password|secret|token|authorization|ciphertext|totpsecret|totpcode|sessionsecret|evhdpassword|registrationcertificatepassword)\\b\\s*[:=]\\s*)([^\\s,;]+)",
+                "$1***");
+            sanitized = Regex.Replace(
+                sanitized,
+                "(?i)([?&](?:password|secret|token|ciphertext|totpSecret|totpCode|sessionSecret|evhdPassword|registrationCertificatePassword)=)([^&\\s]+)",
+                "$1***");
+            sanitized = Regex.Replace(
+                sanitized,
+                "(?i)(\"(?:password|secret|token|authorization|ciphertext|totpSecret|totpCode|sessionSecret|evhdPassword|registrationCertificatePassword)\"\\s*:\\s*\")([^\"]*)(\")",
+                "$1***$3");
+            return sanitized;
+        }
+
+        private static string FormatProcessArgumentsForLog(ProcessStartInfo startInfo)
+        {
+            return SanitizeSensitiveText(string.Join(" ", startInfo.ArgumentList.Select(argument =>
+            {
+                if (string.IsNullOrEmpty(argument))
+                {
+                    return "\"\"";
+                }
+
+                return argument.IndexOfAny(new[] { ' ', '\t', '"' }) >= 0
+                    ? $"\"{argument.Replace("\"", "\\\"") }\""
+                    : argument;
+            })));
+        }
+
+        private static void LogMountToolInvocation(ProcessStartInfo startInfo)
+        {
+            Trace.WriteLine($"EVHD_MOUNT_START: FileName={SanitizeSensitiveText(startInfo.FileName ?? string.Empty)}");
+            Trace.WriteLine($"EVHD_MOUNT_START: Arguments={FormatProcessArgumentsForLog(startInfo)}");
+            Trace.WriteLine($"EVHD_MOUNT_START: WorkingDirectory={SanitizeSensitiveText(startInfo.WorkingDirectory ?? string.Empty)}");
+            Trace.WriteLine($"EVHD_MOUNT_START: BaseDirectory={SanitizeSensitiveText(AppDomain.CurrentDomain.BaseDirectory)}");
+        }
+
+        private static void LogMountToolStreamLine(string streamName, string line)
+        {
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                return;
+            }
+
+            Trace.WriteLine($"EVHD_MOUNT_{streamName}: {SanitizeSensitiveText(line)}");
+        }
+
+        private static void LogMountToolSummary(string phase, int exitCode, string stdout, string stderr)
+        {
+            Trace.WriteLine($"EVHD_MOUNT_{phase}: ExitCode={exitCode}");
+
+            if (!string.IsNullOrWhiteSpace(stdout))
+            {
+                Trace.WriteLine($"EVHD_MOUNT_{phase}_STDOUT:\n{SanitizeSensitiveText(stdout.TrimEnd())}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(stderr))
+            {
+                Trace.WriteLine($"EVHD_MOUNT_{phase}_STDERR:\n{SanitizeSensitiveText(stderr.TrimEnd())}");
+            }
+        }
+
+        private static void LogDirectorySnapshot(string phase, string path, string searchPattern = "*", int limit = 20)
+        {
+            try
+            {
+                var exists = Directory.Exists(path);
+                Trace.WriteLine($"EVHD_MOUNT_{phase}: Directory={SanitizeSensitiveText(path)} Exists={exists}");
+                if (!exists)
+                {
+                    return;
+                }
+
+                var entries = Directory.EnumerateFileSystemEntries(path, searchPattern, SearchOption.TopDirectoryOnly)
+                    .Take(limit)
+                    .Select(Path.GetFileName)
+                    .Where(name => !string.IsNullOrWhiteSpace(name))
+                    .ToList();
+
+                Trace.WriteLine($"EVHD_MOUNT_{phase}: EntryCountSample={entries.Count}");
+                foreach (var entry in entries)
+                {
+                    Trace.WriteLine($"EVHD_MOUNT_{phase}_ENTRY: {SanitizeSensitiveText(entry)}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"EVHD_MOUNT_{phase}_SNAPSHOT_EXCEPTION: {SanitizeSensitiveText(ex.ToString())}");
+            }
+        }
+
         private static string BuildMountToolFailureDetail(int exitCode, string stderr, string stdout)
         {
-            var errorText = string.IsNullOrWhiteSpace(stderr) ? null : stderr.Trim();
-            var outputText = string.IsNullOrWhiteSpace(stdout) ? null : stdout.Trim();
+            var errorText = string.IsNullOrWhiteSpace(stderr) ? null : SanitizeSensitiveText(stderr.Trim());
+            var outputText = string.IsNullOrWhiteSpace(stdout) ? null : SanitizeSensitiveText(stdout.Trim());
 
             if (!string.IsNullOrEmpty(errorText))
             {
@@ -1824,13 +1924,21 @@ namespace VHDMounter
 
                 var stdoutBuilder = new StringBuilder();
                 var stderrBuilder = new StringBuilder();
+                var outputSync = new object();
                 var proc = new Process { StartInfo = psi };
+
+                LogMountToolInvocation(psi);
+                LogDirectorySnapshot("PRE_START_MOUNTPOINT", mountPoint);
 
                 proc.OutputDataReceived += (_, args) =>
                 {
                     if (!string.IsNullOrEmpty(args.Data))
                     {
-                        stdoutBuilder.AppendLine(args.Data);
+                        lock (outputSync)
+                        {
+                            stdoutBuilder.AppendLine(args.Data);
+                        }
+                        LogMountToolStreamLine("STDOUT", args.Data);
                     }
                 };
 
@@ -1838,14 +1946,20 @@ namespace VHDMounter
                 {
                     if (!string.IsNullOrEmpty(args.Data))
                     {
-                        stderrBuilder.AppendLine(args.Data);
+                        lock (outputSync)
+                        {
+                            stderrBuilder.AppendLine(args.Data);
+                        }
+                        LogMountToolStreamLine("STDERR", args.Data);
                     }
                 };
 
                 proc.Start();
+                Trace.WriteLine($"EVHD_MOUNT_START: ProcessId={proc.Id}");
                 proc.BeginOutputReadLine();
                 proc.BeginErrorReadLine();
                 await WritePasswordToMountToolAsync(proc, password);
+                Trace.WriteLine($"EVHD_MOUNT_STDIN: Password payload written to stdin and stream closed, Length={(password ?? string.Empty).Length}");
                 password = null;
 
                 // 保存引用，确保工具在主程序生命周期内持续运行
@@ -1856,19 +1970,31 @@ namespace VHDMounter
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 bool nReady = false;
                 var nRoot = mountPoint;
+                Trace.WriteLine($"EVHD_MOUNT_WAIT: Waiting for mount point {SanitizeSensitiveText(nRoot)} with timeout {timeoutMs}ms");
                 while (sw.ElapsedMilliseconds < timeoutMs)
                 {
                     // 成功条件：仅检测到 N: 盘存在
                     if (Directory.Exists(nRoot))
                     {
                         nReady = true;
+                        Trace.WriteLine($"EVHD_MOUNT_WAIT: Mount point became available after {sw.ElapsedMilliseconds}ms");
                         break;
                     }
 
                     if (proc.HasExited)
                     {
+                        proc.WaitForExit();
                         evhdMountProcess = null;
-                        await ShowStatusAndWait(BuildMountToolFailureDetail(proc.ExitCode, stderrBuilder.ToString(), stdoutBuilder.ToString()));
+                        string stdout;
+                        string stderr;
+                        lock (outputSync)
+                        {
+                            stdout = stdoutBuilder.ToString();
+                            stderr = stderrBuilder.ToString();
+                        }
+                        LogDirectorySnapshot("EARLY_EXIT_MOUNTPOINT", nRoot);
+                        LogMountToolSummary("EARLY_EXIT", proc.ExitCode, stdout, stderr);
+                        await ShowStatusAndWait(BuildMountToolFailureDetail(proc.ExitCode, stderr, stdout));
                         return false;
                     }
 
@@ -1880,17 +2006,37 @@ namespace VHDMounter
                 {
                     if (proc.HasExited)
                     {
+                        proc.WaitForExit();
                         evhdMountProcess = null;
-                        await ShowStatusAndWait(BuildMountToolFailureDetail(proc.ExitCode, stderrBuilder.ToString(), stdoutBuilder.ToString()));
+                        string stdout;
+                        string stderr;
+                        lock (outputSync)
+                        {
+                            stdout = stdoutBuilder.ToString();
+                            stderr = stderrBuilder.ToString();
+                        }
+                        LogDirectorySnapshot("TIMEOUT_EXIT_MOUNTPOINT", nRoot);
+                        LogMountToolSummary("TIMEOUT_EXIT", proc.ExitCode, stdout, stderr);
+                        await ShowStatusAndWait(BuildMountToolFailureDetail(proc.ExitCode, stderr, stdout));
                         return false;
                     }
 
+                    string runningStdout;
+                    string runningStderr;
+                    lock (outputSync)
+                    {
+                        runningStdout = stdoutBuilder.ToString();
+                        runningStderr = stderrBuilder.ToString();
+                    }
+                    LogDirectorySnapshot("TIMEOUT_RUNNING_MOUNTPOINT", nRoot);
+                    LogMountToolSummary("TIMEOUT_STILL_RUNNING", proc.HasExited ? proc.ExitCode : -1, runningStdout, runningStderr);
                     await ShowStatusAndWait("EVHD挂载超时（超过60秒），未检测到N盘");
                     return false;
                 }
 
                 // 在N盘根目录查找解密后的VHD（若刚出现，给它一点准备时间）
                 await ShowStatusAndWait("已检测到N盘，继续挂载解密后的VHD...");
+                LogDirectorySnapshot("MOUNTPOINT_READY", nRoot);
                 if (!Directory.Exists(nRoot))
                 {
                     await Task.Delay(1000);
@@ -1914,11 +2060,13 @@ namespace VHDMounter
 
                 if (decryptedVhds.Count == 0)
                 {
+                    LogDirectorySnapshot("NO_VHD_FOUND", nRoot, "*.vhd");
                     await ShowStatusAndWait("N盘中未找到解密后的VHD文件");
                     return false;
                 }
 
                 var vhdToAttach = decryptedVhds[0];
+                Trace.WriteLine($"EVHD_MOUNT_VHD_SELECTED: {SanitizeSensitiveText(vhdToAttach)}");
                 await ShowStatusAndWait($"找到解密后的VHD: {Path.GetFileName(vhdToAttach)}，准备挂载...");
 
                 // 使用现有MountVHD挂载到目标盘符
@@ -1926,6 +2074,7 @@ namespace VHDMounter
             }
             catch (Exception ex)
             {
+                Trace.WriteLine($"EVHD_MOUNT_EXCEPTION: {ex}");
                 await ShowStatusAndWait($"挂载EVHD失败: {ex.Message}");
                 return false;
             }
