@@ -24,7 +24,7 @@ const {
 
 const DEFAULT_PORT = Number(process.env.PORT || 8080);
 const DEFAULT_VHD_KEYWORD = 'SDEZ';
-const OTP_STEP_UP_WINDOW_MS = 5 * 60 * 1000;
+const OTP_STEP_UP_WINDOW_MS = 60 * 1000;
 const APP_VERSION = '2.0.0';
 
 function writeJsonAtomic(filePath, data) {
@@ -178,7 +178,7 @@ async function createApp(options = {}) {
     const auditLog = options.auditLog || new AuditLog(securityStore.getPaths().auditFile);
     const databaseFactory = options.databaseFactory || ((dbConfig) => createDatabase(dbConfig, logger));
     const sessionStore = options.sessionStore || new session.MemoryStore();
-    const otpStepUpWindowMs = Number(options.otpStepUpWindowMs || OTP_STEP_UP_WINDOW_MS);
+    const otpStepUpWindowMs = Number(options.otpStepUpWindowMs ?? OTP_STEP_UP_WINDOW_MS);
     const sessionSecrets = [crypto.randomBytes(48).toString('hex')];
     const providedDatabase = options.database || null;
     let providedDatabaseInitialized = false;
