@@ -310,7 +310,7 @@ namespace VHDMounter
             bool anyReplaced = false;
             StatusChanged?.Invoke("正在替换本地VHD文件...");
             // 预扫描：构建可替换队列（排除占用或无法准备的项）
-            var copyQueue = new List<(string usbFile, string localFile, string destPath)>();
+            var copyQueue = new List<(string usbFile, string localFile, string destPath, bool deleteExisting)>();
             foreach (var usbFile in usbVhdFiles)
             {
                 string usbFileName = Path.GetFileName(usbFile);
@@ -327,6 +327,52 @@ namespace VHDMounter
                     var typeAllowed = localExt == usbExt;
                     return sameKeyword && typeAllowed;
                 }).ToList();
+
+                if (matchingLocalFiles.Count == 0)
+                {
+                    var anchorDirectories = GetSupplementalDestinationDirectories(localVhdFiles, usbKeyword);
+
+                    if (anchorDirectories.Count == 0)
+                    {
+                        StatusChanged?.Invoke($"未找到可用于补充复制的本地目标目录，已跳过: {Path.GetFileName(usbFile)}");
+                        continue;
+                    }
+
+                    foreach (var anchorDirectory in anchorDirectories)
+                    {
+                        try
+                        {
+                            var destPath = Path.Combine(anchorDirectory ?? string.Empty, Path.GetFileName(usbFile));
+                            if (File.Exists(destPath))
+                            {
+                                if (IsFileInUse(destPath))
+                                {
+                                    StatusChanged?.Invoke($"文件被占用，无法替换: {Path.GetFileName(destPath)}");
+                                    continue;
+                                }
+
+                                if (!PrepareFileForReplacement(destPath))
+                                {
+                                    StatusChanged?.Invoke($"无法准备文件进行替换: {Path.GetFileName(destPath)}");
+                                    continue;
+                                }
+
+                                copyQueue.Add((usbFile, destPath, destPath, true));
+                            }
+                            else
+                            {
+                                copyQueue.Add((usbFile, destPath, destPath, false));
+                                StatusChanged?.Invoke($"本地缺少{GetVhdDisplayType(usbFile)}文件，将从USB补充复制: {Path.GetFileName(destPath)}");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            StatusChanged?.Invoke($"预扫描处理失败: {Path.GetFileName(usbFile)} - {ex.Message}");
+                        }
+                    }
+
+                    continue;
+                }
 
                 foreach (var localFile in matchingLocalFiles)
                 {
@@ -353,7 +399,7 @@ namespace VHDMounter
 
                         var destDir = Path.GetDirectoryName(localFile);
                         var destPath = Path.Combine(destDir ?? string.Empty, Path.GetFileName(usbFile));
-                        copyQueue.Add((usbFile, localFile, destPath));
+                        copyQueue.Add((usbFile, localFile, destPath, true));
                     }
                     catch (Exception ex)
                     {
@@ -415,22 +461,25 @@ namespace VHDMounter
                 var item = copyQueue[i];
                 try
                 {
-                    // 删除本地文件
-                    StatusChanged?.Invoke($"正在删除本地文件: {Path.GetFileName(item.localFile)}");
-                    if (File.Exists(item.localFile))
-                        File.Delete(item.localFile);
-
-                    int retryCount = 0;
-                    while (File.Exists(item.localFile) && retryCount < 10)
+                    if (item.deleteExisting)
                     {
-                        await Task.Delay(100);
-                        retryCount++;
-                    }
+                        // 删除本地文件
+                        StatusChanged?.Invoke($"正在删除本地文件: {Path.GetFileName(item.localFile)}");
+                        if (File.Exists(item.localFile))
+                            File.Delete(item.localFile);
 
-                    if (File.Exists(item.localFile))
-                    {
-                        StatusChanged?.Invoke($"删除文件失败，文件仍然存在: {Path.GetFileName(item.localFile)}");
-                        continue;
+                        int retryCount = 0;
+                        while (File.Exists(item.localFile) && retryCount < 10)
+                        {
+                            await Task.Delay(100);
+                            retryCount++;
+                        }
+
+                        if (File.Exists(item.localFile))
+                        {
+                            StatusChanged?.Invoke($"删除文件失败，文件仍然存在: {Path.GetFileName(item.localFile)}");
+                            continue;
+                        }
                     }
 
                     // 复制（带进度）
@@ -969,22 +1018,51 @@ namespace VHDMounter
             return string.Equals(Path.GetExtension(filePath), ".evhd", StringComparison.OrdinalIgnoreCase);
         }
 
+        private static string GetVhdDisplayType(string filePath)
+        {
+            return IsEvhdFile(filePath) ? "EVHD" : "VHD";
+        }
+
+        private List<string> GetSupplementalDestinationDirectories(IEnumerable<string> localVhdFiles, string keyword, string fallbackDriveLetter = "D")
+        {
+            var sameKeywordDirectories = (localVhdFiles ?? Enumerable.Empty<string>())
+                .Where(file => ExtractKeyword(Path.GetFileName(file)) == keyword)
+                .Select(Path.GetDirectoryName)
+                .Where(dir => !string.IsNullOrWhiteSpace(dir))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (sameKeywordDirectories.Count > 0)
+            {
+                return sameKeywordDirectories;
+            }
+
+            var fallbackRoot = fallbackDriveLetter + @":\";
+            if (Directory.Exists(fallbackRoot))
+            {
+                return new List<string> { fallbackRoot };
+            }
+
+            return (localVhdFiles ?? Enumerable.Empty<string>())
+                .Select(Path.GetPathRoot)
+                .Where(root => !string.IsNullOrWhiteSpace(root) && Directory.Exists(root))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(1)
+                .ToList();
+        }
+
         private List<string> FilterUsbFilesForCurrentChain(IEnumerable<string> sourceFiles)
         {
             var files = sourceFiles?.ToList() ?? new List<string>();
-            if (files.Count == 0 || hasLocalEvhdFiles)
+            if (files.Count == 0)
                 return files;
 
-            var filtered = files
-                .Where(file => !IsEvhdFile(file))
-                .ToList();
-
-            if (filtered.Count != files.Count)
+            if (!hasLocalEvhdFiles && files.Any(IsEvhdFile))
             {
-                StatusChanged?.Invoke("本地未扫描到 .evhd 文件，USB 更新链路已跳过 .evhd 文件");
+                StatusChanged?.Invoke("本地未扫描到 .evhd 文件，但USB中存在 .evhd 文件，将在更新时一并复制");
             }
 
-            return filtered;
+            return files;
         }
 
         private string SelectBestMatchByKeyword(IEnumerable<string> candidateFiles, string keyword)
