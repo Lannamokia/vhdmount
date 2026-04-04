@@ -125,9 +125,10 @@ class OtpStatus {
   final int verifiedUntil;
 
   factory OtpStatus.fromJson(Map<String, dynamic> json) {
+    final verifiedUntil = (json['otpVerifiedUntil'] as num?)?.toInt() ?? 0;
     return OtpStatus(
-      verified: json['otpVerified'] == true,
-      verifiedUntil: (json['otpVerifiedUntil'] as num?)?.toInt() ?? 0,
+      verified: json['otpVerified'] == true || verifiedUntil > DateTime.now().millisecondsSinceEpoch,
+      verifiedUntil: verifiedUntil,
     );
   }
 }
@@ -751,15 +752,29 @@ class AppController extends ChangeNotifier {
     final otpStatus = await _runAction(() => api.verifyOtp(code));
     otpVerified = otpStatus.verified;
     notifyListeners();
+
+    if (!otpVerified) {
+      return;
+    }
+
+    try {
+      await loadCertificates();
+    } catch (_) {
+      // OTP 已成功，只把证书刷新失败作为界面错误保留，不中断成功状态。
+    }
   }
 
   Future<void> refreshOtpStatus() async {
     try {
       final otpStatus = await api.getOtpStatus();
       otpVerified = otpStatus.verified;
+      if (!otpVerified) {
+        certificates = <TrustedCertificateRecord>[];
+      }
       notifyListeners();
     } catch (_) {
       otpVerified = false;
+      certificates = <TrustedCertificateRecord>[];
       notifyListeners();
     }
   }

@@ -3,6 +3,52 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vhd_mount_admin_flutter/main.dart';
 
 void main() {
+  test('otp status uses otpVerifiedUntil when verify response omits otpVerified', () {
+    final status = OtpStatus.fromJson(<String, dynamic>{
+      'otpVerifiedUntil': DateTime.now().millisecondsSinceEpoch + 60000,
+    });
+
+    expect(status.verified, isTrue);
+  });
+
+  test('controller verifyOtp refreshes unlocked certificate data', () async {
+    final api = FakeAdminApi(
+      serverStatus: const ServerStatus(
+        initialized: true,
+        pendingInitialization: false,
+        databaseReady: true,
+        defaultVhdKeyword: 'SAFEBOOT',
+        trustedRegistrationCertificateCount: 1,
+      ),
+      authStatus: const AuthStatus(
+        initialized: true,
+        isAuthenticated: true,
+        otpVerified: false,
+      ),
+      certificates: const <TrustedCertificateRecord>[
+        TrustedCertificateRecord(
+          name: 'cert-01',
+          fingerprint256: 'ABC123',
+          subject: 'CN=Test',
+          validFrom: '2026-04-01T00:00:00Z',
+          validTo: '2027-04-01T00:00:00Z',
+          certificatePem: '-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----',
+        ),
+      ],
+    );
+    final controller = AppController(api: api);
+
+    await controller.bootstrap();
+    expect(controller.otpVerified, isFalse);
+    expect(controller.certificates, isEmpty);
+
+    await controller.verifyOtp('123456');
+
+    expect(controller.otpVerified, isTrue);
+    expect(controller.certificates, hasLength(1));
+    expect(api.getTrustedCertificatesCalls, 1);
+  });
+
   testWidgets('shows initialization screen when server is not initialized', (tester) async {
     final controller = AppController(
       api: FakeAdminApi(
@@ -93,6 +139,7 @@ class FakeAdminApi implements AdminApi {
   List<MachineRecord> machines;
   List<TrustedCertificateRecord> certificates;
   List<AuditEntry> auditEntries;
+  int getTrustedCertificatesCalls = 0;
   String _baseUrl = 'http://localhost:8080';
 
   @override
@@ -161,7 +208,10 @@ class FakeAdminApi implements AdminApi {
   Future<ServerStatus> getServerStatus() async => serverStatus;
 
   @override
-  Future<List<TrustedCertificateRecord>> getTrustedCertificates() async => certificates;
+  Future<List<TrustedCertificateRecord>> getTrustedCertificates() async {
+    getTrustedCertificatesCalls += 1;
+    return certificates;
+  }
 
   @override
   Future<void> login(String password) async {
