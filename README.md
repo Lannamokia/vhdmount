@@ -1,33 +1,117 @@
 # VHD Mounter & VHDSelectServer
 
-当前版本：`v1.5.0`
+当前版本：`v1.6.0-preview`
 
-## 1.5.0 新增功能
+**一套完整的街机游戏 VHD 管理与远程控制解决方案**：包含 Windows 客户端（VHD Mounter）与配套 Web 服务（VHDSelectServer）。支持集中化配置、机台保护、EVHD 密码管理以及自动构建发布。
 
-- 离线更新安全体系全面落地  
-  - 介质：NX_INS 根目录直接分发；manifest.json + manifest.sig 与实际更新文件并列放置  
-  - 验签：RSA‑PSS/SHA‑256，公钥固定在 trusted_keys.pem  
-  - 时效：清单包含 createdAt/expiresAt，主程序更新如过期（>3天）则拒绝更新
-- 自更新流程强化  
-  - 主程序验签通过后退出，由辅助更新器 Updater 完成文件替换  
-  - Updater 支持管理员自我提升（runas）、切换到主程序目录后拉起 VHDMounter.exe  
-  - 替换失败则延迟到重启生效；成功时自动拉起主程序
-- 版本阈值与更新标记  
-  - Updater 通过 update_done.flag 内容记录 manifest.version  
-  - 阈值规则：存在 flag 时比较 localVersion 与 minVersion（local>min→拒绝；local=min→跳过；local<min→更新）；无 flag 视为 local<min，直接更新  
-  - 主程序启动前置判断：当 flag 版本 >= manifest.version 时不拉起 Updater，直接继续启动
-- 新增清单与打包器   
-  - 生成 createdAt/expiresAt，默认 minVersion 统一提升为 1.5.0  
-  - 使用 RSA‑PSS/SHA‑256 对清单签名
-  - 支持快速生成签名密钥对和供机台读取的trusted_keys.pem
-- 资源更新逻辑优化  
-  - resource_version.tag 缺失时直接触发更新，更新完成后写入 manifest.version  
-  - 当存在 tag 时按 minVersion 做阈值判定（local>min 拒绝；local=min 跳过；local<min 更新）
-- 日志  
-  - 新增 Updater 文件日志 `updater.log`，10MB 循环覆盖；关键步骤（验签、时效、阈值、替换、拉起）均记录  
-  - 主程序日志策略保持：`vhdmounter.log` 文件记录，支持 NXLOG 设备拷贝
+## 1.6.0-preview 新增功能
 
-### 一套完整的街机游戏 VHD 管理与远程控制解决方案：包含 Windows 客户端（VHD Mounter）与配套 Web 服务（VHDSelectServer）。支持集中化配置、机台保护、EVHD 密码管理以及自动构建发布。
+### 安全加固与权限制升
+
+- **EVHD 密码安全传递**
+  - 密码传递方式改为 stdin（ProcessStartInfo.RedirectStandardInput），避免密码出现在命令行参数中
+  - 仅在进程启动立即写入后关闭流，大幅降低敏感信息泄露风险
+
+- **服务端跨域与会话安全**
+  - 新增 Origin 白名单校验，带 Origin 请求头的请求必须命中 allowedOrigins 列表
+  - 会话 Cookie 设置 SameSite=Strict、Secure 随协议自动开启（防 CSRF 与跨域盗用）
+  - OTP 二次验证有效期调整为 60 秒，查询 EVHD 明文前必须完成验证
+
+- **敏感信息日志清理**
+  - 新增敏感字段过滤与日志脱敏功能，避免密码、密钥出现在日志文件中
+  - Updater 子进程输出透传与错误捕获增强，改善故障诊断
+
+### 服务端功能与模块化增强
+
+- **新增核心模块**
+  - `auditLog.js`：操作审计日志记录（机台创建、删除、配置变更、管理员操作）
+  - `registrationAuth.js`：机台注册证书鉴权逻辑（验证签名、提取证书信息）
+  - `securityStore.js`：管理员密码哈希、Session Secret、TOTP 密钥的安全存储（运行时动态生成，不再硬编码）
+  - `validators.js`：统一输入校验（machineId 格式、关键字长度、密码复杂度）
+
+- **机台公钥注册限流**
+  - 防止频繁注册请求导致的服务压力，新增速率限制与阈值校验
+  - 注册公钥时同步记录证书指纹与主体信息
+
+- **OTP 状态逻辑完善**
+  - 确保在缺失 otpVerified 时自动使用 otpVerifiedUntil，以验证时间戳判定有效期
+  - 相应的单元测试与集成测试覆盖
+
+### 数据库层全面重构
+
+- **配置规范化与多数据库支持**
+  - 移除顶层硬编码的 dbConfig，新增 normalizeDbConfig() 函数对参数进行非空与合法性校验
+  - SSL 配置改为 rejectUnauthorized: true（强制校验证书）
+  - 新增 withClient() 辅助方法，消除重复的 connect/release 样板代码
+
+- **幂等初始化与字段扩展**
+  - initialize() 改为幂等初始化：CREATE TABLE IF NOT EXISTS + ADD COLUMN IF NOT EXISTS
+  - machines 表新增 `registration_cert_fingerprint`（VARCHAR 128） 与 `registration_cert_subject`（TEXT）字段，记录注册证书信息
+  - 新增索引优化：idx_machines_machine_id、idx_machines_protected、idx_machines_last_seen、idx_machines_cert_fingerprint
+  - 新增 update_updated_at_column 触发器，自动维护 updated_at 字段
+
+- **敏感字段保护**
+  - 所有 RETURNING 子句改为显式列列表，evhd_password 明文不再出现在查询结果中
+  - 改为返回 evhd_password_configured 布尔值，与明文查询逻辑分离
+
+### 加密 VHD 工具优化
+
+- **可执行文件路径解析与挂载点规范化**
+  - 新增可执行文件路径解析功能，优化进程查找逻辑
+  - 挂载点规范化至绝对路径格式，避免路径解析歧义
+
+- **文件替换与删除支持**
+  - 扩展文件替换逻辑，支持文件删除标志（文件清单中标记为 deleted）
+  - 优化本地目标目录查找，支持通配符与灵活的路径匹配
+
+- **VHD 文件处理优化**
+  - 优化 VHD 与 EVHD 文件的扫描与过滤逻辑
+  - 进程输出流处理重构，日志记录性能提升
+  - 标准错误捕获与日志化改善，增强调试能力
+
+### 容器与部署改进
+
+- **Docker 数据持久化**
+  - PostgreSQL 数据目录改为 `pgdata` 子目录模式（/var/lib/postgresql/data/pgdata），兼容 bind mount 与 named volume
+  - 脚本自动规范化路径，处理旧版兼容默认值
+  - 新增权限检查与警告机制，防止挂载权限问题导致数据损坏
+
+- **健康检查与自修复**
+  - 新增 /api/health 端点，返回 { success, status, version, uptime, timestamp }
+  - Docker HEALTHCHECK 指令增强（interval=30s、timeout=10s、start-period=60s）
+  - 容器启动脚本增强，新增 repair_public_schema_ownership() 自动修复 PostgreSQL 对象权限
+
+- **Compose 配置标准化**
+  - docker-compose.yml 与 docker-compose.external-db.yml 均新增 build: { context: . }
+  - 健康检查端点与环境变量明确设置，不再依赖外部镜像
+
+### 平台与工具升级
+
+- **.NET 版本升级至 8.0**
+  - VHDMounter、Updater、VHDDebugger 从 net6.0 升级至 net8.0
+  - RID 规范化：win10-x64 → win-x64（更广泛的兼容性）
+  - 新增 Directory.Build.props，统一 solution 级别的构建属性
+
+- **管理工具替换与扩展**
+  - VHDMountAdminTools 全面取代已废弃的 UpdatePackagerGUI
+  - Flutter 管理客户端完整集成，支持 TOTP 验证码扫码添加功能
+  - vhdmount.sln 新增，统一管理所有 .NET 子项目（VHDMounter、Updater、VHDDebugger、VHDMountAdminTools）
+
+- **CI/CD 流程对齐**
+  - GitHub Actions 工作流（build.yml）同步更新，.NET 版本、RID 与产物路径全面同步
+  - 构建目标明确化，完整支持自包含单文件发布
+
+### 文档与清理
+
+- **文档补充**
+  - 新增 CLI_GUIDE.md，说明命令行工具使用方式
+  - VHDSelectServer/DOCKER_TROUBLESHOOTING.md：PostgreSQL bind mount 权限问题根因分析与解决方案
+  - 更新主 README 关于 Docker 配置、API 与安全模型的说明
+
+- **仓库清理**
+  - 删除已废弃的 UpdatePackagerGUI、VHDSelectServer/public（旧版静态管理页）
+  - 删除过时的 CLI 指南与批处理脚本（run_as_admin.bat、setup_task.bat）
+  - 优化 .gitignore，补齐 .NET、Node.js、Flutter、Docker、证书密钥等忽略规则
 
 ## 组件概览
 
@@ -53,7 +137,7 @@
   - 生成 `manifest.json` 与 `manifest.sig`（RSA‑PSS/SHA‑256 签名）。
   - 生成更新签名密钥对、`trusted_keys.pem` 和预配置注册证书包（`.pfx/.pem/.trust.json`）。
   - 路径规则：`app-update` 使用相对路径；`vhd-data` 使用文件名。
-  - 清单包含 `createdAt/expiresAt`（默认有效期 3 天），默认 `minVersion=1.5.0`。
+  - 清单包含 `createdAt/expiresAt`（默认有效期 3 天），默认 `minVersion=1.5.0`（向后兼容考虑，可根据需要调整）。
 
 - vhd_mount_admin_flutter（Flutter 管理端）
   - 负责服务初始化、管理员登录、OTP 验证、机台管理、证书管理和审计查看。
@@ -207,6 +291,7 @@ RegistrationCertificatePassword=ChangeThisPfxPassword
 - `USE_EMBEDDED_DB`：`true` 启用容器内置 PostgreSQL；`false` 使用外部数据库。
 - `DB_HOST`、`DB_PORT`、`DB_NAME`、`DB_USER`、`DB_PASSWORD`：连接外部数据库时使用。
 - `POSTGRES_DATA_DIR`：内置 PostgreSQL 的真实数据目录，默认 `/var/lib/postgresql/data/pgdata`。
+- `CONFIG_ROOT_DIR`、`CONFIG_PATH`：服务配置目录映射（1.6.0 新增），用于持久化管理员配置到宿主机。
 
 ## 管理入口
 
@@ -270,7 +355,7 @@ RegistrationCertificatePassword=ChangeThisPfxPassword
 
 - 工作流：`.github/workflows/build.yml`
   - 触发：`push`、`pull_request`、`release`、`workflow_dispatch`。
-  - 步骤：恢复依赖 → 构建/测试 → 发布 Windows 10 x64 自包含单文件 → 上传构建产物。
+  - 步骤：恢复依赖 → 构建/测试 → 发布 Windows x64 自包含单文件 → 上传构建产物。
   - `release` 事件：打包 ZIP、生成 `CHECKSUMS.md`（SHA256），上传为 Release 资产。
   - 使用 `softprops/action-gh-release@v2` 上传资产，认证采用 `GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}`。
   - 产物名称与位置：`VHDMounter-win-x64-{version}`，位于 `publish/win-x64/`。

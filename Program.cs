@@ -142,7 +142,7 @@ namespace VHDMounter
                 try
                 {
                     Trace.WriteLine($"BaseDirectory: {AppContext.BaseDirectory}");
-                    var ridLibPath = Path.Combine(AppContext.BaseDirectory, "runtimes", "win10-x64", "lib", "netstandard1.6");
+                    var ridLibPath = Path.Combine(AppContext.BaseDirectory, "runtimes", "win-x64", "lib", "netstandard1.6");
                     Trace.WriteLine($"RID lib path: {ridLibPath} Exists={Directory.Exists(ridLibPath)}");
                 }
                 catch { }
