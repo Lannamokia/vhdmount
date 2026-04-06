@@ -51,6 +51,23 @@ String normalizeBaseUrl(String value) {
   return trimmed.replaceAll(RegExp(r'/+$'), '');
 }
 
+TextField buildSecureTextField({
+  required TextEditingController controller,
+  required InputDecoration decoration,
+  bool autofocus = false,
+}) {
+  return TextField(
+    controller: controller,
+    autofocus: autofocus,
+    obscureText: true,
+    keyboardType: TextInputType.visiblePassword,
+    autocorrect: false,
+    enableSuggestions: false,
+    enableIMEPersonalizedLearning: false,
+    decoration: decoration,
+  );
+}
+
 const Set<String> _auditReservedKeys = <String>{
   'timestamp',
   'type',
@@ -1842,19 +1859,17 @@ class _InitializationScreenState extends State<InitializationScreen> {
                     ),
                   ),
                   _buildFieldRow(
-                    left: TextField(
+                    left: buildSecureTextField(
                       controller: _adminPasswordController,
-                      obscureText: true,
                       decoration: const InputDecoration(labelText: '管理员密码'),
                     ),
-                    right: TextField(
+                    right: buildSecureTextField(
                       controller: _confirmPasswordController,
-                      obscureText: true,
                       decoration: const InputDecoration(labelText: '确认管理员密码'),
                     ),
                   ),
                   _buildFieldRow(
-                    child: TextField(
+                    child: buildSecureTextField(
                       controller: _sessionSecretController,
                       decoration: InputDecoration(
                         labelText: 'Session Secret',
@@ -1889,9 +1904,8 @@ class _InitializationScreenState extends State<InitializationScreen> {
                     ),
                   ),
                   _buildFieldRow(
-                    left: TextField(
+                    left: buildSecureTextField(
                       controller: _dbPasswordController,
-                      obscureText: true,
                       decoration: const InputDecoration(
                         labelText: 'DB Password',
                       ),
@@ -2120,9 +2134,8 @@ class _LoginScreenState extends State<LoginScreen> {
                     rememberedBaseUrls: widget.controller.rememberedBaseUrls,
                   ),
                   const SizedBox(height: 12),
-                  TextField(
+                  buildSecureTextField(
                     controller: _passwordController,
-                    obscureText: true,
                     decoration: const InputDecoration(labelText: '管理员密码'),
                   ),
                   const SizedBox(height: 16),
@@ -2972,21 +2985,18 @@ class _SettingsViewState extends State<SettingsView> {
           subtitle: '服务端要求新密码长度至少 12 位。',
           child: Column(
             children: <Widget>[
-              TextField(
+              buildSecureTextField(
                 controller: _currentPasswordController,
-                obscureText: true,
                 decoration: const InputDecoration(labelText: '当前密码'),
               ),
               const SizedBox(height: 12),
-              TextField(
+              buildSecureTextField(
                 controller: _newPasswordController,
-                obscureText: true,
                 decoration: const InputDecoration(labelText: '新密码'),
               ),
               const SizedBox(height: 12),
-              TextField(
+              buildSecureTextField(
                 controller: _confirmPasswordController,
-                obscureText: true,
                 decoration: const InputDecoration(labelText: '确认新密码'),
               ),
               const SizedBox(height: 12),
@@ -3153,7 +3163,11 @@ Future<String?> showSingleInputDialog(
       title: Text(title),
       content: TextField(
         controller: controller,
+        keyboardType: obscureText ? TextInputType.visiblePassword : null,
         obscureText: obscureText,
+        autocorrect: !obscureText,
+        enableSuggestions: !obscureText,
+        enableIMEPersonalizedLearning: !obscureText,
         decoration: InputDecoration(labelText: label),
       ),
       actions: <Widget>[
@@ -3255,9 +3269,8 @@ Future<MachineDraft?> showAddMachineDialog(
                 decoration: const InputDecoration(labelText: '初始 VHD 关键词'),
               ),
               const SizedBox(height: 12),
-              TextField(
+              buildSecureTextField(
                 controller: evhdPasswordController,
-                obscureText: true,
                 decoration: const InputDecoration(labelText: '初始 EVHD 密码（可选）'),
               ),
               const SizedBox(height: 12),
