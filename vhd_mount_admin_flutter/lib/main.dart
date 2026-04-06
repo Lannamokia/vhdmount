@@ -1426,7 +1426,7 @@ class AdminApp extends StatelessWidget {
           brightness: Brightness.light,
         ),
         scaffoldBackgroundColor: const Color(0xFFF5F1E8),
-        fontFamily: 'Verdana',
+        fontFamily: 'MiSans',
         appBarTheme: const AppBarTheme(
           backgroundColor: Color(0xFF16322B),
           foregroundColor: Colors.white,

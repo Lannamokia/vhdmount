@@ -59,6 +59,26 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
+  fonts:
+    - family: MiSans
+      fonts:
+        - asset: MiSans/ttf/MiSans-Thin.ttf
+          weight: 100
+        - asset: MiSans/ttf/MiSans-ExtraLight.ttf
+          weight: 200
+        - asset: MiSans/ttf/MiSans-Light.ttf
+          weight: 300
+        - asset: MiSans/ttf/MiSans-Regular.ttf
+          weight: 400
+        - asset: MiSans/ttf/MiSans-Medium.ttf
+          weight: 500
+        - asset: MiSans/ttf/MiSans-Semibold.ttf
+          weight: 600
+        - asset: MiSans/ttf/MiSans-Bold.ttf
+          weight: 700
+        - asset: MiSans/ttf/MiSans-Heavy.ttf
+          weight: 900
+
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg
