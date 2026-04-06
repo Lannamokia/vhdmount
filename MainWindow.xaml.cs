@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Input;
 using Microsoft.Win32;
 using System.Windows.Threading;
+using System.Diagnostics;
 
 namespace VHDMounter
 {
@@ -34,7 +35,17 @@ namespace VHDMounter
 
         public MainWindow()
         {
+            Trace.WriteLine("MAINWINDOW: ctor begin");
             InitializeComponent();
+            Trace.WriteLine("MAINWINDOW: InitializeComponent completed");
+
+            Loaded += (_, __) => Trace.WriteLine($"MAINWINDOW: Loaded IsVisible={IsVisible} State={WindowState} ShowInTaskbar={ShowInTaskbar} Topmost={Topmost}");
+            ContentRendered += (_, __) => Trace.WriteLine($"MAINWINDOW: ContentRendered IsVisible={IsVisible} State={WindowState} ActualSize={ActualWidth}x{ActualHeight}");
+            Activated += (_, __) => Trace.WriteLine($"MAINWINDOW: Activated IsVisible={IsVisible} State={WindowState}");
+            Deactivated += (_, __) => Trace.WriteLine($"MAINWINDOW: Deactivated IsVisible={IsVisible} State={WindowState}");
+            IsVisibleChanged += (_, __) => Trace.WriteLine($"MAINWINDOW: IsVisibleChanged IsVisible={IsVisible} State={WindowState}");
+            StateChanged += (_, __) => Trace.WriteLine($"MAINWINDOW: StateChanged State={WindowState} ShowInTaskbar={ShowInTaskbar}");
+
             vhdManager = new VHDManager();
             vhdManager.StatusChanged += OnStatusChanged;
             vhdManager.ReplaceProgressChanged += OnReplaceProgress;
@@ -47,11 +58,17 @@ namespace VHDMounter
             
             // 开始主流程（包含延迟启动）
             _ = StartMainProcessWithDelay();
+            Trace.WriteLine("MAINWINDOW: ctor end");
         }
 
         private void SetStage(UiStage stage, string overrideText = null)
         {
             currentStage = stage;
+            try
+            {
+                Trace.WriteLine($"MAINWINDOW: SetStage {stage} OverrideText={overrideText ?? "<null>"}");
+            }
+            catch { }
             Dispatcher.Invoke(() =>
             {
                 switch (stage)

@@ -133,6 +133,35 @@ namespace VHDMounter
                 Trace.AutoFlush = true;
                 Trace.WriteLine($"==== VHDMounter 启动 {DateTime.Now:yyyy-MM-dd HH:mm:ss} ====");
 
+                try
+                {
+                    var originalCurrentDirectory = Environment.CurrentDirectory;
+                    Directory.SetCurrentDirectory(AppContext.BaseDirectory);
+                    Trace.WriteLine($"CurrentDirectory: {originalCurrentDirectory} -> {Environment.CurrentDirectory}");
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"设置当前目录失败: {ex}");
+                }
+
+                AppDomain.CurrentDomain.UnhandledException += (sender, ev) =>
+                {
+                    try
+                    {
+                        Trace.WriteLine($"UnhandledException: {ev.ExceptionObject}");
+                    }
+                    catch { }
+                };
+
+                TaskScheduler.UnobservedTaskException += (sender, ev) =>
+                {
+                    try
+                    {
+                        Trace.WriteLine($"UnobservedTaskException: {ev.Exception}");
+                    }
+                    catch { }
+                };
+
                 // 启动后台任务：日志大小循环覆盖 + NXLOG 设备监控拷贝
                 var cts = new CancellationTokenSource();
                 StartLogSizeMonitor(logPath, fileListener, cts.Token);
@@ -147,6 +176,7 @@ namespace VHDMounter
                 }
                 catch { }
 
+                Trace.WriteLine("准备绑定 AssemblyResolve");
                 // 绑定程序集解析事件，确保 Microsoft.Management.Infrastructure 能被解析
                 AppDomain.CurrentDomain.AssemblyResolve += (sender, ev) =>
                 {
@@ -177,8 +207,11 @@ namespace VHDMounter
                     }
                     return null;
                 };
+                Trace.WriteLine("AssemblyResolve 绑定完成");
 
+                Trace.WriteLine("准备执行自更新检查");
                 var selfUpdated = TryPerformSelfUpdateFromUsb();
+                Trace.WriteLine($"自更新检查完成 SelfUpdated={selfUpdated}");
                 if (selfUpdated)
                 {
                     try
@@ -191,8 +224,21 @@ namespace VHDMounter
                     return;
                 }
 
+                Trace.WriteLine("准备创建 WPF Application");
                 var app = new Application();
+                Trace.WriteLine("WPF Application 创建完成");
+                app.DispatcherUnhandledException += (sender, ev) =>
+                {
+                    try
+                    {
+                        Trace.WriteLine($"DispatcherUnhandledException: {ev.Exception}");
+                    }
+                    catch { }
+                };
+
+                Trace.WriteLine("准备创建 MainWindow");
                 var mainWindow = new MainWindow();
+                Trace.WriteLine("MainWindow 创建完成，进入消息循环");
                 app.Run(mainWindow);
 
                 try
@@ -210,10 +256,24 @@ namespace VHDMounter
             try
             {
                 var baseDir = AppContext.BaseDirectory;
+                Trace.WriteLine($"SELF_UPDATE: Begin BaseDir={baseDir}");
                 var trustedKeys = Path.Combine(baseDir, "trusted_keys.pem");
-                if (!File.Exists(trustedKeys)) return false;
+                if (!File.Exists(trustedKeys))
+                {
+                    Trace.WriteLine($"SELF_UPDATE: trusted_keys.pem not found at {trustedKeys}");
+                    return false;
+                }
+
+                Trace.WriteLine($"SELF_UPDATE: trusted_keys.pem found at {trustedKeys}");
+                Trace.WriteLine("SELF_UPDATE: Enumerating removable drives");
                 var nx = DriveInfo.GetDrives().FirstOrDefault(d => d.IsReady && d.DriveType == DriveType.Removable && string.Equals(d.VolumeLabel, "NX_INS", StringComparison.OrdinalIgnoreCase));
-                if (nx == null) return false;
+                if (nx == null)
+                {
+                    Trace.WriteLine("SELF_UPDATE: NX_INS removable drive not found");
+                    return false;
+                }
+
+                Trace.WriteLine($"SELF_UPDATE: NX_INS drive found at {nx.RootDirectory.FullName}");
                 var root = nx.RootDirectory.FullName;
                 var candidates = new[]
                 {
@@ -221,13 +281,40 @@ namespace VHDMounter
                     Path.Combine(root, "updates", "manifest.json")
                 };
                 string manifestPath = candidates.FirstOrDefault(File.Exists);
-                if (string.IsNullOrEmpty(manifestPath)) return false;
+                if (string.IsNullOrEmpty(manifestPath))
+                {
+                    Trace.WriteLine("SELF_UPDATE: manifest.json not found");
+                    return false;
+                }
+
+                Trace.WriteLine($"SELF_UPDATE: manifest found at {manifestPath}");
                 var sigPath = Path.Combine(Path.GetDirectoryName(manifestPath) ?? root, "manifest.sig");
-                if (!File.Exists(sigPath)) return false;
+                if (!File.Exists(sigPath))
+                {
+                    Trace.WriteLine($"SELF_UPDATE: manifest.sig not found at {sigPath}");
+                    return false;
+                }
+
+                Trace.WriteLine($"SELF_UPDATE: manifest.sig found at {sigPath}");
+                Trace.WriteLine("SELF_UPDATE: Verifying manifest signature");
                 var ok = UpdateSecurity.VerifyManifestSignature(manifestPath, sigPath, trustedKeys);
+                Trace.WriteLine($"SELF_UPDATE: Manifest signature verification result={ok}");
                 if (!ok) return false;
+
+                Trace.WriteLine("SELF_UPDATE: Loading manifest");
                 var manifest = UpdateSecurity.LoadManifest(manifestPath);
-                if (!string.Equals(manifest.type, "app-update", StringComparison.OrdinalIgnoreCase)) return false;
+                Trace.WriteLine($"SELF_UPDATE: Manifest loaded Type={manifest.type} Version={manifest.version}");
+                if (!string.Equals(manifest.type, "app-update", StringComparison.OrdinalIgnoreCase))
+                {
+                    Trace.WriteLine("SELF_UPDATE: Manifest type is not app-update");
+                    return false;
+                }
+                if (!UpdateSecurity.ValidateAppUpdatePayloadSize(manifest, out var totalPayloadBytes, out var payloadError))
+                {
+                    Trace.WriteLine($"SELF_UPDATE: {payloadError}");
+                    return false;
+                }
+                Trace.WriteLine($"SELF_UPDATE: App-update payload size accepted Total={totalPayloadBytes} bytes");
                 DateTime now = DateTime.UtcNow;
                 DateTime exp;
                 if (!string.IsNullOrWhiteSpace(manifest.expiresAt) && DateTime.TryParse(manifest.expiresAt, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var e))
@@ -240,9 +327,15 @@ namespace VHDMounter
                 }
                 else
                 {
+                    Trace.WriteLine("SELF_UPDATE: Manifest time window parsing failed");
                     return false;
                 }
-                if (now > exp) return false;
+                Trace.WriteLine($"SELF_UPDATE: TimeWindow Now={now:o} Exp={exp:o}");
+                if (now > exp)
+                {
+                    Trace.WriteLine("SELF_UPDATE: Manifest expired");
+                    return false;
+                }
                 try
                 {
                     var flagPath = Path.Combine(baseDir, "update_done.flag");
@@ -260,13 +353,20 @@ namespace VHDMounter
                 catch { }
                 var staging = Path.Combine(baseDir, "staging");
                 if (!Directory.Exists(staging)) Directory.CreateDirectory(staging);
+                Trace.WriteLine($"SELF_UPDATE: Staging directory ready at {staging}");
                 foreach (var f in manifest.files)
                 {
                     var src = Path.Combine(Path.GetDirectoryName(manifestPath) ?? root, f.path.Replace('/', Path.DirectorySeparatorChar));
-                    if (!UpdateSecurity.VerifyFileHash(src, f.sha256, f.size)) return false;
+                    Trace.WriteLine($"SELF_UPDATE: Verifying file {src}");
+                    if (!UpdateSecurity.VerifyFileHash(src, f.sha256, f.size))
+                    {
+                        Trace.WriteLine($"SELF_UPDATE: File hash verification failed for {src}");
+                        return false;
+                    }
                     var dest = Path.Combine(staging, f.path.Replace('/', Path.DirectorySeparatorChar));
                     var destDir = Path.GetDirectoryName(dest) ?? staging;
                     if (!Directory.Exists(destDir)) Directory.CreateDirectory(destDir);
+                    Trace.WriteLine($"SELF_UPDATE: Copying {src} -> {dest}");
                     using var srcFs = new FileStream(src, FileMode.Open, FileAccess.Read, FileShare.Read);
                     using var dstFs = new FileStream(dest, FileMode.Create, FileAccess.Write, FileShare.None);
                     srcFs.CopyTo(dstFs);
@@ -306,11 +406,13 @@ namespace VHDMounter
                 psi.ArgumentList.Add(stagingManifest);
                 psi.ArgumentList.Add("--pid");
                 psi.ArgumentList.Add(Environment.ProcessId.ToString());
+                Trace.WriteLine($"SELF_UPDATE: Launching updater {psi.FileName}");
                 var p = Process.Start(psi);
                 return true;
             }
-            catch
+            catch (Exception ex)
             {
+                Trace.WriteLine($"SELF_UPDATE: Exception {ex}");
                 return false;
             }
         }
