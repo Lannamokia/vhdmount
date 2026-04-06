@@ -319,6 +319,11 @@ class FakeAdminApi implements AdminApi {
   ) async {}
 
   @override
+  Future<OtpStatus> completeOtpRotation(String code) async {
+    return const OtpStatus(verified: true, verifiedUntil: 0);
+  }
+
+  @override
   Future<void> completeInitialization({
     required String adminPassword,
     required String sessionSecret,
@@ -337,7 +342,14 @@ class FakeAdminApi implements AdminApi {
   Future<AuthStatus> getAuthStatus() async => authStatus;
 
   @override
-  Future<List<AuditEntry>> getAuditEntries() async => auditEntries;
+  Future<List<AuditEntry>> getAuditEntries({String? machineId}) async {
+    if (machineId == null || machineId.isEmpty) {
+      return auditEntries;
+    }
+    return auditEntries
+        .where((entry) => entry.machineId == machineId)
+        .toList();
+  }
 
   @override
   Future<List<MachineRecord>> getMachines() async => machines;
@@ -386,6 +398,20 @@ class FakeAdminApi implements AdminApi {
     return const InitializationPreparation(
       issuer: 'VHDMountServer',
       accountName: 'admin',
+      totpSecret: 'secret',
+      otpauthUrl: 'otpauth://example',
+    );
+  }
+
+  @override
+  Future<InitializationPreparation> prepareOtpRotation({
+    required String currentCode,
+    String? issuer,
+    String? accountName,
+  }) async {
+    return InitializationPreparation(
+      issuer: issuer?.isNotEmpty == true ? issuer! : 'VHDMountServer',
+      accountName: accountName?.isNotEmpty == true ? accountName! : 'admin',
       totpSecret: 'secret',
       otpauthUrl: 'otpauth://example',
     );

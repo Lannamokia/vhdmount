@@ -222,12 +222,26 @@ AuditEventPresentation describeAuditEvent(AuditEntry entry) {
             ? '高敏感操作窗口已开启。'
             : '提供的 OTP 验证码未通过校验。',
       );
+    case 'auth.otp.rotate.prepare':
+      return AuditEventPresentation(
+        title: entry.result == 'success' ? '开始更换 OTP 绑定密钥' : '旧 OTP 校验失败',
+        description: entry.result == 'success'
+            ? '已通过旧 OTP 校验，并生成新的 OTP 绑定密钥等待确认。'
+            : '提供的旧 OTP 验证码未通过校验，无法开始更换流程。',
+      );
+    case 'auth.otp.rotate.complete':
+      return AuditEventPresentation(
+        title: entry.result == 'success' ? 'OTP 绑定密钥已更换' : '新 OTP 校验失败',
+        description: entry.result == 'success'
+            ? '新的 OTP 绑定密钥已验证通过并替换原有绑定。'
+            : '使用新绑定密钥生成的 OTP 验证码未通过校验，原绑定保持不变。',
+      );
     case 'settings.default-vhd.update':
       return AuditEventPresentation(
-        title: '默认 VHD 关键词已更新',
+        title: '默认启动关键词已更新',
         description: keyword.isEmpty
-            ? '服务默认使用的 VHD 关键词已被修改。'
-            : '服务默认使用的 VHD 关键词已更新为 $keyword。',
+            ? '服务默认使用的启动关键词已被修改。'
+            : '服务默认使用的启动关键词已更新为 $keyword。',
       );
     case 'machine.protection.update':
       return AuditEventPresentation(
@@ -243,9 +257,19 @@ AuditEventPresentation describeAuditEvent(AuditEntry entry) {
             ? '已创建新的机台记录。'
             : keyword.isEmpty
                 ? '已创建机台 $machineId。'
-                : '已创建机台 $machineId，默认 VHD 关键词为 $keyword。',
+                : '已创建机台 $machineId，默认启动关键词为 $keyword。',
       );
     case 'machine.registration.submit':
+      if (entry.result != 'success') {
+        return AuditEventPresentation(
+          title: '机台公钥注册失败',
+          description: machineId.isEmpty
+              ? (reason.isEmpty ? '机台提交公钥注册失败。' : '机台提交公钥注册失败，原因：$reason。')
+              : (reason.isEmpty
+                  ? '机台 $machineId 提交公钥注册失败。'
+                  : '机台 $machineId 提交公钥注册失败，原因：$reason。'),
+        );
+      }
       return AuditEventPresentation(
         title: '机台提交公钥注册',
         description: machineId.isEmpty
@@ -272,12 +296,12 @@ AuditEventPresentation describeAuditEvent(AuditEntry entry) {
       );
     case 'machine.vhd.update':
       return AuditEventPresentation(
-        title: '机台 VHD 关键词已更新',
+        title: '机台启动关键词已更新',
         description: machineId.isEmpty
-            ? '机台 VHD 关键词已被修改。'
+            ? '机台启动关键词已被修改。'
             : keyword.isEmpty
-                ? '机台 $machineId 的 VHD 关键词已更新。'
-                : '机台 $machineId 的 VHD 关键词已更新为 $keyword。',
+                ? '机台 $machineId 的启动关键词已更新。'
+                : '机台 $machineId 的启动关键词已更新为 $keyword。',
       );
     case 'machine.evhd-password.update':
       return AuditEventPresentation(
@@ -294,6 +318,19 @@ AuditEventPresentation describeAuditEvent(AuditEntry entry) {
             : (reason.isEmpty
                 ? '管理员读取了机台 $machineId 的 EVHD 明文密码。'
                 : '管理员读取了机台 $machineId 的 EVHD 明文密码，原因：$reason。'),
+      );
+    case 'machine.evhd-envelope.read':
+      return AuditEventPresentation(
+        title: entry.result == 'success' ? '机台获取 EVHD 密文成功' : '机台获取 EVHD 密文失败',
+        description: machineId.isEmpty
+            ? (entry.result == 'success'
+                ? '机台已通过鉴权并获取 EVHD 密文信封。'
+                : (reason.isEmpty ? '机台获取 EVHD 密文失败。' : '机台获取 EVHD 密文失败，原因：$reason。'))
+            : (entry.result == 'success'
+                ? '机台 $machineId 已通过鉴权并获取 EVHD 密文信封。'
+                : (reason.isEmpty
+                    ? '机台 $machineId 获取 EVHD 密文失败。'
+                    : '机台 $machineId 获取 EVHD 密文失败，原因：$reason。')),
       );
     case 'machine.delete':
       return AuditEventPresentation(
@@ -674,11 +711,45 @@ class AuditEntry {
 
   String get localizedResult => describeAuditResult(result);
 
+  String? get machineId {
+    final value = _auditMetadataText(metadata, 'machineId');
+    return value.isEmpty ? null : value;
+  }
+
   String get normalizedIp => normalizeAuditIp(ip);
 
   String get displayPath => path.isEmpty ? '未知接口' : path;
 
   AuditEventPresentation get presentation => describeAuditEvent(this);
+
+  String get searchableText {
+    final details = presentation;
+    return <String>[
+      timestamp,
+      type,
+      actor,
+      result,
+      path,
+      ip,
+      machineId ?? '',
+      details.title,
+      details.description,
+      ...metadata.entries.map((entry) => '${entry.key} ${entry.value}'),
+    ].join(' ').toLowerCase();
+  }
+}
+
+List<String> buildAuditMachineOptions(
+  Iterable<MachineRecord> machines,
+  Iterable<AuditEntry> entries,
+) {
+  final values = <String>{
+    ...machines.map((machine) => machine.machineId).where((value) => value.trim().isNotEmpty),
+    ...entries.map((entry) => entry.machineId ?? '').where((value) => value.trim().isNotEmpty),
+  }.toList();
+
+  values.sort((left, right) => left.toLowerCase().compareTo(right.toLowerCase()));
+  return values;
 }
 
 abstract class AdminApi {
@@ -717,6 +788,14 @@ abstract class AdminApi {
 
   Future<OtpStatus> getOtpStatus();
 
+  Future<InitializationPreparation> prepareOtpRotation({
+    required String currentCode,
+    String? issuer,
+    String? accountName,
+  });
+
+  Future<OtpStatus> completeOtpRotation(String code);
+
   Future<List<MachineRecord>> getMachines();
 
   Future<void> addMachine(MachineDraft draft);
@@ -741,7 +820,7 @@ abstract class AdminApi {
 
   Future<void> removeTrustedCertificate(String fingerprint);
 
-  Future<List<AuditEntry>> getAuditEntries();
+  Future<List<AuditEntry>> getAuditEntries({String? machineId});
 
   Future<void> updateDefaultVhd(String vhdKeyword);
 
@@ -930,6 +1009,38 @@ class HttpAdminApi implements AdminApi {
   }
 
   @override
+  Future<InitializationPreparation> prepareOtpRotation({
+    required String currentCode,
+    String? issuer,
+    String? accountName,
+  }) async {
+    final body = <String, dynamic>{'currentCode': currentCode};
+    if (issuer != null && issuer.trim().isNotEmpty) {
+      body['issuer'] = issuer.trim();
+    }
+    if (accountName != null && accountName.trim().isNotEmpty) {
+      body['accountName'] = accountName.trim();
+    }
+
+    final json = await _requestJson(
+      'POST',
+      '/api/auth/otp/rotate/prepare',
+      body: body,
+    );
+    return InitializationPreparation.fromJson(json);
+  }
+
+  @override
+  Future<OtpStatus> completeOtpRotation(String code) async {
+    final json = await _requestJson(
+      'POST',
+      '/api/auth/otp/rotate/complete',
+      body: <String, dynamic>{'code': code},
+    );
+    return OtpStatus.fromJson(json);
+  }
+
+  @override
   Future<List<MachineRecord>> getMachines() async {
     final json = await _requestJson('GET', '/api/machines');
     final rows = (json['machines'] as List<dynamic>? ?? <dynamic>[])
@@ -1050,8 +1161,14 @@ class HttpAdminApi implements AdminApi {
   }
 
   @override
-  Future<List<AuditEntry>> getAuditEntries() async {
-    final json = await _requestJson('GET', '/api/audit?limit=100');
+  Future<List<AuditEntry>> getAuditEntries({String? machineId}) async {
+    final queryParameters = <String, String>{'limit': '100'};
+    if (machineId != null && machineId.trim().isNotEmpty) {
+      queryParameters['machineId'] = machineId.trim();
+    }
+
+    final query = Uri(queryParameters: queryParameters).query;
+    final json = await _requestJson('GET', '/api/audit?$query');
     return (json['entries'] as List<dynamic>? ?? <dynamic>[])
         .whereType<Map<String, dynamic>>()
         .map(AuditEntry.fromJson)
@@ -1102,16 +1219,28 @@ class AppController extends ChangeNotifier {
   bool otpVerified = false;
   int otpVerifiedUntil = 0;
   InitializationPreparation? initializationPreparation;
+  InitializationPreparation? otpRotationPreparation;
   List<MachineRecord> machines = <MachineRecord>[];
   List<TrustedCertificateRecord> certificates = <TrustedCertificateRecord>[];
   List<AuditEntry> auditEntries = <AuditEntry>[];
   List<String> rememberedBaseUrls = <String>[];
+  String? auditFilterMachineId;
 
   String get baseUrl => api.baseUrl;
 
   void updateBaseUrl(String value) {
     api.updateBaseUrl(value);
     notifyListeners();
+  }
+
+  void setAuditMachineFilter(String? machineId, {bool notify = true}) {
+    final normalized = machineId?.trim();
+    auditFilterMachineId = normalized == null || normalized.isEmpty
+        ? null
+        : normalized;
+    if (notify) {
+      notifyListeners();
+    }
   }
 
   Future<void> _ensureClientConfigLoaded() async {
@@ -1229,9 +1358,10 @@ class AppController extends ChangeNotifier {
       if (isAuthenticated) {
         _applyOtpStatus(await api.getOtpStatus(), notify: false);
         machines = await api.getMachines();
-        auditEntries = await api.getAuditEntries();
+        auditEntries = await api.getAuditEntries(machineId: auditFilterMachineId);
       } else {
         _clearOtpVerification(notify: false);
+        otpRotationPreparation = null;
         machines = <MachineRecord>[];
         certificates = <TrustedCertificateRecord>[];
         auditEntries = <AuditEntry>[];
@@ -1294,6 +1424,7 @@ class AppController extends ChangeNotifier {
   Future<void> logout() async {
     await _runAction(api.logout);
     _clearOtpVerification(notify: false);
+    otpRotationPreparation = null;
     await bootstrap();
   }
 
@@ -1310,6 +1441,32 @@ class AppController extends ChangeNotifier {
     } catch (_) {
       // OTP 已成功，只把证书刷新失败作为界面错误保留，不中断成功状态。
     }
+  }
+
+  Future<void> prepareOtpRotation({
+    required String currentCode,
+    String? issuer,
+    String? accountName,
+  }) async {
+    otpRotationPreparation = await _runAction(
+      () => api.prepareOtpRotation(
+        currentCode: currentCode,
+        issuer: issuer,
+        accountName: accountName,
+      ),
+    );
+    notifyListeners();
+  }
+
+  Future<void> completeOtpRotation(String code) async {
+    final otpStatus = await _runAction(() => api.completeOtpRotation(code));
+    otpRotationPreparation = null;
+    _applyOtpStatus(otpStatus);
+  }
+
+  void clearOtpRotationPreparation() {
+    otpRotationPreparation = null;
+    notifyListeners();
   }
 
   Future<void> refreshOtpStatus() async {
@@ -1330,8 +1487,11 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> loadAudit() async {
-    auditEntries = await _runAction(api.getAuditEntries);
+  Future<void> loadAudit({String? machineId}) async {
+    setAuditMachineFilter(machineId, notify: false);
+    auditEntries = await _runAction(
+      () => api.getAuditEntries(machineId: auditFilterMachineId),
+    );
     notifyListeners();
   }
 
@@ -1401,6 +1561,8 @@ class AppController extends ChangeNotifier {
     String newPassword,
   ) async {
     await _runAction(() => api.changePassword(currentPassword, newPassword));
+    otpRotationPreparation = null;
+    notifyListeners();
   }
 
   @override
@@ -1913,7 +2075,7 @@ class _InitializationScreenState extends State<InitializationScreen> {
                     right: TextField(
                       controller: _defaultVhdController,
                       decoration: const InputDecoration(
-                        labelText: '默认 VHD 关键词',
+                        labelText: '默认启动关键词',
                       ),
                     ),
                   ),
@@ -2125,7 +2287,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     InfoPanel(
                       title: '服务状态',
                       body: Text(
-                        '数据库: ${serverStatus.databaseReady ? '已连接' : '未连接'} | 默认 VHD: ${serverStatus.defaultVhdKeyword} | 可信证书: ${serverStatus.trustedRegistrationCertificateCount}',
+                        '数据库: ${serverStatus.databaseReady ? '已连接' : '未连接'} | 默认启动关键词: ${serverStatus.defaultVhdKeyword} | 可信证书: ${serverStatus.trustedRegistrationCertificateCount}',
                       ),
                     ),
                   const SizedBox(height: 12),
@@ -2200,8 +2362,16 @@ class DashboardScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    Future<void> openAuditForMachine(String machineId) async {
+      await controller.loadAudit(machineId: machineId);
+      onDestinationSelected(2);
+    }
+
     final pages = <Widget>[
-      MachinesView(controller: controller),
+      MachinesView(
+        controller: controller,
+        onOpenAuditForMachine: openAuditForMachine,
+      ),
       CertificatesView(controller: controller),
       AuditView(controller: controller),
       SettingsView(controller: controller),
@@ -2315,7 +2485,7 @@ class DashboardScreen extends StatelessWidget {
                       ),
                       StatusChip(
                         label:
-                            '默认 VHD: ${controller.serverStatus?.defaultVhdKeyword ?? 'SDEZ'}',
+                            '默认启动关键词: ${controller.serverStatus?.defaultVhdKeyword ?? 'SDEZ'}',
                         color: const Color(0xFF385B72),
                       ),
                     ],
@@ -2337,9 +2507,14 @@ class DashboardScreen extends StatelessWidget {
 }
 
 class MachinesView extends StatelessWidget {
-  const MachinesView({super.key, required this.controller});
+  const MachinesView({
+    super.key,
+    required this.controller,
+    required this.onOpenAuditForMachine,
+  });
 
   final AppController controller;
+  final Future<void> Function(String machineId) onOpenAuditForMachine;
 
   @override
   Widget build(BuildContext context) {
@@ -2426,7 +2601,7 @@ class MachinesView extends StatelessWidget {
                           runSpacing: 8,
                           children: <Widget>[
                             StatusChip(
-                              label: 'VHD ${machine.vhdKeyword}',
+                              label: '当前启动关键词 ${machine.vhdKeyword}',
                               color: const Color(0xFF385B72),
                             ),
                             StatusChip(
@@ -2542,8 +2717,8 @@ class MachinesView extends StatelessWidget {
                               onPressed: () async {
                                 final value = await showSingleInputDialog(
                                   context,
-                                  title: '设置 VHD 关键词',
-                                  label: 'VHD 关键词',
+                                  title: '设置启动关键词',
+                                  label: '启动关键词',
                                   initialValue: machine.vhdKeyword,
                                 );
                                 if (value == null || value.trim().isEmpty) {
@@ -2565,7 +2740,25 @@ class MachinesView extends StatelessWidget {
                                   );
                                 }
                               },
-                              child: const Text('设置 VHD'),
+                              child: const Text('设置启动关键词'),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed: () async {
+                                try {
+                                  await onOpenAuditForMachine(machine.machineId);
+                                } catch (error) {
+                                  if (!context.mounted) {
+                                    return;
+                                  }
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(describeError(error)),
+                                    ),
+                                  );
+                                }
+                              },
+                              icon: const Icon(Icons.history_rounded),
+                              label: const Text('查阅审计日志'),
                             ),
                             OutlinedButton(
                               onPressed: () async {
@@ -2824,13 +3017,66 @@ class CertificatesView extends StatelessWidget {
   }
 }
 
-class AuditView extends StatelessWidget {
+class AuditView extends StatefulWidget {
   const AuditView({super.key, required this.controller});
 
   final AppController controller;
 
   @override
+  State<AuditView> createState() => _AuditViewState();
+}
+
+class _AuditViewState extends State<AuditView> {
+  final TextEditingController _searchController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _searchController.addListener(_handleSearchChanged);
+  }
+
+  @override
+  void dispose() {
+    _searchController.removeListener(_handleSearchChanged);
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _handleSearchChanged() {
+    setState(() {});
+  }
+
+  Future<void> _reloadAudit({String? machineId}) async {
+    try {
+      await widget.controller.loadAudit(machineId: machineId);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(describeError(error))));
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final controller = widget.controller;
+    final machineOptions = buildAuditMachineOptions(
+      controller.machines,
+      controller.auditEntries,
+    ).toList();
+    final selectedMachineId = controller.auditFilterMachineId;
+    if (selectedMachineId != null && !machineOptions.contains(selectedMachineId)) {
+      machineOptions.insert(0, selectedMachineId);
+    }
+    final searchQuery = _searchController.text.trim().toLowerCase();
+    final visibleEntries = searchQuery.isEmpty
+        ? controller.auditEntries
+        : controller.auditEntries
+              .where((entry) => entry.searchableText.contains(searchQuery))
+              .toList();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
@@ -2839,22 +3085,96 @@ class AuditView extends StatelessWidget {
             Text('审计日志', style: Theme.of(context).textTheme.headlineSmall),
             const Spacer(),
             OutlinedButton.icon(
-              onPressed: controller.loadAudit,
+              onPressed: () => _reloadAudit(
+                machineId: controller.auditFilterMachineId,
+              ),
               icon: const Icon(Icons.refresh_rounded),
               label: const Text('刷新审计'),
             ),
           ],
         ),
         const SizedBox(height: 12),
+        Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: <Widget>[
+            SizedBox(
+              width: 320,
+              child: DropdownMenu<String>(
+                key: ValueKey<String>(
+                  controller.auditFilterMachineId ?? '__all__',
+                ),
+                width: 320,
+                enableFilter: true,
+                enableSearch: true,
+                label: const Text('按机台过滤'),
+                hintText: '全部机台',
+                initialSelection: controller.auditFilterMachineId,
+                dropdownMenuEntries: machineOptions
+                    .map(
+                      (machineId) => DropdownMenuEntry<String>(
+                        value: machineId,
+                        label: machineId,
+                      ),
+                    )
+                    .toList(),
+                onSelected: (value) => _reloadAudit(machineId: value),
+              ),
+            ),
+            SizedBox(
+              width: 320,
+              child: TextField(
+                controller: _searchController,
+                decoration: InputDecoration(
+                  labelText: '搜索审计内容',
+                  hintText: '输入机台 ID、事件键、原因等',
+                  prefixIcon: const Icon(Icons.search_rounded),
+                  suffixIcon: searchQuery.isEmpty
+                      ? null
+                      : IconButton(
+                          onPressed: _searchController.clear,
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                ),
+              ),
+            ),
+            if (controller.auditFilterMachineId != null)
+              TextButton.icon(
+                onPressed: () => _reloadAudit(machineId: null),
+                icon: const Icon(Icons.filter_alt_off_rounded),
+                label: const Text('清除机台过滤'),
+              ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        if (controller.auditFilterMachineId != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Text(
+              '当前仅显示机台 ${controller.auditFilterMachineId} 的审计记录。',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ),
         if (controller.auditEntries.isEmpty)
-          const Expanded(child: Center(child: Text('暂时没有审计记录。')))
+          Expanded(
+            child: Center(
+              child: Text(
+                controller.auditFilterMachineId == null
+                    ? '暂时没有审计记录。'
+                    : '所选机台暂时没有审计记录。',
+              ),
+            ),
+          )
+        else if (visibleEntries.isEmpty)
+          const Expanded(child: Center(child: Text('没有匹配搜索条件的审计记录。')))
         else
           Expanded(
             child: ListView.separated(
-              itemCount: controller.auditEntries.length,
+              itemCount: visibleEntries.length,
               separatorBuilder: (_, _) => const SizedBox(height: 12),
               itemBuilder: (context, index) {
-                final entry = controller.auditEntries[index];
+                final entry = visibleEntries[index];
                 final presentation = entry.presentation;
                 return Card(
                   child: Padding(
@@ -2881,6 +3201,13 @@ class AuditView extends StatelessWidget {
                           '操作主体：${entry.localizedActor} · 结果：${entry.localizedResult} · 来源：${entry.normalizedIp}',
                           style: Theme.of(context).textTheme.bodyMedium,
                         ),
+                        if (entry.machineId != null) ...<Widget>[
+                          const SizedBox(height: 2),
+                          Text(
+                            '机台：${entry.machineId}',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                        ],
                         const SizedBox(height: 2),
                         Text(
                           '接口：${entry.displayPath}',
@@ -2919,6 +3246,14 @@ class _SettingsViewState extends State<SettingsView> {
   final TextEditingController _newPasswordController = TextEditingController();
   final TextEditingController _confirmPasswordController =
       TextEditingController();
+  final TextEditingController _otpRotateCurrentCodeController =
+    TextEditingController();
+  final TextEditingController _otpRotateIssuerController =
+    TextEditingController();
+  final TextEditingController _otpRotateAccountController =
+    TextEditingController();
+  final TextEditingController _otpRotateNewCodeController =
+    TextEditingController();
 
   @override
   void initState() {
@@ -2934,23 +3269,120 @@ class _SettingsViewState extends State<SettingsView> {
     _currentPasswordController.dispose();
     _newPasswordController.dispose();
     _confirmPasswordController.dispose();
+    _otpRotateCurrentCodeController.dispose();
+    _otpRotateIssuerController.dispose();
+    _otpRotateAccountController.dispose();
+    _otpRotateNewCodeController.dispose();
     super.dispose();
+  }
+
+  Widget _buildOtpRotationImportPanel(InitializationPreparation preparation) {
+    final otpauthUrl = normalizeOtpauthUrl(preparation.otpauthUrl);
+
+    return InfoPanel(
+      title: '新的 OTP 绑定信息',
+      body: Wrap(
+        spacing: 20,
+        runSpacing: 20,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: <Widget>[
+          Container(
+            width: 232,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF8FBF8),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: const Color(0xFFD6E6DD)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                const Text(
+                  '扫描二维码导入',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 12),
+                if (otpauthUrl.isNotEmpty)
+                  QrImageView(
+                    data: otpauthUrl,
+                    version: QrVersions.auto,
+                    size: 180,
+                    backgroundColor: Colors.white,
+                    eyeStyle: const QrEyeStyle(
+                      eyeShape: QrEyeShape.square,
+                      color: Color(0xFF16322B),
+                    ),
+                    dataModuleStyle: const QrDataModuleStyle(
+                      dataModuleShape: QrDataModuleShape.square,
+                      color: Color(0xFF165A4A),
+                    ),
+                  )
+                else
+                  Container(
+                    width: 180,
+                    height: 180,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0xFFD6E6DD)),
+                    ),
+                    child: const Text('未返回 otpauth URI'),
+                  ),
+                const SizedBox(height: 12),
+                Text(
+                  '旧绑定会一直保留，直到你使用新的绑定密钥生成验证码并验证通过。',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: const Color(0xFF476257),
+                    height: 1.45,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          ConstrainedBox(
+            constraints: const BoxConstraints(minWidth: 280, maxWidth: 520),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  '如果验证器不支持扫码，可以使用下面的参数手动绑定。',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(height: 1.5),
+                ),
+                const SizedBox(height: 12),
+                SelectableText('Issuer: ${preparation.issuer}'),
+                const SizedBox(height: 6),
+                SelectableText('Account: ${preparation.accountName}'),
+                const SizedBox(height: 6),
+                SelectableText('Secret: ${preparation.totpSecret}'),
+                const SizedBox(height: 6),
+                SelectableText('URI: $otpauthUrl'),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final status = widget.controller.serverStatus;
+    final rotationPreparation = widget.controller.otpRotationPreparation;
     return ListView(
       children: <Widget>[
         SectionPanel(
           title: '服务设置',
-          subtitle: '更新默认 VHD 关键词。',
+          subtitle: '更新默认启动关键词。',
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
               TextField(
                 controller: _defaultVhdController,
-                decoration: const InputDecoration(labelText: '默认 VHD 关键词'),
+                decoration: const InputDecoration(labelText: '默认启动关键词'),
               ),
               const SizedBox(height: 12),
               FilledButton.icon(
@@ -2969,12 +3401,152 @@ class _SettingsViewState extends State<SettingsView> {
                   }
                 },
                 icon: const Icon(Icons.save_rounded),
-                label: const Text('保存默认 VHD'),
+                label: const Text('保存默认启动关键词'),
               ),
               if (status != null) ...<Widget>[
                 const SizedBox(height: 12),
                 Text('数据库状态: ${status.databaseReady ? '正常' : '异常'}'),
                 Text('可信注册证书数量: ${status.trustedRegistrationCertificateCount}'),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        SectionPanel(
+          title: '更换 OTP 绑定密钥',
+          subtitle: '先验证旧 OTP，再导入并验证新的 OTP 绑定密钥。',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              if (rotationPreparation == null)
+                const InfoPanel(
+                  title: '流程说明',
+                  body: Text(
+                    '提交旧 OTP 验证码后，系统会生成新的绑定密钥。只有在你使用新密钥生成的 OTP 验证成功后，旧绑定才会被替换。',
+                  ),
+                )
+              else
+                _buildOtpRotationImportPanel(rotationPreparation),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _otpRotateCurrentCodeController,
+                decoration: const InputDecoration(labelText: '旧 OTP 验证码'),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: TextField(
+                      controller: _otpRotateIssuerController,
+                      decoration: const InputDecoration(
+                        labelText: '新的 OTP Issuer（可选）',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextField(
+                      controller: _otpRotateAccountController,
+                      decoration: const InputDecoration(
+                        labelText: '新的 OTP Account（可选）',
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: <Widget>[
+                  FilledButton.icon(
+                    onPressed: () async {
+                      final currentCode =
+                          _otpRotateCurrentCodeController.text.trim();
+                      if (currentCode.isEmpty) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('请输入旧 OTP 验证码。')),
+                        );
+                        return;
+                      }
+                      try {
+                        await widget.controller.prepareOtpRotation(
+                          currentCode: currentCode,
+                          issuer: _otpRotateIssuerController.text.trim(),
+                          accountName: _otpRotateAccountController.text.trim(),
+                        );
+                        _otpRotateNewCodeController.clear();
+                        if (!context.mounted) {
+                          return;
+                        }
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('新的 OTP 绑定密钥已生成，请导入后验证新验证码。'),
+                          ),
+                        );
+                      } catch (error) {
+                        if (!context.mounted) {
+                          return;
+                        }
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text(describeError(error))),
+                        );
+                      }
+                    },
+                    icon: const Icon(Icons.qr_code_2_rounded),
+                    label: Text(
+                      rotationPreparation == null ? '生成新的绑定密钥' : '重新生成绑定密钥',
+                    ),
+                  ),
+                  if (rotationPreparation != null)
+                    TextButton.icon(
+                      onPressed: () {
+                        widget.controller.clearOtpRotationPreparation();
+                        _otpRotateNewCodeController.clear();
+                      },
+                      icon: const Icon(Icons.close_rounded),
+                      label: const Text('取消本次更换'),
+                    ),
+                ],
+              ),
+              if (rotationPreparation != null) ...<Widget>[
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _otpRotateNewCodeController,
+                  decoration: const InputDecoration(labelText: '新 OTP 验证码'),
+                ),
+                const SizedBox(height: 12),
+                FilledButton.tonalIcon(
+                  onPressed: () async {
+                    final newCode = _otpRotateNewCodeController.text.trim();
+                    if (newCode.isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('请输入新的 OTP 验证码。')),
+                      );
+                      return;
+                    }
+                    try {
+                      await widget.controller.completeOtpRotation(newCode);
+                      _otpRotateCurrentCodeController.clear();
+                      _otpRotateNewCodeController.clear();
+                      if (!context.mounted) {
+                        return;
+                      }
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('OTP 绑定密钥已更换。')),
+                      );
+                    } catch (error) {
+                      if (!context.mounted) {
+                        return;
+                      }
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text(describeError(error))),
+                      );
+                    }
+                  },
+                  icon: const Icon(Icons.verified_rounded),
+                  label: const Text('验证新绑定并替换旧绑定'),
+                ),
               ],
             ],
           ),
@@ -3266,7 +3838,7 @@ Future<MachineDraft?> showAddMachineDialog(
               const SizedBox(height: 12),
               TextField(
                 controller: vhdController,
-                decoration: const InputDecoration(labelText: '初始 VHD 关键词'),
+                decoration: const InputDecoration(labelText: '初始启动关键词'),
               ),
               const SizedBox(height: 12),
               buildSecureTextField(

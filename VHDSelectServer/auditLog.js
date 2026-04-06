@@ -41,11 +41,23 @@ class AuditLog {
         fs.appendFileSync(this.filePath, line, 'utf8');
     }
 
-    read({ type, limit = 100 } = {}) {
+    read({ type, limit = 100, machineId } = {}) {
         const rows = this.getLogFilesOldestToNewest()
             .flatMap((filePath) => this.readRowsFromFile(filePath));
 
-        const filtered = type ? rows.filter((row) => row.type === type) : rows;
+        const normalizedMachineId = String(machineId || '').trim();
+        const filtered = rows.filter((row) => {
+            if (type && row.type !== type) {
+                return false;
+            }
+
+            if (normalizedMachineId && String(row.machineId || '').trim() !== normalizedMachineId) {
+                return false;
+            }
+
+            return true;
+        });
+
         return filtered.slice(-Math.max(1, Math.min(limit, 500))).reverse();
     }
 
