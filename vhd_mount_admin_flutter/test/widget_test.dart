@@ -242,6 +242,7 @@ void main() {
             result: 'success',
             path: '/api/auth/login',
             ip: '127.0.0.1',
+            metadata: <String, dynamic>{},
           ),
         ],
       ),

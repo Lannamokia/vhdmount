@@ -51,6 +51,262 @@ String normalizeBaseUrl(String value) {
   return trimmed.replaceAll(RegExp(r'/+$'), '');
 }
 
+const Set<String> _auditReservedKeys = <String>{
+  'timestamp',
+  'type',
+  'actor',
+  'result',
+  'path',
+  'ip',
+};
+
+class AuditEventPresentation {
+  const AuditEventPresentation({required this.title, required this.description});
+
+  final String title;
+  final String description;
+}
+
+String formatAuditTimestamp(String value) {
+  final parsed = DateTime.tryParse(value);
+  if (parsed == null) {
+    return value.isEmpty ? '未知时间' : value;
+  }
+
+  final local = parsed.toLocal();
+  final offset = local.timeZoneOffset;
+  final sign = offset.isNegative ? '-' : '+';
+  final offsetHours = offset.inHours.abs().toString().padLeft(2, '0');
+  final offsetMinutes =
+      (offset.inMinutes.abs() % 60).toString().padLeft(2, '0');
+
+  return '${local.year.toString().padLeft(4, '0')}-'
+      '${local.month.toString().padLeft(2, '0')}-'
+      '${local.day.toString().padLeft(2, '0')} '
+      '${local.hour.toString().padLeft(2, '0')}:'
+      '${local.minute.toString().padLeft(2, '0')}:'
+      '${local.second.toString().padLeft(2, '0')} '
+      'UTC$sign$offsetHours:$offsetMinutes';
+}
+
+String describeAuditActor(String actor) {
+  switch (actor) {
+    case 'admin':
+      return '管理员';
+    case 'machine':
+      return '机台';
+    case 'bootstrap':
+      return '初始化流程';
+    default:
+      return actor.isEmpty ? '未知主体' : actor;
+  }
+}
+
+String describeAuditResult(String result) {
+  switch (result) {
+    case 'success':
+      return '成功';
+    case 'failure':
+      return '失败';
+    default:
+      return result.isEmpty ? '未知结果' : result;
+  }
+}
+
+String normalizeAuditIp(String ip) {
+  final trimmed = ip.trim();
+  if (trimmed.isEmpty) {
+    return '未知地址';
+  }
+  if (trimmed.startsWith('::ffff:')) {
+    return trimmed.substring('::ffff:'.length);
+  }
+  return trimmed;
+}
+
+String _auditMetadataText(Map<String, dynamic> metadata, String key) {
+  final value = metadata[key];
+  if (value == null) {
+    return '';
+  }
+  return value.toString().trim();
+}
+
+bool? _auditMetadataBool(Map<String, dynamic> metadata, String key) {
+  final value = metadata[key];
+  if (value is bool) {
+    return value;
+  }
+  if (value is String) {
+    if (value == 'true') {
+      return true;
+    }
+    if (value == 'false') {
+      return false;
+    }
+  }
+  return null;
+}
+
+String _shortAuditValue(String value, {int edge = 8}) {
+  if (value.length <= edge * 2 + 3) {
+    return value;
+  }
+  return '${value.substring(0, edge)}...${value.substring(value.length - edge)}';
+}
+
+AuditEventPresentation describeAuditEvent(AuditEntry entry) {
+  final machineId = _auditMetadataText(entry.metadata, 'machineId');
+  final keyword = _auditMetadataText(entry.metadata, 'vhdKeyword').isNotEmpty
+      ? _auditMetadataText(entry.metadata, 'vhdKeyword')
+      : _auditMetadataText(entry.metadata, 'defaultVhdKeyword');
+  final reason = _auditMetadataText(entry.metadata, 'reason');
+  final fingerprint = _auditMetadataText(entry.metadata, 'fingerprint256').isNotEmpty
+      ? _auditMetadataText(entry.metadata, 'fingerprint256')
+      : _auditMetadataText(entry.metadata, 'registrationCertFingerprint');
+  final protectedState = _auditMetadataBool(entry.metadata, 'protected');
+  final approved = _auditMetadataBool(entry.metadata, 'approved');
+
+  switch (entry.type) {
+    case 'init.prepare':
+      return const AuditEventPresentation(
+        title: '准备初始化服务',
+        description: '已生成首次初始化所需的 OTP 信息与安全配置草稿。',
+      );
+    case 'init.complete':
+      final certCount = _auditMetadataText(
+        entry.metadata,
+        'trustedRegistrationCertificateCount',
+      );
+      return AuditEventPresentation(
+        title: '完成服务初始化',
+        description: certCount.isEmpty
+            ? '服务已完成初始化并写入安全配置。'
+            : '服务已完成初始化，并载入 $certCount 个可信注册证书。',
+      );
+    case 'auth.login':
+      return AuditEventPresentation(
+        title: entry.result == 'success' ? '管理员登录成功' : '管理员登录失败',
+        description: entry.result == 'success'
+            ? '管理员凭证校验通过，已建立登录会话。'
+            : '管理员凭证校验失败，登录被拒绝。',
+      );
+    case 'auth.change-password':
+      return AuditEventPresentation(
+        title: entry.result == 'success' ? '管理员密码已修改' : '管理员密码修改失败',
+        description: entry.result == 'success'
+            ? '管理员密码已更新，旧会话的高敏感验证状态已清除。'
+            : '密码变更时当前密码校验失败。',
+      );
+    case 'auth.otp.verify':
+      return AuditEventPresentation(
+        title: entry.result == 'success' ? 'OTP 二次验证通过' : 'OTP 二次验证失败',
+        description: entry.result == 'success'
+            ? '高敏感操作窗口已开启。'
+            : '提供的 OTP 验证码未通过校验。',
+      );
+    case 'settings.default-vhd.update':
+      return AuditEventPresentation(
+        title: '默认 VHD 关键词已更新',
+        description: keyword.isEmpty
+            ? '服务默认使用的 VHD 关键词已被修改。'
+            : '服务默认使用的 VHD 关键词已更新为 $keyword。',
+      );
+    case 'machine.protection.update':
+      return AuditEventPresentation(
+        title: '机台保护状态已更新',
+        description: machineId.isEmpty
+            ? '机台保护状态已被修改。'
+            : '机台 $machineId 的保护状态已切换为${protectedState == true ? '开启' : '关闭'}。',
+      );
+    case 'machine.create':
+      return AuditEventPresentation(
+        title: '已新增机台',
+        description: machineId.isEmpty
+            ? '已创建新的机台记录。'
+            : keyword.isEmpty
+                ? '已创建机台 $machineId。'
+                : '已创建机台 $machineId，默认 VHD 关键词为 $keyword。',
+      );
+    case 'machine.registration.submit':
+      return AuditEventPresentation(
+        title: '机台提交公钥注册',
+        description: machineId.isEmpty
+            ? '收到新的机台公钥注册请求，等待管理员审批。'
+            : fingerprint.isEmpty
+                ? '机台 $machineId 已提交公钥注册，等待管理员审批。'
+                : '机台 $machineId 已提交公钥注册，请求由证书 ${_shortAuditValue(fingerprint)} 签名。',
+      );
+    case 'machine.approval.update':
+      return AuditEventPresentation(
+        title: approved == false ? '已取消机台审批' : '已审批机台公钥',
+        description: machineId.isEmpty
+            ? '机台公钥审批状态已更新。'
+            : approved == false
+                ? '机台 $machineId 的公钥审批已取消。'
+                : '机台 $machineId 的公钥审批已通过。',
+      );
+    case 'machine.registration.reset':
+      return AuditEventPresentation(
+        title: '已重置机台注册状态',
+        description: machineId.isEmpty
+            ? '机台的注册密钥与审批状态已被清空。'
+            : '机台 $machineId 的注册密钥与审批状态已被清空。',
+      );
+    case 'machine.vhd.update':
+      return AuditEventPresentation(
+        title: '机台 VHD 关键词已更新',
+        description: machineId.isEmpty
+            ? '机台 VHD 关键词已被修改。'
+            : keyword.isEmpty
+                ? '机台 $machineId 的 VHD 关键词已更新。'
+                : '机台 $machineId 的 VHD 关键词已更新为 $keyword。',
+      );
+    case 'machine.evhd-password.update':
+      return AuditEventPresentation(
+        title: '机台 EVHD 密码已更新',
+        description: machineId.isEmpty
+            ? '机台 EVHD 密码已被修改。'
+            : '机台 $machineId 的 EVHD 密码已更新。',
+      );
+    case 'machine.evhd-password.read':
+      return AuditEventPresentation(
+        title: '读取机台 EVHD 明文密码',
+        description: machineId.isEmpty
+            ? (reason.isEmpty ? '管理员读取了 EVHD 明文密码。' : '管理员读取了 EVHD 明文密码，原因：$reason。')
+            : (reason.isEmpty
+                ? '管理员读取了机台 $machineId 的 EVHD 明文密码。'
+                : '管理员读取了机台 $machineId 的 EVHD 明文密码，原因：$reason。'),
+      );
+    case 'machine.delete':
+      return AuditEventPresentation(
+        title: '已删除机台',
+        description: machineId.isEmpty
+            ? '机台记录已被删除。'
+            : '机台 $machineId 的记录已被删除。',
+      );
+    case 'security.trusted-certificate.add':
+      return AuditEventPresentation(
+        title: '已添加可信注册证书',
+        description: fingerprint.isEmpty
+            ? '可信注册证书列表已新增一项。'
+            : '已添加可信注册证书 ${_shortAuditValue(fingerprint)}。',
+      );
+    case 'security.trusted-certificate.remove':
+      return AuditEventPresentation(
+        title: '已移除可信注册证书',
+        description: fingerprint.isEmpty
+            ? '可信注册证书列表已移除一项。'
+            : '已移除可信注册证书 ${_shortAuditValue(fingerprint)}。',
+      );
+    default:
+      return AuditEventPresentation(
+        title: entry.type.isEmpty ? '未命名审计事件' : entry.type,
+        description: '暂未配置该事件的中文说明。',
+      );
+  }
+}
+
 List<String> mergeRememberedBaseUrls(
   Iterable<String> existing, {
   String? preferredFirst,
@@ -368,6 +624,7 @@ class AuditEntry {
     required this.result,
     required this.path,
     required this.ip,
+    required this.metadata,
   });
 
   final String timestamp;
@@ -376,6 +633,7 @@ class AuditEntry {
   final String result;
   final String path;
   final String ip;
+  final Map<String, dynamic> metadata;
 
   factory AuditEntry.fromJson(Map<String, dynamic> json) {
     return AuditEntry(
@@ -385,8 +643,25 @@ class AuditEntry {
       result: (json['result'] as String?) ?? '',
       path: (json['path'] as String?) ?? '',
       ip: (json['ip'] as String?) ?? '',
+      metadata: Map<String, dynamic>.fromEntries(
+        json.entries.where(
+          (entry) => !_auditReservedKeys.contains(entry.key),
+        ),
+      ),
     );
   }
+
+  String get localizedTimestamp => formatAuditTimestamp(timestamp);
+
+  String get localizedActor => describeAuditActor(actor);
+
+  String get localizedResult => describeAuditResult(result);
+
+  String get normalizedIp => normalizeAuditIp(ip);
+
+  String get displayPath => path.isEmpty ? '未知接口' : path;
+
+  AuditEventPresentation get presentation => describeAuditEvent(this);
 }
 
 abstract class AdminApi {
@@ -2567,13 +2842,44 @@ class AuditView extends StatelessWidget {
               separatorBuilder: (_, _) => const SizedBox(height: 12),
               itemBuilder: (context, index) {
                 final entry = controller.auditEntries[index];
+                final presentation = entry.presentation;
                 return Card(
-                  child: ListTile(
-                    title: Text(entry.type),
-                    subtitle: Text(
-                      '${entry.timestamp}\n${entry.actor} · ${entry.result} · ${entry.ip}\n${entry.path}',
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text(
+                          presentation.title,
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          presentation.description,
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          '时间：${entry.localizedTimestamp}',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '操作主体：${entry.localizedActor} · 结果：${entry.localizedResult} · 来源：${entry.normalizedIp}',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '接口：${entry.displayPath}',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '事件键：${entry.type.isEmpty ? 'unknown' : entry.type}',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ],
                     ),
-                    isThreeLine: true,
                   ),
                 );
               },
