@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
@@ -51,20 +52,99 @@ String normalizeBaseUrl(String value) {
   return trimmed.replaceAll(RegExp(r'/+$'), '');
 }
 
-TextField buildSecureTextField({
+const MethodChannel _windowsSecureInputChannel = MethodChannel(
+  'vhd_mount_admin_flutter/secure_input',
+);
+
+void _syncWindowsSecureInput(bool enabled) {
+  if (!Platform.isWindows) {
+    return;
+  }
+
+  unawaited(() async {
+    try {
+      await _windowsSecureInputChannel.invokeMethod<void>(
+        'setSecureInputEnabled',
+        <String, bool>{'enabled': enabled},
+      );
+    } catch (_) {
+      // 平台侧不可用时保持 Flutter 默认行为，不阻塞输入。
+    }
+  }());
+}
+
+class SecureTextField extends StatefulWidget {
+  const SecureTextField({
+    super.key,
+    required this.controller,
+    required this.decoration,
+    this.autofocus = false,
+    this.autofillHints,
+  });
+
+  final TextEditingController controller;
+  final InputDecoration decoration;
+  final bool autofocus;
+  final Iterable<String>? autofillHints;
+
+  @override
+  State<SecureTextField> createState() => _SecureTextFieldState();
+}
+
+class _SecureTextFieldState extends State<SecureTextField> {
+  late final FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode = FocusNode();
+    _focusNode.addListener(_handleFocusChanged);
+  }
+
+  void _handleFocusChanged() {
+    _syncWindowsSecureInput(_focusNode.hasFocus);
+  }
+
+  @override
+  void dispose() {
+    if (_focusNode.hasFocus) {
+      _syncWindowsSecureInput(false);
+    }
+    _focusNode.removeListener(_handleFocusChanged);
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: widget.controller,
+      focusNode: _focusNode,
+      autofocus: widget.autofocus,
+      obscureText: true,
+      keyboardType: TextInputType.text,
+      autocorrect: false,
+      enableSuggestions: false,
+      enableIMEPersonalizedLearning: false,
+      smartDashesType: SmartDashesType.disabled,
+      smartQuotesType: SmartQuotesType.disabled,
+      autofillHints: widget.autofillHints,
+      decoration: widget.decoration,
+    );
+  }
+}
+
+Widget buildSecureTextField({
   required TextEditingController controller,
   required InputDecoration decoration,
   bool autofocus = false,
+  Iterable<String>? autofillHints,
 }) {
-  return TextField(
+  return SecureTextField(
     controller: controller,
     autofocus: autofocus,
-    obscureText: true,
-    keyboardType: TextInputType.visiblePassword,
-    autocorrect: false,
-    enableSuggestions: false,
-    enableIMEPersonalizedLearning: false,
     decoration: decoration,
+    autofillHints: autofillHints,
   );
 }
 
@@ -78,7 +158,10 @@ const Set<String> _auditReservedKeys = <String>{
 };
 
 class AuditEventPresentation {
-  const AuditEventPresentation({required this.title, required this.description});
+  const AuditEventPresentation({
+    required this.title,
+    required this.description,
+  });
 
   final String title;
   final String description;
@@ -94,8 +177,10 @@ String formatAuditTimestamp(String value) {
   final offset = local.timeZoneOffset;
   final sign = offset.isNegative ? '-' : '+';
   final offsetHours = offset.inHours.abs().toString().padLeft(2, '0');
-  final offsetMinutes =
-      (offset.inMinutes.abs() % 60).toString().padLeft(2, '0');
+  final offsetMinutes = (offset.inMinutes.abs() % 60).toString().padLeft(
+    2,
+    '0',
+  );
 
   return '${local.year.toString().padLeft(4, '0')}-'
       '${local.month.toString().padLeft(2, '0')}-'
@@ -178,7 +263,8 @@ AuditEventPresentation describeAuditEvent(AuditEntry entry) {
       ? _auditMetadataText(entry.metadata, 'vhdKeyword')
       : _auditMetadataText(entry.metadata, 'defaultVhdKeyword');
   final reason = _auditMetadataText(entry.metadata, 'reason');
-  final fingerprint = _auditMetadataText(entry.metadata, 'fingerprint256').isNotEmpty
+  final fingerprint =
+      _auditMetadataText(entry.metadata, 'fingerprint256').isNotEmpty
       ? _auditMetadataText(entry.metadata, 'fingerprint256')
       : _auditMetadataText(entry.metadata, 'registrationCertFingerprint');
   final protectedState = _auditMetadataBool(entry.metadata, 'protected');
@@ -256,8 +342,8 @@ AuditEventPresentation describeAuditEvent(AuditEntry entry) {
         description: machineId.isEmpty
             ? '已创建新的机台记录。'
             : keyword.isEmpty
-                ? '已创建机台 $machineId。'
-                : '已创建机台 $machineId，默认启动关键词为 $keyword。',
+            ? '已创建机台 $machineId。'
+            : '已创建机台 $machineId，默认启动关键词为 $keyword。',
       );
     case 'machine.registration.submit':
       if (entry.result != 'success') {
@@ -266,8 +352,8 @@ AuditEventPresentation describeAuditEvent(AuditEntry entry) {
           description: machineId.isEmpty
               ? (reason.isEmpty ? '机台提交公钥注册失败。' : '机台提交公钥注册失败，原因：$reason。')
               : (reason.isEmpty
-                  ? '机台 $machineId 提交公钥注册失败。'
-                  : '机台 $machineId 提交公钥注册失败，原因：$reason。'),
+                    ? '机台 $machineId 提交公钥注册失败。'
+                    : '机台 $machineId 提交公钥注册失败，原因：$reason。'),
         );
       }
       return AuditEventPresentation(
@@ -275,8 +361,8 @@ AuditEventPresentation describeAuditEvent(AuditEntry entry) {
         description: machineId.isEmpty
             ? '收到新的机台公钥注册请求，等待管理员审批。'
             : fingerprint.isEmpty
-                ? '机台 $machineId 已提交公钥注册，等待管理员审批。'
-                : '机台 $machineId 已提交公钥注册，请求由证书 ${_shortAuditValue(fingerprint)} 签名。',
+            ? '机台 $machineId 已提交公钥注册，等待管理员审批。'
+            : '机台 $machineId 已提交公钥注册，请求由证书 ${_shortAuditValue(fingerprint)} 签名。',
       );
     case 'machine.approval.update':
       return AuditEventPresentation(
@@ -284,8 +370,8 @@ AuditEventPresentation describeAuditEvent(AuditEntry entry) {
         description: machineId.isEmpty
             ? '机台公钥审批状态已更新。'
             : approved == false
-                ? '机台 $machineId 的公钥审批已取消。'
-                : '机台 $machineId 的公钥审批已通过。',
+            ? '机台 $machineId 的公钥审批已取消。'
+            : '机台 $machineId 的公钥审批已通过。',
       );
     case 'machine.registration.reset':
       return AuditEventPresentation(
@@ -300,8 +386,8 @@ AuditEventPresentation describeAuditEvent(AuditEntry entry) {
         description: machineId.isEmpty
             ? '机台启动关键词已被修改。'
             : keyword.isEmpty
-                ? '机台 $machineId 的启动关键词已更新。'
-                : '机台 $machineId 的启动关键词已更新为 $keyword。',
+            ? '机台 $machineId 的启动关键词已更新。'
+            : '机台 $machineId 的启动关键词已更新为 $keyword。',
       );
     case 'machine.evhd-password.update':
       return AuditEventPresentation(
@@ -314,30 +400,32 @@ AuditEventPresentation describeAuditEvent(AuditEntry entry) {
       return AuditEventPresentation(
         title: '读取机台 EVHD 明文密码',
         description: machineId.isEmpty
-            ? (reason.isEmpty ? '管理员读取了 EVHD 明文密码。' : '管理员读取了 EVHD 明文密码，原因：$reason。')
+            ? (reason.isEmpty
+                  ? '管理员读取了 EVHD 明文密码。'
+                  : '管理员读取了 EVHD 明文密码，原因：$reason。')
             : (reason.isEmpty
-                ? '管理员读取了机台 $machineId 的 EVHD 明文密码。'
-                : '管理员读取了机台 $machineId 的 EVHD 明文密码，原因：$reason。'),
+                  ? '管理员读取了机台 $machineId 的 EVHD 明文密码。'
+                  : '管理员读取了机台 $machineId 的 EVHD 明文密码，原因：$reason。'),
       );
     case 'machine.evhd-envelope.read':
       return AuditEventPresentation(
         title: entry.result == 'success' ? '机台获取 EVHD 密文成功' : '机台获取 EVHD 密文失败',
         description: machineId.isEmpty
             ? (entry.result == 'success'
-                ? '机台已通过鉴权并获取 EVHD 密文信封。'
-                : (reason.isEmpty ? '机台获取 EVHD 密文失败。' : '机台获取 EVHD 密文失败，原因：$reason。'))
+                  ? '机台已通过鉴权并获取 EVHD 密文信封。'
+                  : (reason.isEmpty
+                        ? '机台获取 EVHD 密文失败。'
+                        : '机台获取 EVHD 密文失败，原因：$reason。'))
             : (entry.result == 'success'
-                ? '机台 $machineId 已通过鉴权并获取 EVHD 密文信封。'
-                : (reason.isEmpty
-                    ? '机台 $machineId 获取 EVHD 密文失败。'
-                    : '机台 $machineId 获取 EVHD 密文失败，原因：$reason。')),
+                  ? '机台 $machineId 已通过鉴权并获取 EVHD 密文信封。'
+                  : (reason.isEmpty
+                        ? '机台 $machineId 获取 EVHD 密文失败。'
+                        : '机台 $machineId 获取 EVHD 密文失败，原因：$reason。')),
       );
     case 'machine.delete':
       return AuditEventPresentation(
         title: '已删除机台',
-        description: machineId.isEmpty
-            ? '机台记录已被删除。'
-            : '机台 $machineId 的记录已被删除。',
+        description: machineId.isEmpty ? '机台记录已被删除。' : '机台 $machineId 的记录已被删除。',
       );
     case 'security.trusted-certificate.add':
       return AuditEventPresentation(
@@ -698,9 +786,7 @@ class AuditEntry {
       path: (json['path'] as String?) ?? '',
       ip: (json['ip'] as String?) ?? '',
       metadata: Map<String, dynamic>.fromEntries(
-        json.entries.where(
-          (entry) => !_auditReservedKeys.contains(entry.key),
-        ),
+        json.entries.where((entry) => !_auditReservedKeys.contains(entry.key)),
       ),
     );
   }
@@ -744,11 +830,17 @@ List<String> buildAuditMachineOptions(
   Iterable<AuditEntry> entries,
 ) {
   final values = <String>{
-    ...machines.map((machine) => machine.machineId).where((value) => value.trim().isNotEmpty),
-    ...entries.map((entry) => entry.machineId ?? '').where((value) => value.trim().isNotEmpty),
+    ...machines
+        .map((machine) => machine.machineId)
+        .where((value) => value.trim().isNotEmpty),
+    ...entries
+        .map((entry) => entry.machineId ?? '')
+        .where((value) => value.trim().isNotEmpty),
   }.toList();
 
-  values.sort((left, right) => left.toLowerCase().compareTo(right.toLowerCase()));
+  values.sort(
+    (left, right) => left.toLowerCase().compareTo(right.toLowerCase()),
+  );
   return values;
 }
 
@@ -1358,7 +1450,9 @@ class AppController extends ChangeNotifier {
       if (isAuthenticated) {
         _applyOtpStatus(await api.getOtpStatus(), notify: false);
         machines = await api.getMachines();
-        auditEntries = await api.getAuditEntries(machineId: auditFilterMachineId);
+        auditEntries = await api.getAuditEntries(
+          machineId: auditFilterMachineId,
+        );
       } else {
         _clearOtpVerification(notify: false);
         otpRotationPreparation = null;
@@ -2023,10 +2117,12 @@ class _InitializationScreenState extends State<InitializationScreen> {
                   _buildFieldRow(
                     left: buildSecureTextField(
                       controller: _adminPasswordController,
+                      autofillHints: const <String>[AutofillHints.newPassword],
                       decoration: const InputDecoration(labelText: '管理员密码'),
                     ),
                     right: buildSecureTextField(
                       controller: _confirmPasswordController,
+                      autofillHints: const <String>[AutofillHints.newPassword],
                       decoration: const InputDecoration(labelText: '确认管理员密码'),
                     ),
                   ),
@@ -2074,9 +2170,7 @@ class _InitializationScreenState extends State<InitializationScreen> {
                     ),
                     right: TextField(
                       controller: _defaultVhdController,
-                      decoration: const InputDecoration(
-                        labelText: '默认启动关键词',
-                      ),
+                      decoration: const InputDecoration(labelText: '默认启动关键词'),
                     ),
                   ),
                   _buildFieldRow(
@@ -2298,6 +2392,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   const SizedBox(height: 12),
                   buildSecureTextField(
                     controller: _passwordController,
+                    autofillHints: const <String>[AutofillHints.password],
                     decoration: const InputDecoration(labelText: '管理员密码'),
                   ),
                   const SizedBox(height: 16),
@@ -2745,7 +2840,9 @@ class MachinesView extends StatelessWidget {
                             OutlinedButton.icon(
                               onPressed: () async {
                                 try {
-                                  await onOpenAuditForMachine(machine.machineId);
+                                  await onOpenAuditForMachine(
+                                    machine.machineId,
+                                  );
                                 } catch (error) {
                                   if (!context.mounted) {
                                     return;
@@ -3067,7 +3164,8 @@ class _AuditViewState extends State<AuditView> {
       controller.auditEntries,
     ).toList();
     final selectedMachineId = controller.auditFilterMachineId;
-    if (selectedMachineId != null && !machineOptions.contains(selectedMachineId)) {
+    if (selectedMachineId != null &&
+        !machineOptions.contains(selectedMachineId)) {
       machineOptions.insert(0, selectedMachineId);
     }
     final searchQuery = _searchController.text.trim().toLowerCase();
@@ -3085,9 +3183,8 @@ class _AuditViewState extends State<AuditView> {
             Text('审计日志', style: Theme.of(context).textTheme.headlineSmall),
             const Spacer(),
             OutlinedButton.icon(
-              onPressed: () => _reloadAudit(
-                machineId: controller.auditFilterMachineId,
-              ),
+              onPressed: () =>
+                  _reloadAudit(machineId: controller.auditFilterMachineId),
               icon: const Icon(Icons.refresh_rounded),
               label: const Text('刷新审计'),
             ),
@@ -3247,13 +3344,13 @@ class _SettingsViewState extends State<SettingsView> {
   final TextEditingController _confirmPasswordController =
       TextEditingController();
   final TextEditingController _otpRotateCurrentCodeController =
-    TextEditingController();
+      TextEditingController();
   final TextEditingController _otpRotateIssuerController =
-    TextEditingController();
+      TextEditingController();
   final TextEditingController _otpRotateAccountController =
-    TextEditingController();
+      TextEditingController();
   final TextEditingController _otpRotateNewCodeController =
-    TextEditingController();
+      TextEditingController();
 
   @override
   void initState() {
@@ -3461,8 +3558,8 @@ class _SettingsViewState extends State<SettingsView> {
                 children: <Widget>[
                   FilledButton.icon(
                     onPressed: () async {
-                      final currentCode =
-                          _otpRotateCurrentCodeController.text.trim();
+                      final currentCode = _otpRotateCurrentCodeController.text
+                          .trim();
                       if (currentCode.isEmpty) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(content: Text('请输入旧 OTP 验证码。')),
@@ -3559,16 +3656,19 @@ class _SettingsViewState extends State<SettingsView> {
             children: <Widget>[
               buildSecureTextField(
                 controller: _currentPasswordController,
+                autofillHints: const <String>[AutofillHints.password],
                 decoration: const InputDecoration(labelText: '当前密码'),
               ),
               const SizedBox(height: 12),
               buildSecureTextField(
                 controller: _newPasswordController,
+                autofillHints: const <String>[AutofillHints.newPassword],
                 decoration: const InputDecoration(labelText: '新密码'),
               ),
               const SizedBox(height: 12),
               buildSecureTextField(
                 controller: _confirmPasswordController,
+                autofillHints: const <String>[AutofillHints.newPassword],
                 decoration: const InputDecoration(labelText: '确认新密码'),
               ),
               const SizedBox(height: 12),
@@ -3733,15 +3833,16 @@ Future<String?> showSingleInputDialog(
     context: context,
     builder: (context) => AlertDialog(
       title: Text(title),
-      content: TextField(
-        controller: controller,
-        keyboardType: obscureText ? TextInputType.visiblePassword : null,
-        obscureText: obscureText,
-        autocorrect: !obscureText,
-        enableSuggestions: !obscureText,
-        enableIMEPersonalizedLearning: !obscureText,
-        decoration: InputDecoration(labelText: label),
-      ),
+      content: obscureText
+          ? buildSecureTextField(
+              controller: controller,
+              autofillHints: const <String>[AutofillHints.password],
+              decoration: InputDecoration(labelText: label),
+            )
+          : TextField(
+              controller: controller,
+              decoration: InputDecoration(labelText: label),
+            ),
       actions: <Widget>[
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
