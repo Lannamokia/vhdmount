@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:vhd_mount_admin_flutter/main.dart';
@@ -256,6 +257,300 @@ void main() {
     expect(find.text('机器管理'), findsAtLeastNWidgets(1));
     expect(find.text('MACHINE-01'), findsOneWidget);
   });
+
+  testWidgets('login shell stays stable on narrow windows', (tester) async {
+    tester.view.physicalSize = const Size(280, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final controller = AppController(
+      api: FakeAdminApi(
+        serverStatus: const ServerStatus(
+          initialized: true,
+          pendingInitialization: false,
+          databaseReady: true,
+          defaultVhdKeyword: 'SAFEBOOT',
+          trustedRegistrationCertificateCount: 1,
+        ),
+        authStatus: const AuthStatus(
+          initialized: true,
+          isAuthenticated: false,
+          otpVerified: false,
+        ),
+      ),
+      clientConfigStore: FakeClientConfigStore(),
+    );
+
+    await tester.pumpWidget(AdminApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    expect(find.text('管理员登录'), findsOneWidget);
+    expect(find.text('连接状态'), findsOneWidget);
+    expect(find.text('数据库已连接'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('login shell resizes to compact mode without overflow', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1400, 920);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final controller = AppController(
+      api: FakeAdminApi(
+        serverStatus: const ServerStatus(
+          initialized: true,
+          pendingInitialization: false,
+          databaseReady: true,
+          defaultVhdKeyword: 'SAFEBOOT',
+          trustedRegistrationCertificateCount: 1,
+        ),
+        authStatus: const AuthStatus(
+          initialized: true,
+          isAuthenticated: false,
+          otpVerified: false,
+        ),
+      ),
+      clientConfigStore: FakeClientConfigStore(),
+    );
+
+    await tester.pumpWidget(AdminApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    tester.view.physicalSize = const Size(1400, 780);
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(find.text('管理员登录'), findsOneWidget);
+    expect(find.text('连接状态'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('login hero panel stays above the form on wide desktops', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1400, 920);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final controller = AppController(
+      api: FakeAdminApi(
+        serverStatus: const ServerStatus(
+          initialized: true,
+          pendingInitialization: false,
+          databaseReady: true,
+          defaultVhdKeyword: 'SAFEBOOT',
+          trustedRegistrationCertificateCount: 1,
+        ),
+        authStatus: const AuthStatus(
+          initialized: true,
+          isAuthenticated: false,
+          otpVerified: false,
+        ),
+      ),
+      clientConfigStore: FakeClientConfigStore(),
+    );
+
+    await tester.pumpWidget(AdminApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    final heroTop = tester.getTopLeft(find.text('安全登录')).dy;
+    final formTop = tester.getTopLeft(find.text('管理员登录')).dy;
+    final heroPanel = find.ancestor(
+      of: find.text('安全登录'),
+      matching: find.byType(AppPanel),
+    );
+    final formPanel = find.ancestor(
+      of: find.text('管理员登录'),
+      matching: find.byType(AppPanel),
+    );
+    final heroWidth = tester.getSize(heroPanel.first).width;
+    final formWidth = tester.getSize(formPanel.first).width;
+
+    expect(formTop - heroTop, greaterThan(120));
+    expect(heroWidth, closeTo(formWidth, 0.01));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('uses styled sidebar buttons on wide desktop windows', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 960);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final controller = AppController(
+      api: FakeAdminApi(
+        serverStatus: const ServerStatus(
+          initialized: true,
+          pendingInitialization: false,
+          databaseReady: true,
+          defaultVhdKeyword: 'SAFEBOOT',
+          trustedRegistrationCertificateCount: 1,
+        ),
+        authStatus: const AuthStatus(
+          initialized: true,
+          isAuthenticated: true,
+          otpVerified: true,
+        ),
+        machines: const <MachineRecord>[
+          MachineRecord(
+            machineId: 'MACHINE-01',
+            protectedState: false,
+            vhdKeyword: 'SAFEBOOT',
+            evhdPasswordConfigured: true,
+            approved: true,
+            revoked: false,
+            keyId: 'key-01',
+            keyType: 'RSA',
+            registrationCertFingerprint: 'ABC123',
+            lastSeen: '2026-04-03T08:00:00Z',
+          ),
+        ],
+      ),
+      clientConfigStore: FakeClientConfigStore(),
+    );
+
+    await tester.pumpWidget(AdminApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(DashboardSidebarButton), findsNWidgets(4));
+    expect(find.text('审批、保护、EVHD'), findsOneWidget);
+    expect(find.byType(NavigationRail), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('overview cards keep equal size while resizing', (tester) async {
+    tester.view.physicalSize = const Size(1600, 960);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final controller = AppController(
+      api: FakeAdminApi(
+        serverStatus: const ServerStatus(
+          initialized: true,
+          pendingInitialization: false,
+          databaseReady: true,
+          defaultVhdKeyword: 'SAFEBOOT',
+          trustedRegistrationCertificateCount: 1,
+        ),
+        authStatus: const AuthStatus(
+          initialized: true,
+          isAuthenticated: true,
+          otpVerified: true,
+        ),
+        machines: const <MachineRecord>[
+          MachineRecord(
+            machineId: 'MACHINE-01',
+            protectedState: false,
+            vhdKeyword: 'SAFEBOOT',
+            evhdPasswordConfigured: true,
+            approved: true,
+            revoked: false,
+            keyId: 'key-01',
+            keyType: 'RSA',
+            registrationCertFingerprint: 'ABC123',
+            lastSeen: '2026-04-03T08:00:00Z',
+          ),
+        ],
+      ),
+      clientConfigStore: FakeClientConfigStore(),
+    );
+
+    await tester.pumpWidget(AdminApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    Finder cards = find.byType(OverviewStatCard);
+    expect(cards, findsNWidgets(4));
+
+    Size firstSize = tester.getSize(cards.at(0));
+    for (int index = 1; index < 4; index++) {
+      final size = tester.getSize(cards.at(index));
+      expect(size.width, closeTo(firstSize.width, 0.01));
+      expect(size.height, closeTo(firstSize.height, 0.01));
+    }
+
+    tester.view.physicalSize = const Size(1180, 960);
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    cards = find.byType(OverviewStatCard);
+    firstSize = tester.getSize(cards.at(0));
+    for (int index = 1; index < 4; index++) {
+      final size = tester.getSize(cards.at(index));
+      expect(size.width, closeTo(firstSize.width, 0.01));
+      expect(size.height, closeTo(firstSize.height, 0.01));
+    }
+
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('uses compact dashboard layout on short desktop windows', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1400, 540);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final controller = AppController(
+      api: FakeAdminApi(
+        serverStatus: const ServerStatus(
+          initialized: true,
+          pendingInitialization: false,
+          databaseReady: true,
+          defaultVhdKeyword: 'SAFEBOOT',
+          trustedRegistrationCertificateCount: 1,
+        ),
+        authStatus: const AuthStatus(
+          initialized: true,
+          isAuthenticated: true,
+          otpVerified: true,
+        ),
+        machines: const <MachineRecord>[
+          MachineRecord(
+            machineId: 'MACHINE-01',
+            protectedState: false,
+            vhdKeyword: 'SAFEBOOT',
+            evhdPasswordConfigured: true,
+            approved: true,
+            revoked: false,
+            keyId: 'key-01',
+            keyType: 'RSA',
+            registrationCertFingerprint: 'ABC123',
+            lastSeen: '2026-04-03T08:00:00Z',
+          ),
+        ],
+      ),
+      clientConfigStore: FakeClientConfigStore(),
+    );
+
+    await tester.pumpWidget(AdminApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(NavigationBar), findsOneWidget);
+    expect(find.byType(NavigationRail), findsNothing);
+    expect(find.text('MACHINE-01'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 class FakeAdminApi implements AdminApi {
@@ -346,9 +641,7 @@ class FakeAdminApi implements AdminApi {
     if (machineId == null || machineId.isEmpty) {
       return auditEntries;
     }
-    return auditEntries
-        .where((entry) => entry.machineId == machineId)
-        .toList();
+    return auditEntries.where((entry) => entry.machineId == machineId).toList();
   }
 
   @override

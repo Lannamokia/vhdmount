@@ -39,6 +39,9 @@ class Win32Window {
   // Show the current window. Returns true if the window was successfully shown.
   bool Show();
 
+  // Sets the minimum client size that the window can be resized down to.
+  void SetMinSize(Size size);
+
   // Release OS resources associated with window.
   void Destroy();
 
@@ -97,6 +100,9 @@ class Win32Window {
 
   // window handle for hosted content.
   HWND child_content_ = nullptr;
+
+  // minimum client size for the window.
+  Size minimum_size_{0, 0};
 };
 
 #endif  // RUNNER_WIN32_WINDOW_H_

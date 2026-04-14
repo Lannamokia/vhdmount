@@ -153,6 +153,10 @@ bool Win32Window::Show() {
   return ShowWindow(window_handle_, SW_SHOWNORMAL);
 }
 
+void Win32Window::SetMinSize(Size size) {
+  minimum_size_ = size;
+}
+
 // static
 LRESULT CALLBACK Win32Window::WndProc(HWND const window,
                                       UINT const message,
@@ -179,6 +183,24 @@ Win32Window::MessageHandler(HWND hwnd,
                             WPARAM const wparam,
                             LPARAM const lparam) noexcept {
   switch (message) {
+    case WM_GETMINMAXINFO: {
+      if (minimum_size_.width == 0 || minimum_size_.height == 0) {
+        break;
+      }
+
+      auto* minmax_info = reinterpret_cast<MINMAXINFO*>(lparam);
+      const UINT dpi = GetDpiForWindow(hwnd);
+      const double scale_factor = dpi / 96.0;
+      RECT window_rect = {0, 0, Scale(minimum_size_.width, scale_factor),
+                          Scale(minimum_size_.height, scale_factor)};
+      AdjustWindowRectEx(&window_rect,
+                         static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_STYLE)),
+                         FALSE,
+                         static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_EXSTYLE)));
+      minmax_info->ptMinTrackSize.x = window_rect.right - window_rect.left;
+      minmax_info->ptMinTrackSize.y = window_rect.bottom - window_rect.top;
+      return 0;
+    }
     case WM_DESTROY:
       window_handle_ = nullptr;
       Destroy();
