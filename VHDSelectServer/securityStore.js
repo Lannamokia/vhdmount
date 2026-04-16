@@ -180,6 +180,43 @@ class SecurityStore {
         return authenticator.check(String(code || '').trim(), config.totpSecret);
     }
 
+    createTotpBinding({ issuer, accountName, totpSecret } = {}) {
+        const normalizedIssuer = String(issuer || '').trim() || 'VHDMountServer';
+        const normalizedAccountName = String(accountName || '').trim() || 'admin';
+        const secret = String(totpSecret || '').trim() || authenticator.generateSecret();
+
+        return {
+            issuer: normalizedIssuer,
+            accountName: normalizedAccountName,
+            totpSecret: secret,
+            otpauthUrl: authenticator.keyuri(normalizedAccountName, normalizedIssuer, secret),
+        };
+    }
+
+    verifyTotpWithSecret(code, totpSecret) {
+        return authenticator.check(String(code || '').trim(), String(totpSecret || '').trim());
+    }
+
+    updateTotpBinding({ totpSecret, issuer, accountName }) {
+        const config = this.loadSecurityConfig();
+        const binding = this.createTotpBinding({
+            issuer: issuer || config.totpIssuer,
+            accountName: accountName || config.totpAccountName,
+            totpSecret,
+        });
+
+        config.totpSecret = binding.totpSecret;
+        config.totpIssuer = binding.issuer;
+        config.totpAccountName = binding.accountName;
+        config.updatedAt = new Date().toISOString();
+        this.saveSecurityConfig(config);
+
+        return {
+            ...binding,
+            updatedAt: config.updatedAt,
+        };
+    }
+
     listTrustedRegistrationCertificates() {
         const config = this.loadSecurityConfig();
         return config.trustedRegistrationCertificates || [];

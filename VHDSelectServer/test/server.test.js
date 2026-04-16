@@ -486,6 +486,41 @@ test('OTP 二次验证有效期默认为 60 秒', async (t) => {
     assert.ok(otpResponse.body.otpVerifiedUntil <= finishedAt + runtime.otpStepUpWindowMs);
 });
 
+test('管理员可以先校验旧 OTP 再更换新的 OTP 绑定密钥', async (t) => {
+    const { client, totpSecret } = await createInitializedHarness(t);
+
+    await client.post('/api/auth/login').send({ password: 'ComplexPassword123!' }).expect(200);
+
+    const prepareResponse = await client
+        .post('/api/auth/otp/rotate/prepare')
+        .send({
+            currentCode: authenticator.generate(totpSecret),
+            issuer: 'VHDMountRotated',
+            accountName: 'security-admin',
+        })
+        .expect(200);
+
+    assert.equal(prepareResponse.body.issuer, 'VHDMountRotated');
+    assert.equal(prepareResponse.body.accountName, 'security-admin');
+    assert.ok(prepareResponse.body.totpSecret);
+    assert.ok(prepareResponse.body.otpauthUrl);
+
+    await client
+        .post('/api/auth/otp/rotate/complete')
+        .send({ code: authenticator.generate(prepareResponse.body.totpSecret) })
+        .expect(200);
+
+    await client
+        .post('/api/auth/otp/verify')
+        .send({ code: authenticator.generate(totpSecret) })
+        .expect(401);
+
+    await client
+        .post('/api/auth/otp/verify')
+        .send({ code: authenticator.generate(prepareResponse.body.totpSecret) })
+        .expect(200);
+});
+
 test('管理员可以新增机台、切换保护状态并删除机台', async (t) => {
     const { client } = await createInitializedHarness(t);
 
@@ -526,9 +561,47 @@ test('管理员可以新增机台、切换保护状态并删除机台', async (t
         .expect(404);
 });
 
+test('机台 ID 保留原始大小写并支持按机台筛选审计日志', async (t) => {
+    const { client } = await createInitializedHarness(t);
+
+    await client.post('/api/auth/login').send({ password: 'ComplexPassword123!' }).expect(200);
+
+    await client
+        .post('/api/machines')
+        .send({
+            machineId: 'Machine-Mixed-01',
+            protected: false,
+            vhdKeyword: 'SAFEBOOT',
+        })
+        .expect(201);
+
+    await client
+        .post('/api/machines')
+        .send({
+            machineId: 'Machine-Other-02',
+            protected: true,
+            vhdKeyword: 'OTHERBOOT',
+        })
+        .expect(201);
+
+    const detailResponse = await client
+        .get('/api/machines/Machine-Mixed-01')
+        .expect(200);
+
+    assert.equal(detailResponse.body.machine.machine_id, 'Machine-Mixed-01');
+
+    const auditResponse = await client
+        .get('/api/audit')
+        .query({ machineId: 'Machine-Mixed-01', limit: 20 })
+        .expect(200);
+
+    assert.ok(auditResponse.body.entries.length >= 1);
+    assert.ok(auditResponse.body.entries.every((entry) => entry.machineId === 'Machine-Mixed-01'));
+});
+
 test('机台注册必须使用可信证书签名且拒绝 nonce 重放', async (t) => {
     const { client } = await createInitializedHarness(t);
-    const machineId = 'MACHINE-REG';
+    const machineId = 'Machine-Reg';
     const keyId = 'key-01';
     const keyType = 'RSA';
     const machineKeyPair = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });

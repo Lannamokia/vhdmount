@@ -29,11 +29,45 @@ namespace VHDMounter
 
     public static class UpdateSecurity
     {
+        public const long MaxAppUpdatePayloadBytes = 1L << 30;
+
         public static UpdateManifest LoadManifest(string manifestPath)
         {
             var json = File.ReadAllText(manifestPath);
             var manifest = JsonSerializer.Deserialize<UpdateManifest>(json);
             return manifest ?? new UpdateManifest();
+        }
+
+        public static bool ValidateAppUpdatePayloadSize(UpdateManifest manifest, out long totalBytes, out string errorMessage)
+        {
+            totalBytes = 0;
+            errorMessage = string.Empty;
+
+            if (!string.Equals(manifest.type, "app-update", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            try
+            {
+                checked
+                {
+                    totalBytes = manifest.files?.Sum(file => Math.Max(0, file.size)) ?? 0;
+                }
+            }
+            catch (OverflowException)
+            {
+                errorMessage = "app-update 内容大小计算溢出";
+                return false;
+            }
+
+            if (totalBytes > MaxAppUpdatePayloadBytes)
+            {
+                errorMessage = $"app-update 内容过大: {FormatBytes(totalBytes)}，上限为 {FormatBytes(MaxAppUpdatePayloadBytes)}";
+                return false;
+            }
+
+            return true;
         }
 
         public static bool VerifyManifestSignature(string manifestPath, string signaturePath, string trustedKeysPemPath)
@@ -130,6 +164,11 @@ namespace VHDMounter
                 }
             }
             return blocks;
+        }
+
+        private static string FormatBytes(long bytes)
+        {
+            return $"{bytes / 1024d / 1024d:F2} MB";
         }
     }
 }

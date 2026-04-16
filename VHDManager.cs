@@ -1520,7 +1520,7 @@ namespace VHDMounter
 
         private string BuildRegistrationSigningPayload(string machineId, string keyId, string keyType, string pubkeyPem, long timestamp, string nonce)
         {
-            var canonicalMachineId = (machineId ?? string.Empty).Trim().ToUpperInvariant();
+            var canonicalMachineId = (machineId ?? string.Empty).Trim();
             var canonicalKeyId = (keyId ?? string.Empty).Trim();
             var canonicalKeyType = (keyType ?? string.Empty).Trim().ToUpperInvariant();
             var canonicalPublicKeyPem = NormalizePemText(pubkeyPem);

@@ -312,7 +312,7 @@ async function createApp(options = {}) {
         standardHeaders: true,
         legacyHeaders: false,
         keyGenerator: (req) => {
-            const machineId = String(req.params?.machineId || '').trim().toUpperCase();
+            const machineId = String(req.params?.machineId || '').trim();
             return machineId ? `machine-registration:${machineId}` : `machine-registration-ip:${rateLimit.ipKeyGenerator(req.ip)}`;
         },
         handler: (req, res, _next, options) => {
@@ -392,6 +392,12 @@ async function createApp(options = {}) {
             error: '需要完成 OTP 二次验证',
             requireOtp: true,
         });
+    }
+
+    function clearPendingOtpRotation(req) {
+        if (req.session?.pendingOtpRotation) {
+            delete req.session.pendingOtpRotation;
+        }
     }
 
     app.get('/api/init/status', (req, res) => {
@@ -584,6 +590,7 @@ async function createApp(options = {}) {
         securityStore.updatePassword(newPassword);
         runtime.securityConfig = securityStore.loadSecurityConfig();
         req.session.otpVerifiedUntil = 0;
+        clearPendingOtpRotation(req);
         await saveSession(req);
 
         runtime.writeAudit(req, {
@@ -632,6 +639,85 @@ async function createApp(options = {}) {
             otpVerifiedUntil,
         });
     });
+
+    app.post('/api/auth/otp/rotate/prepare', requireAuth, sensitiveLimiter, asyncHandler(async (req, res) => {
+        const currentCode = assertString(req.body?.currentCode, 'currentCode', 6, 12);
+        const issuer = req.body?.issuer
+            ? assertString(req.body.issuer, 'issuer', 1, 128)
+            : (runtime.securityConfig?.totpIssuer || 'VHDMountServer');
+        const accountName = req.body?.accountName
+            ? assertString(req.body.accountName, 'accountName', 1, 128)
+            : (runtime.securityConfig?.totpAccountName || 'admin');
+
+        if (!securityStore.verifyTotp(currentCode)) {
+            runtime.writeAudit(req, {
+                type: 'auth.otp.rotate.prepare',
+                actor: 'admin',
+                result: 'failure',
+            });
+            throw createJsonError(401, '旧 OTP 校验失败');
+        }
+
+        const binding = securityStore.createTotpBinding({ issuer, accountName });
+        req.session.pendingOtpRotation = {
+            issuer: binding.issuer,
+            accountName: binding.accountName,
+            totpSecret: binding.totpSecret,
+            createdAt: new Date().toISOString(),
+        };
+        req.session.otpVerifiedUntil = 0;
+        await saveSession(req);
+
+        runtime.writeAudit(req, {
+            type: 'auth.otp.rotate.prepare',
+            actor: 'admin',
+            result: 'success',
+        });
+
+        res.json({
+            success: true,
+            ...binding,
+        });
+    }));
+
+    app.post('/api/auth/otp/rotate/complete', requireAuth, sensitiveLimiter, asyncHandler(async (req, res) => {
+        const code = assertString(req.body?.code, 'code', 6, 12);
+        const pending = req.session?.pendingOtpRotation;
+
+        if (!pending?.totpSecret || !pending?.issuer || !pending?.accountName) {
+            throw createJsonError(409, '未找到待完成的 OTP 更换会话，请先验证旧 OTP');
+        }
+
+        if (!securityStore.verifyTotpWithSecret(code, pending.totpSecret)) {
+            runtime.writeAudit(req, {
+                type: 'auth.otp.rotate.complete',
+                actor: 'admin',
+                result: 'failure',
+            });
+            throw createJsonError(401, '新 OTP 校验失败');
+        }
+
+        securityStore.updateTotpBinding({
+            totpSecret: pending.totpSecret,
+            issuer: pending.issuer,
+            accountName: pending.accountName,
+        });
+        runtime.securityConfig = securityStore.loadSecurityConfig();
+        req.session.otpVerifiedUntil = Date.now() + otpStepUpWindowMs;
+        clearPendingOtpRotation(req);
+        await saveSession(req);
+
+        runtime.writeAudit(req, {
+            type: 'auth.otp.rotate.complete',
+            actor: 'admin',
+            result: 'success',
+        });
+
+        res.json({
+            success: true,
+            otpVerifiedUntil: req.session.otpVerifiedUntil,
+        });
+    }));
 
     app.get('/api/settings/default-vhd', requireAuth, (req, res) => {
         res.json({
@@ -802,18 +888,30 @@ async function createApp(options = {}) {
             throw createJsonError(400, '当前仅支持 RSA 密钥');
         }
 
-        const verification = verifySignedRegistrationRequest({
-            machineId,
-            keyId,
-            keyType,
-            pubkeyPem,
-            registrationCertificatePem: assertString(req.body?.registrationCertificatePem, 'registrationCertificatePem', 64, 32768),
-            signature: assertString(req.body?.signature, 'signature', 32, 32768),
-            timestamp: req.body?.timestamp,
-            nonce: assertString(req.body?.nonce, 'nonce', 16, 256),
-            trustedCertificates: runtime.securityStore.listTrustedRegistrationCertificates(),
-            nonceCache: runtime.registrationNonceCache,
-        });
+        let verification;
+        try {
+            verification = verifySignedRegistrationRequest({
+                machineId,
+                keyId,
+                keyType,
+                pubkeyPem,
+                registrationCertificatePem: assertString(req.body?.registrationCertificatePem, 'registrationCertificatePem', 64, 32768),
+                signature: assertString(req.body?.signature, 'signature', 32, 32768),
+                timestamp: req.body?.timestamp,
+                nonce: assertString(req.body?.nonce, 'nonce', 16, 256),
+                trustedCertificates: runtime.securityStore.listTrustedRegistrationCertificates(),
+                nonceCache: runtime.registrationNonceCache,
+            });
+        } catch (error) {
+            runtime.writeAudit(req, {
+                type: 'machine.registration.submit',
+                actor: 'machine',
+                result: 'failure',
+                machineId,
+                reason: error.message,
+            });
+            throw error;
+        }
 
         const machine = await runtime.database.updateMachineKey(machineId, {
             keyId,
@@ -956,27 +1054,73 @@ async function createApp(options = {}) {
         const machine = await runtime.database.getMachine(machineId);
 
         if (!machine) {
+            runtime.writeAudit(req, {
+                type: 'machine.evhd-envelope.read',
+                actor: 'machine',
+                result: 'failure',
+                machineId,
+                reason: '机台不存在',
+            });
             throw createJsonError(404, '机台不存在');
         }
 
         await runtime.database.updateMachineLastSeen(machineId);
 
         if (machine.revoked) {
+            runtime.writeAudit(req, {
+                type: 'machine.evhd-envelope.read',
+                actor: 'machine',
+                result: 'failure',
+                machineId,
+                keyId: machine.key_id,
+                reason: '机台密钥已吊销',
+            });
             throw createJsonError(403, '机台密钥已吊销');
         }
         if (!machine.approved) {
+            runtime.writeAudit(req, {
+                type: 'machine.evhd-envelope.read',
+                actor: 'machine',
+                result: 'failure',
+                machineId,
+                keyId: machine.key_id,
+                reason: '机台密钥未审批',
+            });
             throw createJsonError(403, '机台密钥未审批');
         }
         if (!machine.pubkey_pem) {
+            runtime.writeAudit(req, {
+                type: 'machine.evhd-envelope.read',
+                actor: 'machine',
+                result: 'failure',
+                machineId,
+                reason: '机台未注册公钥',
+            });
             throw createJsonError(400, '机台未注册公钥');
         }
 
         const evhdPassword = await runtime.database.getMachineEvhdPassword(machineId);
         if (!evhdPassword) {
+            runtime.writeAudit(req, {
+                type: 'machine.evhd-envelope.read',
+                actor: 'machine',
+                result: 'failure',
+                machineId,
+                keyId: machine.key_id,
+                reason: '机台未配置 EVHD 密码',
+            });
             throw createJsonError(404, '机台未配置 EVHD 密码');
         }
 
         const ciphertext = encryptWithPublicKeyRSA(machine.pubkey_pem, evhdPassword);
+        runtime.writeAudit(req, {
+            type: 'machine.evhd-envelope.read',
+            actor: 'machine',
+            result: 'success',
+            machineId,
+            keyId: machine.key_id,
+        });
+
         res.json({
             success: true,
             machineId,
@@ -1088,8 +1232,9 @@ async function createApp(options = {}) {
 
     app.get('/api/audit', requireAuth, asyncHandler(async (req, res) => {
         const type = req.query.type ? assertString(req.query.type, 'type', 1, 64) : undefined;
+        const machineId = req.query.machineId ? assertMachineId(req.query.machineId) : undefined;
         const limit = parsePositiveInteger(req.query.limit, 100, 500);
-        const entries = auditLog.read({ type, limit });
+        const entries = auditLog.read({ type, limit, machineId });
         res.json({
             success: true,
             entries,

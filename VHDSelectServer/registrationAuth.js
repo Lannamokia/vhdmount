@@ -9,7 +9,7 @@ class RegistrationAuthError extends Error {
 }
 
 function buildRegistrationSigningPayload({ machineId, keyId, keyType, pubkeyPem, timestamp, nonce }) {
-    const canonicalMachineId = String(machineId || '').trim().toUpperCase();
+    const canonicalMachineId = String(machineId || '').trim();
     const canonicalKeyId = String(keyId || '').trim();
     const canonicalKeyType = String(keyType || '').trim().toUpperCase();
     const canonicalPublicKeyPem = String(pubkeyPem || '').trim();

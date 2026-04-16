@@ -3,11 +3,32 @@ const path = require('path');
 
 const { ensureWritableDirectory } = require('./configStoreUtils');
 
+const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
+const DEFAULT_MAX_FILES = 5;
+
+function normalizePositiveInteger(value, fallbackValue, minValue = 1, maxValue = Number.MAX_SAFE_INTEGER) {
+    const parsed = Number.parseInt(String(value ?? ''), 10);
+    if (!Number.isFinite(parsed) || parsed < minValue) {
+        return fallbackValue;
+    }
+    return Math.min(parsed, maxValue);
+}
+
 class AuditLog {
-    constructor(filePath) {
+    constructor(filePath, options = {}) {
         this.filePath = filePath;
         const dir = path.dirname(filePath);
         ensureWritableDirectory(dir);
+        this.maxBytes = normalizePositiveInteger(
+            options.maxBytes ?? process.env.AUDIT_LOG_MAX_BYTES,
+            DEFAULT_MAX_BYTES,
+        );
+        this.maxFiles = normalizePositiveInteger(
+            options.maxFiles ?? process.env.AUDIT_LOG_MAX_FILES,
+            DEFAULT_MAX_FILES,
+            1,
+            20,
+        );
     }
 
     append(entry) {
@@ -15,15 +36,50 @@ class AuditLog {
             ...entry,
             timestamp: entry.timestamp || new Date().toISOString(),
         };
-        fs.appendFileSync(this.filePath, JSON.stringify(record) + '\n', 'utf8');
+        const line = JSON.stringify(record) + '\n';
+        this.rotateIfNeeded(Buffer.byteLength(line, 'utf8'));
+        fs.appendFileSync(this.filePath, line, 'utf8');
     }
 
-    read({ type, limit = 100 } = {}) {
-        if (!fs.existsSync(this.filePath)) {
-            return [];
+    read({ type, limit = 100, machineId } = {}) {
+        const rows = this.getLogFilesOldestToNewest()
+            .flatMap((filePath) => this.readRowsFromFile(filePath));
+
+        const normalizedMachineId = String(machineId || '').trim();
+        const filtered = rows.filter((row) => {
+            if (type && row.type !== type) {
+                return false;
+            }
+
+            if (normalizedMachineId && String(row.machineId || '').trim() !== normalizedMachineId) {
+                return false;
+            }
+
+            return true;
+        });
+
+        return filtered.slice(-Math.max(1, Math.min(limit, 500))).reverse();
+    }
+
+    getLogFilesOldestToNewest() {
+        const files = [];
+
+        for (let index = this.maxFiles - 1; index >= 1; index -= 1) {
+            const rotatedPath = `${this.filePath}.${index}`;
+            if (fs.existsSync(rotatedPath)) {
+                files.push(rotatedPath);
+            }
         }
 
-        const rows = fs.readFileSync(this.filePath, 'utf8')
+        if (fs.existsSync(this.filePath)) {
+            files.push(this.filePath);
+        }
+
+        return files;
+    }
+
+    readRowsFromFile(filePath) {
+        return fs.readFileSync(filePath, 'utf8')
             .split(/\r?\n/)
             .map((line) => line.trim())
             .filter(Boolean)
@@ -35,9 +91,37 @@ class AuditLog {
                 }
             })
             .filter(Boolean);
+    }
 
-        const filtered = type ? rows.filter((row) => row.type === type) : rows;
-        return filtered.slice(-Math.max(1, Math.min(limit, 500))).reverse();
+    rotateIfNeeded(incomingBytes) {
+        if (!fs.existsSync(this.filePath)) {
+            return;
+        }
+
+        const currentSize = fs.statSync(this.filePath).size;
+        if (currentSize + incomingBytes <= this.maxBytes) {
+            return;
+        }
+
+        const oldestRotatedPath = `${this.filePath}.${this.maxFiles - 1}`;
+        if (this.maxFiles > 1 && fs.existsSync(oldestRotatedPath)) {
+            fs.unlinkSync(oldestRotatedPath);
+        }
+
+        for (let index = this.maxFiles - 1; index >= 2; index -= 1) {
+            const sourcePath = `${this.filePath}.${index - 1}`;
+            const targetPath = `${this.filePath}.${index}`;
+            if (fs.existsSync(sourcePath)) {
+                fs.renameSync(sourcePath, targetPath);
+            }
+        }
+
+        if (this.maxFiles > 1) {
+            fs.renameSync(this.filePath, `${this.filePath}.1`);
+            return;
+        }
+
+        fs.truncateSync(this.filePath, 0);
     }
 }
 

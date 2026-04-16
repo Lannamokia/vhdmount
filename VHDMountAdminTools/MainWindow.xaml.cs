@@ -12,6 +12,8 @@ namespace VHDMountAdminTools
 {
     public partial class MainWindow : Window
     {
+        private const long MaxAppUpdatePayloadBytes = 1L << 30;
+
         public MainWindow()
         {
             InitializeComponent();
@@ -117,6 +119,7 @@ namespace VHDMountAdminTools
                 var createdAt = DateTime.UtcNow;
                 var files = Directory.GetFiles(payloadDirectory, "*", SearchOption.AllDirectories);
                 var manifestFiles = new System.Collections.Generic.List<object>();
+                long totalPayloadBytes = 0;
 
                 foreach (var file in files)
                 {
@@ -124,6 +127,10 @@ namespace VHDMountAdminTools
                     using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read);
                     using var sha = SHA256.Create();
                     var hash = sha.ComputeHash(stream);
+                    checked
+                    {
+                        totalPayloadBytes += stream.Length;
+                    }
 
                     manifestFiles.Add(new
                     {
@@ -134,6 +141,11 @@ namespace VHDMountAdminTools
                         size = stream.Length,
                         sha256 = Convert.ToHexString(hash).ToLowerInvariant(),
                     });
+                }
+
+                if (string.Equals(type, "app-update", StringComparison.OrdinalIgnoreCase) && totalPayloadBytes > MaxAppUpdatePayloadBytes)
+                {
+                    throw new InvalidOperationException($"app-update 内容过大: {FormatBytes(totalPayloadBytes)}，上限为 {FormatBytes(MaxAppUpdatePayloadBytes)}。请改用 vhd-data 类型。 ");
                 }
 
                 var manifest = new
@@ -319,6 +331,11 @@ namespace VHDMountAdminTools
             startIndex += start.Length;
             var base64 = text.Substring(startIndex, endIndex - startIndex).Replace("\r", string.Empty).Replace("\n", string.Empty).Trim();
             return Convert.FromBase64String(base64);
+        }
+
+        private string FormatBytes(long bytes)
+        {
+            return $"{bytes / 1024d / 1024d:F2} MB";
         }
     }
 }

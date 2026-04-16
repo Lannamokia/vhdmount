@@ -1,4 +1,4 @@
-const MACHINE_ID_REGEX = /^[A-Z0-9_-]{1,64}$/;
+const MACHINE_ID_REGEX = /^[A-Za-z0-9_-]{1,64}$/;
 const KEY_ID_REGEX = /^[A-Za-z0-9._:-]{1,128}$/;
 const VHD_KEYWORD_REGEX = /^[A-Z0-9_-]{1,64}$/;
 
@@ -11,7 +11,7 @@ class ValidationError extends Error {
 }
 
 function normalizeMachineId(value) {
-    return String(value || '').trim().toUpperCase();
+    return String(value || '').trim();
 }
 
 function normalizeKeyId(value) {
@@ -25,7 +25,7 @@ function normalizeVhdKeyword(value) {
 function assertMachineId(value) {
     const machineId = normalizeMachineId(value);
     if (!MACHINE_ID_REGEX.test(machineId)) {
-        throw new ValidationError('machineId 仅允许 1-64 位大写字母、数字、下划线和短横线');
+        throw new ValidationError('machineId 仅允许 1-64 位字母、数字、下划线和短横线');
     }
     return machineId;
 }

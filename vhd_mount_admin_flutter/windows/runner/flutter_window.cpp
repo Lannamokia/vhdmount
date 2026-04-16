@@ -25,7 +25,9 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
-  SetChildContent(flutter_controller_->view()->GetNativeWindow());
+  flutter_content_window_ = flutter_controller_->view()->GetNativeWindow();
+  SetChildContent(flutter_content_window_);
+  RegisterSecureInputChannel();
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();
@@ -40,11 +42,93 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  RestoreSecureInputContext();
+  secure_input_channel_.reset();
+
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
 
+  flutter_content_window_ = nullptr;
+
   Win32Window::OnDestroy();
+}
+
+void FlutterWindow::RegisterSecureInputChannel() {
+  secure_input_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(),
+          "vhd_mount_admin_flutter/secure_input",
+          &flutter::StandardMethodCodec::GetInstance());
+
+  secure_input_channel_->SetMethodCallHandler(
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
+                 result) {
+        if (call.method_name() != "setSecureInputEnabled") {
+          result->NotImplemented();
+          return;
+        }
+
+        const auto* arguments = std::get_if<flutter::EncodableMap>(call.arguments());
+        if (arguments == nullptr) {
+          result->Error("bad-args", "Expected a map payload.");
+          return;
+        }
+
+        const auto enabled_it = arguments->find(flutter::EncodableValue("enabled"));
+        if (enabled_it == arguments->end()) {
+          result->Error("bad-args", "Missing enabled flag.");
+          return;
+        }
+
+        const auto* enabled = std::get_if<bool>(&enabled_it->second);
+        if (enabled == nullptr) {
+          result->Error("bad-args", "Enabled flag must be a bool.");
+          return;
+        }
+
+        SetSecureInputEnabled(*enabled);
+        result->Success(flutter::EncodableValue(true));
+      });
+}
+
+void FlutterWindow::SetSecureInputEnabled(bool enabled) {
+  if (flutter_content_window_ == nullptr || enabled == secure_input_enabled_) {
+    return;
+  }
+
+  if (enabled) {
+    if (HIMC active_context = ImmGetContext(flutter_content_window_)) {
+      ImmSetOpenStatus(active_context, FALSE);
+      ImmReleaseContext(flutter_content_window_, active_context);
+    }
+
+    saved_ime_context_ = ImmAssociateContext(flutter_content_window_, nullptr);
+    secure_input_enabled_ = true;
+    return;
+  }
+
+  RestoreSecureInputContext();
+}
+
+void FlutterWindow::RestoreSecureInputContext() {
+  if (flutter_content_window_ == nullptr) {
+    saved_ime_context_ = nullptr;
+    secure_input_enabled_ = false;
+    return;
+  }
+
+  if (secure_input_enabled_) {
+    if (saved_ime_context_ != nullptr) {
+      ImmAssociateContext(flutter_content_window_, saved_ime_context_);
+      saved_ime_context_ = nullptr;
+    } else {
+      ImmAssociateContextEx(flutter_content_window_, nullptr, IACE_DEFAULT);
+    }
+  }
+
+  secure_input_enabled_ = false;
 }
 
 LRESULT
