@@ -1,0 +1,195 @@
+name: Flutter Admin Client Build
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+    tags:
+      - "*"
+    paths:
+      - 'vhd_mount_admin_flutter/**'
+      - '.github/workflows/flutter-admin-client.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: flutter-admin-client-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_PROJECT_DIR: vhd_mount_admin_flutter
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Restore Flutter dependencies
+        working-directory: ${{ env.FLUTTER_PROJECT_DIR }}
+        run: flutter pub get
+        shell: pwsh
+
+      - name: Build Windows client
+        working-directory: ${{ env.FLUTTER_PROJECT_DIR }}
+        run: flutter build windows --release
+        shell: pwsh
+
+      - name: Package Windows artifact
+        run: |
+          New-Item -ItemType Directory -Force -Path ./artifacts | Out-Null
+          Compress-Archive -Path ./vhd_mount_admin_flutter/build/windows/x64/runner/Release/* -DestinationPath ./artifacts/VHDMountAdminFlutter-win-x64.zip -Force
+        shell: pwsh
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VHDMountAdminFlutter-win-x64
+          path: artifacts/VHDMountAdminFlutter-win-x64.zip
+
+  android:
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Restore Flutter dependencies
+        working-directory: ${{ env.FLUTTER_PROJECT_DIR }}
+        run: flutter pub get
+
+      - name: Prepare Android signing
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -n "${ANDROID_KEYSTORE_BASE64:-}" || -n "${ANDROID_KEYSTORE_PASSWORD:-}" || -n "${ANDROID_KEY_ALIAS:-}" || -n "${ANDROID_KEY_PASSWORD:-}" ]]; then
+            for required_var in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+              if [[ -z "${!required_var:-}" ]]; then
+                echo "::error::Missing Android signing variable: ${required_var}"
+                exit 1
+              fi
+            done
+
+            keystore_path="${RUNNER_TEMP}/android-release.keystore"
+            echo "${ANDROID_KEYSTORE_BASE64}" | base64 --decode > "${keystore_path}"
+            echo "ANDROID_KEYSTORE_PATH=${keystore_path}" >> "${GITHUB_ENV}"
+          else
+            echo "::warning::Android signing variables are not configured. The build will fall back to debug signing."
+          fi
+
+      - name: Build Android client
+        working-directory: ${{ env.FLUTTER_PROJECT_DIR }}
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ env.ANDROID_KEYSTORE_PATH }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ env.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ env.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ env.ANDROID_KEY_PASSWORD }}
+        run: flutter build apk --release
+
+      - name: Collect Android artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cp "${FLUTTER_PROJECT_DIR}/build/app/outputs/flutter-apk/app-release.apk" "artifacts/VHDMountAdminFlutter-android-release.apk"
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VHDMountAdminFlutter-android-release
+          path: artifacts/VHDMountAdminFlutter-android-release.apk
+
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Restore Flutter dependencies
+        working-directory: ${{ env.FLUTTER_PROJECT_DIR }}
+        run: flutter pub get
+
+      - name: Build iOS client without code signing
+        working-directory: ${{ env.FLUTTER_PROJECT_DIR }}
+        run: flutter build ios --release --no-codesign
+
+      - name: Package unsigned IPA artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          rm -rf "${FLUTTER_PROJECT_DIR}/build/ios/ipa/Payload"
+          mkdir -p "${FLUTTER_PROJECT_DIR}/build/ios/ipa/Payload"
+          cp -R "${FLUTTER_PROJECT_DIR}/build/ios/iphoneos/Runner.app" "${FLUTTER_PROJECT_DIR}/build/ios/ipa/Payload/"
+          (
+            cd "${FLUTTER_PROJECT_DIR}/build/ios/ipa"
+            /usr/bin/zip -qry VHDMountAdminFlutter-ios-unsigned.ipa Payload
+          )
+          cp "${FLUTTER_PROJECT_DIR}/build/ios/ipa/VHDMountAdminFlutter-ios-unsigned.ipa" "artifacts/VHDMountAdminFlutter-ios-unsigned.ipa"
+
+      - name: Upload iOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VHDMountAdminFlutter-ios-unsigned
+          path: artifacts/VHDMountAdminFlutter-ios-unsigned.ipa
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs:
+      - windows
+      - android
+      - ios
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Consolidate release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          find release-artifacts -type f \( -name '*.zip' -o -name '*.apk' -o -name '*.ipa' \) -exec cp {} artifacts/ \;
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd artifacts
+          sha256sum *.zip *.apk *.ipa > CHECKSUMS.sha256
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/VHDMountAdminFlutter-win-x64.zip
+            artifacts/VHDMountAdminFlutter-android-release.apk
+            artifacts/VHDMountAdminFlutter-ios-unsigned.ipa
+            artifacts/CHECKSUMS.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
