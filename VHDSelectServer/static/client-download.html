@@ -308,6 +308,7 @@
             line-height: 1.7;
             color: var(--ink);
             word-break: break-all;
+            user-select: all;
         }
 
         .copy-button {
@@ -548,6 +549,49 @@
                 return value.replace(/\/+$/, '');
             }
 
+            function selectElementText(element) {
+                if (!element || !window.getSelection || !document.createRange) {
+                    return false;
+                }
+
+                var selection = window.getSelection();
+                var range = document.createRange();
+                range.selectNodeContents(element);
+                selection.removeAllRanges();
+                selection.addRange(range);
+                return true;
+            }
+
+            function fallbackCopyText(text) {
+                if (!document.body || typeof document.execCommand !== 'function') {
+                    return false;
+                }
+
+                var textarea = document.createElement('textarea');
+                textarea.value = text;
+                textarea.setAttribute('readonly', 'readonly');
+                textarea.style.position = 'fixed';
+                textarea.style.top = '0';
+                textarea.style.left = '0';
+                textarea.style.opacity = '0';
+                textarea.style.pointerEvents = 'none';
+
+                document.body.appendChild(textarea);
+                textarea.focus();
+                textarea.select();
+                textarea.setSelectionRange(0, textarea.value.length);
+
+                var copied = false;
+                try {
+                    copied = document.execCommand('copy');
+                } catch (error) {
+                    copied = false;
+                }
+
+                document.body.removeChild(textarea);
+                return copied;
+            }
+
             function buildClientEndpoint() {
                 var url = new URL(window.location.href);
                 var cleanedPath = trimTrailingSlashes(url.pathname.replace(/\/index\.html$/i, ''));
@@ -604,24 +648,44 @@
             });
 
             copyButtonElement.addEventListener('click', function () {
-                var finish = function (copied) {
-                    copyButtonElement.dataset.copied = copied ? 'true' : 'false';
-                    copyButtonElement.textContent = copied ? '已复制到剪贴板' : '复制失败，请手动复制上面的地址';
+                var finish = function (state) {
+                    copyButtonElement.dataset.copied = state === 'copied' ? 'true' : 'false';
+                    if (state === 'copied') {
+                        copyButtonElement.textContent = '已复制到剪贴板';
+                    } else if (state === 'selected') {
+                        copyButtonElement.textContent = '浏览器限制了复制，地址已选中，请按 Ctrl+C';
+                    } else {
+                        copyButtonElement.textContent = '复制失败，请手动复制上面的地址';
+                    }
                     window.setTimeout(function () {
                         copyButtonElement.dataset.copied = 'false';
                         copyButtonElement.textContent = '复制这个地址';
-                    }, 2200);
+                    }, state === 'selected' ? 3200 : 2200);
                 };
 
-                if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
-                    finish(false);
+                var tryFallback = function () {
+                    if (fallbackCopyText(info.endpoint)) {
+                        finish('copied');
+                        return;
+                    }
+
+                    if (selectElementText(endpointElement)) {
+                        finish('selected');
+                        return;
+                    }
+
+                    finish('failed');
+                };
+
+                if (!window.isSecureContext || !navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
+                    tryFallback();
                     return;
                 }
 
                 navigator.clipboard.writeText(info.endpoint).then(function () {
-                    finish(true);
+                    finish('copied');
                 }).catch(function () {
-                    finish(false);
+                    tryFallback();
                 });
             });
         }());
