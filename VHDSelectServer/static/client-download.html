@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light only">
+    <title>VHDMount 管理客户端入口</title>
+    <style>
+        :root {
+            --ink: #17343d;
+            --muted: #5d7279;
+            --paper: #fffaf2;
+            --panel: rgba(255, 255, 255, 0.84);
+            --panel-strong: rgba(255, 255, 255, 0.94);
+            --line: rgba(23, 52, 61, 0.12);
+            --line-strong: rgba(23, 52, 61, 0.2);
+            --mint: #139e84;
+            --mint-deep: #0d7666;
+            --coral: #ff8e63;
+            --sky: #4b89ff;
+            --sun: #f3c660;
+            --shadow: 0 28px 80px rgba(26, 55, 62, 0.16);
+            --radius-xl: 30px;
+            --radius-lg: 22px;
+            --radius-md: 16px;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html {
+            min-height: 100%;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            color: var(--ink);
+            font-family: "Segoe UI Variable Text", "Microsoft YaHei UI", "PingFang SC", "Noto Sans SC", sans-serif;
+            background:
+                radial-gradient(circle at top left, rgba(255, 211, 182, 0.72), transparent 28%),
+                radial-gradient(circle at right 18%, rgba(112, 211, 198, 0.24), transparent 24%),
+                linear-gradient(140deg, #fff7ea 0%, #f4fff8 48%, #eef4ff 100%);
+        }
+
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            background-image:
+                linear-gradient(rgba(23, 52, 61, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(23, 52, 61, 0.03) 1px, transparent 1px);
+            background-size: 26px 26px;
+            mask-image: radial-gradient(circle at center, black 54%, transparent 100%);
+        }
+
+        .shell {
+            position: relative;
+            width: min(1160px, calc(100% - 32px));
+            margin: 0 auto;
+            padding: 34px 0 40px;
+        }
+
+        .topline {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 16px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.62);
+            border: 1px solid rgba(255, 255, 255, 0.74);
+            backdrop-filter: blur(14px);
+            box-shadow: 0 10px 34px rgba(23, 52, 61, 0.08);
+            font-size: 13px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--muted);
+            animation: rise-in 0.7s ease-out both;
+        }
+
+        .topline::before {
+            content: "";
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--mint), var(--sky));
+            box-shadow: 0 0 0 6px rgba(19, 158, 132, 0.12);
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1.12fr) minmax(320px, 0.88fr);
+            gap: 24px;
+            margin-top: 18px;
+        }
+
+        .panel {
+            position: relative;
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.7);
+            border-radius: var(--radius-xl);
+            background: var(--panel);
+            backdrop-filter: blur(20px);
+            box-shadow: var(--shadow);
+            animation: rise-in 0.7s ease-out both;
+        }
+
+        .panel::after {
+            content: "";
+            position: absolute;
+            inset: auto -18% 0 auto;
+            width: 240px;
+            height: 240px;
+            background: radial-gradient(circle, rgba(255, 255, 255, 0.72), transparent 72%);
+            pointer-events: none;
+        }
+
+        .hero {
+            padding: 34px;
+        }
+
+        .hero::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background:
+                linear-gradient(140deg, rgba(19, 158, 132, 0.08), transparent 36%),
+                linear-gradient(310deg, rgba(255, 142, 99, 0.12), transparent 42%);
+            pointer-events: none;
+        }
+
+        .eyebrow {
+            position: relative;
+            margin: 0 0 14px;
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: var(--mint-deep);
+        }
+
+        h1 {
+            position: relative;
+            margin: 0;
+            max-width: 11ch;
+            font-family: "Segoe UI Variable Display", "Bahnschrift", "Microsoft YaHei UI", sans-serif;
+            font-size: clamp(2.35rem, 4vw, 4.8rem);
+            line-height: 0.96;
+            letter-spacing: -0.05em;
+        }
+
+        .lead {
+            position: relative;
+            max-width: 650px;
+            margin: 20px 0 0;
+            font-size: 1.02rem;
+            line-height: 1.8;
+            color: var(--muted);
+        }
+
+        .cta-row {
+            position: relative;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 14px;
+            margin-top: 28px;
+        }
+
+        .button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            min-height: 52px;
+            padding: 0 20px;
+            border-radius: 999px;
+            border: 1px solid transparent;
+            text-decoration: none;
+            font-weight: 700;
+            transition: transform 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease, background-color 0.22s ease;
+        }
+
+        .button:hover {
+            transform: translateY(-2px);
+        }
+
+        .button.primary {
+            color: #fff;
+            background: linear-gradient(135deg, var(--mint), var(--mint-deep));
+            box-shadow: 0 18px 42px rgba(19, 158, 132, 0.28);
+        }
+
+        .button.secondary {
+            color: var(--ink);
+            background: rgba(255, 255, 255, 0.72);
+            border-color: rgba(23, 52, 61, 0.12);
+        }
+
+        .button.ghost {
+            width: 100%;
+            min-height: 46px;
+            color: var(--ink);
+            background: rgba(255, 255, 255, 0.78);
+            border-color: rgba(23, 52, 61, 0.12);
+        }
+
+        .meta-grid {
+            position: relative;
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 14px;
+            margin-top: 28px;
+        }
+
+        .meta-card {
+            min-height: 132px;
+            padding: 18px;
+            border: 1px solid rgba(23, 52, 61, 0.08);
+            border-radius: var(--radius-lg);
+            background: rgba(255, 255, 255, 0.54);
+        }
+
+        .meta-card strong {
+            display: block;
+            margin-top: 12px;
+            font-size: 1.2rem;
+            line-height: 1.2;
+        }
+
+        .meta-card span {
+            display: block;
+            margin-top: 8px;
+            color: var(--muted);
+            line-height: 1.6;
+        }
+
+        .stack {
+            display: grid;
+            gap: 18px;
+        }
+
+        .info-panel {
+            padding: 24px;
+            border-radius: var(--radius-xl);
+            border: 1px solid rgba(255, 255, 255, 0.72);
+            background: var(--panel-strong);
+            box-shadow: var(--shadow);
+            animation: rise-in 0.75s ease-out both;
+        }
+
+        .info-panel:nth-child(2) {
+            animation-delay: 0.08s;
+        }
+
+        .label {
+            margin: 0;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+
+        .heading {
+            margin: 10px 0 0;
+            font-size: 1.6rem;
+            line-height: 1.25;
+        }
+
+        .copy-shell {
+            display: grid;
+            gap: 12px;
+            margin-top: 18px;
+        }
+
+        .endpoint-box {
+            position: relative;
+            padding: 18px 18px 16px;
+            border: 1px solid var(--line-strong);
+            border-radius: var(--radius-lg);
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(246, 251, 255, 0.94));
+            overflow: hidden;
+        }
+
+        .endpoint-box::before {
+            content: "";
+            position: absolute;
+            inset: 0 auto auto 0;
+            width: 100%;
+            height: 4px;
+            background: linear-gradient(90deg, var(--mint), var(--coral), var(--sky));
+        }
+
+        .endpoint-caption {
+            display: block;
+            margin-bottom: 10px;
+            color: var(--muted);
+            font-size: 0.94rem;
+        }
+
+        .endpoint-value {
+            margin: 0;
+            font-family: "Cascadia Code", "Consolas", monospace;
+            font-size: 1rem;
+            line-height: 1.7;
+            color: var(--ink);
+            word-break: break-all;
+        }
+
+        .copy-button {
+            appearance: none;
+            border: 0;
+            border-radius: 14px;
+            padding: 14px 16px;
+            background: linear-gradient(135deg, rgba(75, 137, 255, 0.12), rgba(19, 158, 132, 0.12));
+            color: var(--ink);
+            font: inherit;
+            font-weight: 700;
+            cursor: pointer;
+            transition: transform 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+        }
+
+        .copy-button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 14px 28px rgba(75, 137, 255, 0.12);
+        }
+
+        .copy-button[data-copied="true"] {
+            background: linear-gradient(135deg, rgba(19, 158, 132, 0.18), rgba(19, 158, 132, 0.1));
+        }
+
+        .tip-list {
+            margin: 18px 0 0;
+            padding: 0;
+            list-style: none;
+            display: grid;
+            gap: 10px;
+        }
+
+        .tip-list li {
+            display: grid;
+            grid-template-columns: 22px minmax(0, 1fr);
+            gap: 10px;
+            align-items: start;
+            color: var(--muted);
+            line-height: 1.7;
+        }
+
+        .tip-list li::before {
+            content: "";
+            width: 10px;
+            height: 10px;
+            margin-top: 9px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--coral), var(--sky));
+            box-shadow: 0 0 0 5px rgba(255, 142, 99, 0.12);
+        }
+
+        .mini-grid {
+            display: grid;
+            gap: 12px;
+            margin-top: 18px;
+        }
+
+        .mini-card {
+            padding: 16px 18px;
+            border-radius: var(--radius-md);
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.72);
+        }
+
+        .mini-card strong {
+            display: block;
+            font-size: 0.98rem;
+        }
+
+        .mini-card span,
+        .mini-card a {
+            display: block;
+            margin-top: 8px;
+            color: var(--muted);
+            line-height: 1.6;
+            text-decoration: none;
+            word-break: break-all;
+        }
+
+        .mini-card a:hover {
+            color: var(--sky);
+        }
+
+        .footnote {
+            margin-top: 24px;
+            padding: 14px 16px;
+            border-radius: 16px;
+            background: rgba(243, 198, 96, 0.18);
+            color: #6b5320;
+            line-height: 1.7;
+        }
+
+        .noscript {
+            margin-top: 16px;
+            padding: 14px 16px;
+            border-radius: 16px;
+            background: rgba(255, 142, 99, 0.18);
+            color: #8a4c2e;
+            line-height: 1.7;
+        }
+
+        @keyframes rise-in {
+            from {
+                opacity: 0;
+                transform: translateY(16px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @media (max-width: 960px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+
+            h1 {
+                max-width: none;
+            }
+        }
+
+        @media (max-width: 720px) {
+            .shell {
+                width: min(100% - 20px, 1160px);
+                padding: 20px 0 26px;
+            }
+
+            .hero,
+            .info-panel {
+                padding: 22px;
+            }
+
+            .meta-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .button,
+            .copy-button {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <main class="shell">
+        <div class="topline">Flutter 管理入口导航</div>
+        <section class="grid">
+            <article class="panel hero">
+                <p class="eyebrow">VHD Select Server</p>
+                <h1>旧 Web 管理页已经下线。</h1>
+                <p class="lead">
+                    这个服务端现在只保留一个轻量提示页，用来把你引导到新的 Flutter 桌面管理客户端。
+                    你可以直接去仓库 Releases 下载现成版本，也可以拉取源码后自行编译，再通过下方自动识别出的入口地址连接到当前服务端。
+                </p>
+
+                <div class="cta-row">
+                    <a class="button primary" href="https://github.com/Lannamokia/vhdmount/releases" target="_blank" rel="noreferrer">前往 Releases 下载客户端</a>
+                    <a class="button secondary" href="https://github.com/Lannamokia/vhdmount" target="_blank" rel="noreferrer">查看仓库并自行编译</a>
+                </div>
+
+                <div class="meta-grid">
+                    <div class="meta-card">
+                        <div class="label">推荐入口</div>
+                        <strong>Flutter Windows 管理端</strong>
+                        <span>初始化、登录、机台管理、OTP、审计、可信证书都已经迁到桌面客户端。</span>
+                    </div>
+                    <div class="meta-card">
+                        <div class="label">地址格式</div>
+                        <strong>填写完整服务器地址</strong>
+                        <span>例如 http://localhost:8080，通常不需要额外追加任何 API 路径。</span>
+                    </div>
+                    <div class="meta-card">
+                        <div class="label">当前页面用途</div>
+                        <strong>仅作导航与提醒</strong>
+                        <span>这里不承载管理功能，避免旧版 Web 面板残留带来的使用误导。</span>
+                    </div>
+                </div>
+            </article>
+
+            <section class="stack">
+                <article class="info-panel">
+                    <p class="label">自动识别</p>
+                    <h2 class="heading">在 Flutter 客户端里这样填写服务器地址</h2>
+
+                    <div class="copy-shell">
+                        <div class="endpoint-box">
+                            <span class="endpoint-caption">客户端“服务器地址”建议填写</span>
+                            <p class="endpoint-value" id="client-endpoint">正在解析当前访问入口...</p>
+                        </div>
+                        <button class="copy-button" id="copy-endpoint" type="button">复制这个地址</button>
+                    </div>
+
+                    <ul class="tip-list" id="connection-tips">
+                        <li>不要手动追加 /api、/status、/health 或额外的尾部斜杠。</li>
+                    </ul>
+
+                    <noscript>
+                        <div class="noscript">
+                            浏览器未启用脚本时，请把当前页面地址去掉末尾斜杠后填进 Flutter 客户端的“服务器地址”输入框，不要再追加 /api。
+                        </div>
+                    </noscript>
+                </article>
+
+                <article class="info-panel">
+                    <p class="label">辅助信息</p>
+                    <h2 class="heading">你正在访问的服务端入口</h2>
+
+                    <div class="mini-grid">
+                        <div class="mini-card">
+                            <strong>浏览器当前页面</strong>
+                            <span id="current-page">正在识别...</span>
+                        </div>
+                        <div class="mini-card">
+                            <strong>健康检查接口</strong>
+                            <a id="health-link" href="/api/health">/api/health</a>
+                        </div>
+                        <div class="mini-card">
+                            <strong>运行状态接口</strong>
+                            <a id="status-link" href="/api/status">/api/status</a>
+                        </div>
+                    </div>
+
+                    <div class="footnote">
+                        如果你是本机联调，Flutter 客户端通常填 http://localhost:8080。<br>
+                        如果你当前通过反向代理、域名或带路径前缀的入口访问，本页会优先保留你当前看到的协议、主机、端口和路径前缀。
+                    </div>
+
+                    <a class="button ghost" href="https://github.com/Lannamokia/vhdmount/releases" target="_blank" rel="noreferrer">下载后回到客户端连接这个服务端</a>
+                </article>
+            </section>
+        </section>
+    </main>
+
+    <script>
+        (function () {
+            function trimTrailingSlashes(value) {
+                return value.replace(/\/+$/, '');
+            }
+
+            function buildClientEndpoint() {
+                var url = new URL(window.location.href);
+                var cleanedPath = trimTrailingSlashes(url.pathname.replace(/\/index\.html$/i, ''));
+                var endpoint = cleanedPath && cleanedPath !== '/' ? url.origin + cleanedPath : url.origin;
+                return {
+                    endpoint: endpoint,
+                    page: url.href,
+                    pathPrefix: cleanedPath && cleanedPath !== '/' ? cleanedPath : '',
+                    hostname: url.hostname.toLowerCase(),
+                    protocol: url.protocol
+                };
+            }
+
+            function buildTips(info) {
+                var tips = [
+                    'Flutter 客户端的“服务器地址”直接填写上面的完整地址，不要再手动拼接 /api。'
+                ];
+
+                var isLoopback = info.hostname === 'localhost' || info.hostname === '127.0.0.1' || info.hostname === '::1' || info.hostname === '[::1]';
+                if (isLoopback) {
+                    tips.push('当前是本机回环地址，只能给同一台机器上的 Flutter 客户端直接使用；如果要从其他设备连接，请改成服务器的局域网 IP 或域名，并保留相同端口。');
+                }
+
+                if (info.pathPrefix) {
+                    tips.push('检测到当前入口带有路径前缀，客户端地址里也要保留这个前缀，不要只复制域名。');
+                }
+
+                if (info.protocol === 'http:') {
+                    tips.push('当前入口使用 HTTP；如果服务端会被其他人或跨网段访问，建议通过 HTTPS 或受控内网入口暴露。');
+                }
+
+                return tips;
+            }
+
+            var info = buildClientEndpoint();
+            var endpointElement = document.getElementById('client-endpoint');
+            var currentPageElement = document.getElementById('current-page');
+            var statusLinkElement = document.getElementById('status-link');
+            var healthLinkElement = document.getElementById('health-link');
+            var tipsElement = document.getElementById('connection-tips');
+            var copyButtonElement = document.getElementById('copy-endpoint');
+
+            endpointElement.textContent = info.endpoint;
+            currentPageElement.textContent = info.page;
+            statusLinkElement.href = info.endpoint + '/api/status';
+            statusLinkElement.textContent = info.endpoint + '/api/status';
+            healthLinkElement.href = info.endpoint + '/api/health';
+            healthLinkElement.textContent = info.endpoint + '/api/health';
+
+            buildTips(info).forEach(function (tip) {
+                var item = document.createElement('li');
+                item.textContent = tip;
+                tipsElement.appendChild(item);
+            });
+
+            copyButtonElement.addEventListener('click', function () {
+                var finish = function (copied) {
+                    copyButtonElement.dataset.copied = copied ? 'true' : 'false';
+                    copyButtonElement.textContent = copied ? '已复制到剪贴板' : '复制失败，请手动复制上面的地址';
+                    window.setTimeout(function () {
+                        copyButtonElement.dataset.copied = 'false';
+                        copyButtonElement.textContent = '复制这个地址';
+                    }, 2200);
+                };
+
+                if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
+                    finish(false);
+                    return;
+                }
+
+                navigator.clipboard.writeText(info.endpoint).then(function () {
+                    finish(true);
+                }).catch(function () {
+                    finish(false);
+                });
+            });
+        }());
+    </script>
+</body>
+</html>

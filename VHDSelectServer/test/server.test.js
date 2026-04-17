@@ -325,6 +325,27 @@ async function createInitializedHarness(t) {
     };
 }
 
+test('根路径返回 Flutter 客户端下载引导页', async (t) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vhd-select-server-landing-'));
+    t.after(() => {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    const { app } = await createApp({
+        configDir: tempDir,
+    });
+
+    const response = await request(app)
+        .get('/')
+        .expect(200)
+        .expect('Content-Type', /html/)
+        .expect('Cache-Control', 'no-store');
+
+    assert.match(response.text, /Flutter 管理入口导航/);
+    assert.match(response.text, /https:\/\/github\.com\/Lannamokia\/vhdmount\/releases/);
+    assert.match(response.text, /不要手动追加 \/api/);
+});
+
 test('首次初始化后不再接受默认密码登录', async (t) => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vhd-select-server-init-'));
     t.after(() => {

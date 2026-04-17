@@ -27,6 +27,7 @@ const DEFAULT_PORT = Number(process.env.PORT || 8080);
 const DEFAULT_VHD_KEYWORD = 'SDEZ';
 const OTP_STEP_UP_WINDOW_MS = 60 * 1000;
 const APP_VERSION = '2.0.0';
+const CLIENT_DOWNLOAD_PAGE = path.join(__dirname, 'static', 'client-download.html');
 
 function createServiceSettingsStore(configDir, logger = console) {
     const settingsFile = path.join(configDir, 'vhd-config.json');
@@ -1268,10 +1269,8 @@ async function createApp(options = {}) {
     });
 
     app.get('/', (req, res) => {
-        res.status(410).json({
-            success: false,
-            error: '旧 Web 管理前端已废弃，请使用新的 Flutter 管理客户端。',
-        });
+        res.setHeader('Cache-Control', 'no-store');
+        res.sendFile(CLIENT_DOWNLOAD_PAGE);
     });
 
     app.use((req, res) => {
