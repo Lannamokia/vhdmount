@@ -243,4 +243,141 @@ void main() {
     expect(find.text('MACHINE-01'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('mobile login hero stays compact', (tester) async {
+    _setDesktopViewport(tester, const Size(390, 844));
+    addTearDown(() => _resetViewport(tester));
+
+    final controller = AppController(
+      api: FakeAdminApi(
+        serverStatus: _readyServerStatus,
+        authStatus: const AuthStatus(
+          initialized: true,
+          isAuthenticated: false,
+          otpVerified: false,
+        ),
+      ),
+      clientConfigStore: FakeClientConfigStore(),
+    );
+
+    await tester.pumpWidget(AdminApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    final heroPanel = find.ancestor(
+      of: find.text('安全登录'),
+      matching: find.byType(AppPanel),
+    );
+    final heroHeight = tester.getSize(heroPanel.first).height;
+
+    expect(heroHeight, lessThan(340));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('mobile dashboard overview cards use two-by-two grid without captions', (
+    tester,
+  ) async {
+    _setDesktopViewport(tester, const Size(390, 844));
+    addTearDown(() => _resetViewport(tester));
+
+    final controller = AppController(
+      api: FakeAdminApi(
+        serverStatus: _readyServerStatus,
+        authStatus: _authenticatedStatus,
+        machines: <MachineRecord>[_machine('MACHINE-01')],
+      ),
+      clientConfigStore: FakeClientConfigStore(),
+    );
+
+    await tester.pumpWidget(AdminApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    final cards = find.byType(OverviewStatCard);
+    expect(cards, findsNWidgets(4));
+
+    final firstCardSize = tester.getSize(cards.first);
+    expect(firstCardSize.height, lessThan(104));
+
+    final card0 = tester.getTopLeft(cards.at(0));
+    final card1 = tester.getTopLeft(cards.at(1));
+    final card2 = tester.getTopLeft(cards.at(2));
+    final card3 = tester.getTopLeft(cards.at(3));
+
+    final scaffold = tester.widget<Scaffold>(find.byType(Scaffold).first);
+
+    expect((card0.dy - card1.dy).abs(), lessThan(1));
+    expect((card2.dy - card3.dy).abs(), lessThan(1));
+    expect(card2.dy, greaterThan(card0.dy));
+    expect(scaffold.extendBody, isTrue);
+    expect(find.text('服务端数据库链路健康状态。'), findsNothing);
+    expect(find.text('当前连接的管理服务地址。'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('mobile dashboard scrolls as a single page', (tester) async {
+    _setDesktopViewport(tester, const Size(390, 844));
+    addTearDown(() => _resetViewport(tester));
+
+    final controller = AppController(
+      api: FakeAdminApi(
+        serverStatus: _readyServerStatus,
+        authStatus: _authenticatedStatus,
+        machines: List<MachineRecord>.generate(
+          12,
+          (index) => _machine('MACHINE-${index.toString().padLeft(2, '0')}'),
+        ),
+      ),
+      clientConfigStore: FakeClientConfigStore(),
+    );
+
+    await tester.pumpWidget(AdminApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    final headerFinder = find.text('VHD Mount Admin');
+    final initialHeaderDy = tester.getTopLeft(headerFinder).dy;
+
+    await tester.drag(find.byType(SingleChildScrollView).first, const Offset(0, -320));
+    await tester.pumpAndSettle();
+
+    final movedHeaderDy = tester.getTopLeft(headerFinder).dy;
+    expect(movedHeaderDy, lessThan(initialHeaderDy));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('cancelling add machine dialog after focusing password does not crash', (
+    tester,
+  ) async {
+    _setDesktopViewport(tester, const Size(390, 844));
+    addTearDown(() => _resetViewport(tester));
+
+    final controller = AppController(
+      api: FakeAdminApi(
+        serverStatus: _readyServerStatus,
+        authStatus: _authenticatedStatus,
+      ),
+      clientConfigStore: FakeClientConfigStore(),
+    );
+
+    await tester.pumpWidget(AdminApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.text('添加机台'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('添加机台'));
+    await tester.pumpAndSettle();
+
+    final dialogFields = find.descendant(
+      of: find.byType(AlertDialog),
+      matching: find.byType(TextField),
+    );
+
+    await tester.tap(dialogFields.last);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 }

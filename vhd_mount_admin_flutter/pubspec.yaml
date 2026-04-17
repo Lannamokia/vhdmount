@@ -1,5 +1,5 @@
 name: vhd_mount_admin_flutter
-description: "Flutter desktop admin console for VHD mount service initialization and operations."
+description: "Flutter admin console for VHD mount service initialization and operations across desktop and mobile."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
