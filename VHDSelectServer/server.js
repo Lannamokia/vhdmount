@@ -355,7 +355,6 @@ async function createApp(options = {}) {
         res.status(503).json({
             success: false,
             error: '数据库当前不可用',
-            details: runtime.databaseError ? runtime.databaseError.message : '数据库尚未连接',
         });
     }
 
@@ -403,19 +402,18 @@ async function createApp(options = {}) {
 
     app.get('/api/init/status', (req, res) => {
         const pendingInitialization = securityStore.getPendingInitialization();
+        const isAuthenticated = !!req.session?.isAuthenticated;
         res.json({
             success: true,
             initialized: runtime.initialized,
             pendingInitialization: !!pendingInitialization,
-            pendingInitializationCreatedAt: pendingInitialization?.createdAt || null,
-            pendingOtpIssuer: pendingInitialization?.issuer || null,
-            pendingOtpAccountName: pendingInitialization?.accountName || null,
             databaseReady: !!runtime.database,
-            databaseError: runtime.databaseError ? runtime.databaseError.message : null,
-            defaultVhdKeyword: serviceSettingsStore.getDefaultVhdKeyword(),
-            trustedRegistrationCertificateCount: runtime.initialized
-                ? (runtime.securityConfig?.trustedRegistrationCertificates || []).length
-                : 0,
+            ...(isAuthenticated ? {
+                defaultVhdKeyword: serviceSettingsStore.getDefaultVhdKeyword(),
+                trustedRegistrationCertificateCount: runtime.initialized
+                    ? (runtime.securityConfig?.trustedRegistrationCertificates || []).length
+                    : 0,
+            } : {}),
         });
     });
 
@@ -1243,29 +1241,22 @@ async function createApp(options = {}) {
         });
     }));
 
-    function buildStatusPayload(status) {
+    function buildPublicStatusPayload(status) {
         return {
             success: true,
             status,
-            version: APP_VERSION,
             initialized: runtime.initialized,
+            pendingInitialization: !runtime.initialized && !!securityStore.getPendingInitialization(),
             databaseReady: !!runtime.database,
-            databaseError: runtime.databaseError ? runtime.databaseError.message : null,
-            defaultVhdKeyword: serviceSettingsStore.getDefaultVhdKeyword(),
-            trustedRegistrationCertificateCount: runtime.initialized
-                ? (runtime.securityConfig?.trustedRegistrationCertificates || []).length
-                : 0,
-            uptime: process.uptime(),
-            timestamp: new Date().toISOString(),
         };
     }
 
     app.get('/api/health', (req, res) => {
-        res.json(buildStatusPayload('ok'));
+        res.json(buildPublicStatusPayload('ok'));
     });
 
     app.get('/api/status', (req, res) => {
-        res.json(buildStatusPayload('running'));
+        res.json(buildPublicStatusPayload('running'));
     });
 
     app.get('/', (req, res) => {

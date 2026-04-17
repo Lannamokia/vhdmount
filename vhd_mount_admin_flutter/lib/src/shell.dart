@@ -992,7 +992,7 @@ class _LoginScreenState extends State<LoginScreen> {
             : AppPalette.sun,
         caption: serverStatus == null
             ? '先确认服务可达，再输入管理员密码。'
-            : '默认关键词 ${serverStatus.defaultVhdKeyword} · 可信证书 ${serverStatus.trustedRegistrationCertificateCount}',
+          : '服务已完成初始化，登录后再加载默认关键词和证书等管理详情。',
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

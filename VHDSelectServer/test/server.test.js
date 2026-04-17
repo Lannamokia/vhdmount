@@ -463,6 +463,78 @@ test('带 Origin 的请求必须命中允许列表', async (t) => {
         .expect(403);
 });
 
+test('公开状态接口不会暴露敏感运行信息', async (t) => {
+    const { client } = await createInitializedHarness(t);
+
+    const statusResponse = await client
+        .get('/api/status')
+        .expect(200);
+
+    assert.equal(statusResponse.body.status, 'running');
+    assert.equal(statusResponse.body.initialized, true);
+    assert.equal(statusResponse.body.databaseReady, true);
+    assert.equal(statusResponse.body.pendingInitialization, false);
+    assert.equal('databaseError' in statusResponse.body, false);
+    assert.equal('defaultVhdKeyword' in statusResponse.body, false);
+    assert.equal('trustedRegistrationCertificateCount' in statusResponse.body, false);
+    assert.equal('uptime' in statusResponse.body, false);
+    assert.equal('version' in statusResponse.body, false);
+
+    const healthResponse = await client
+        .get('/api/health')
+        .expect(200);
+
+    assert.equal(healthResponse.body.status, 'ok');
+    assert.equal('databaseError' in healthResponse.body, false);
+    assert.equal('defaultVhdKeyword' in healthResponse.body, false);
+    assert.equal('trustedRegistrationCertificateCount' in healthResponse.body, false);
+    assert.equal('uptime' in healthResponse.body, false);
+    assert.equal('version' in healthResponse.body, false);
+});
+
+test('初始化状态接口仅在登录后返回管理端详情', async (t) => {
+    const { client } = await createInitializedHarness(t);
+
+    const anonymousResponse = await client
+        .get('/api/init/status')
+        .expect(200);
+
+    assert.equal(anonymousResponse.body.initialized, true);
+    assert.equal(anonymousResponse.body.databaseReady, true);
+    assert.equal(anonymousResponse.body.pendingInitialization, false);
+    assert.equal('pendingInitializationCreatedAt' in anonymousResponse.body, false);
+    assert.equal('pendingOtpIssuer' in anonymousResponse.body, false);
+    assert.equal('pendingOtpAccountName' in anonymousResponse.body, false);
+    assert.equal('databaseError' in anonymousResponse.body, false);
+    assert.equal('defaultVhdKeyword' in anonymousResponse.body, false);
+    assert.equal('trustedRegistrationCertificateCount' in anonymousResponse.body, false);
+
+    await client.post('/api/auth/login').send({ password: 'ComplexPassword123!' }).expect(200);
+
+    const authenticatedResponse = await client
+        .get('/api/init/status')
+        .expect(200);
+
+    assert.equal(authenticatedResponse.body.defaultVhdKeyword, 'SAFEBOOT');
+    assert.equal(authenticatedResponse.body.trustedRegistrationCertificateCount, 1);
+    assert.equal('databaseError' in authenticatedResponse.body, false);
+});
+
+test('公开机台接口在数据库不可用时不会泄露内部错误详情', async (t) => {
+    const { client, runtime } = await createInitializedHarness(t);
+
+    runtime.database = null;
+    runtime.databaseError = new Error('password authentication failed for user postgres');
+
+    const response = await client
+        .get('/api/boot-image-select')
+        .query({ machineId: 'MACHINE-01' })
+        .expect(503);
+
+    assert.equal(response.body.error, '数据库当前不可用');
+    assert.equal('details' in response.body, false);
+});
+
 test('查询 EVHD 明文前必须完成 OTP 二次验证', async (t) => {
     const { client, totpSecret } = await createInitializedHarness(t);
 
