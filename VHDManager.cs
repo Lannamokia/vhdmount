@@ -15,7 +15,6 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.Win32;
 using System.Runtime.InteropServices;
-using Microsoft.Management.Infrastructure;
 
 namespace VHDMounter
 {
@@ -33,6 +32,7 @@ namespace VHDMounter
     public class VHDManager : IDisposable
     {
         private const string TARGET_DRIVE = "M:";
+        private const string TARGET_DRIVE_ROOT = "M:\\";
         private readonly string[] TARGET_KEYWORDS = { "SDEZ", "SDGB", "SDHJ", "SDDT", "SDHD" };
         private readonly string[] PROCESS_KEYWORDS = { "sinmai", "chusanapp", "mu3" };
 
@@ -2408,12 +2408,8 @@ namespace VHDMounter
                 // 先清理盘符并分离可能已挂载的VHD，避免冲突
                 await UnmountDrive();
                 await UnmountVHD();
-                // 挂载前读取注册表 \DosDevices\* 快照
-                var mountedBefore = GetMountedDevicesDosDevices();
-                // 挂载前读取注册表 \??\Volume{GUID} 快照
-                var volumeBefore = GetMountedDevicesVolumeGuids();
-                // 挂载前盘符集合，用于对比新出现的盘符
-                var lettersBefore = GetCurrentDriveLetters();
+                // 仅记录系统当前真实存在的卷，后续通过卷 GUID 差集识别新挂载的数据卷。
+                var volumesBefore = CaptureCurrentVolumes();
 
                 // 第一步：仅挂载VHD，不分配盘符
                 await ShowStatusAndWait("步骤1: 挂载VHD文件...");
@@ -2467,134 +2463,14 @@ exit";
                     return false;
                 }
 
-                // 优先尝试：直接为该 VHD 的第一个分区分配盘符 M，避免依赖“新增盘符/注册表差异”
-                await ShowStatusAndWait("VHD挂载成功，正在分配盘符 M（无 diskpart）...");
-                var assignedOk = await AssignDriveLetterWithoutDiskpart(vhdPath);
-                if (assignedOk)
+                var assignedOk = await AssignDriveLetterWithoutDiskpart(vhdPath, volumesBefore);
+                if (!assignedOk)
                 {
-                    await ShowStatusAndWait("盘符 M 分配成功");
-                    return true;
+                    await ShowStatusAndWait("盘符 M 分配失败");
+                    return false;
                 }
 
-                // 若直接分配失败，再回退到“新增盘符”检测路径（适配系统自动分配其他盘符的情况）
-                await ShowStatusAndWait("分配盘符失败，回退到检测新增盘符...");
-                var newDriveLetter = await WaitForNewDriveLetterAsync(lettersBefore, 30000);
-
-                // 兜底：如果系统因既有注册表映射自动分配了 M:，虽然不是“新增”，也直接视为成功
-                if (Directory.Exists(TARGET_DRIVE))
-                {
-                    await ShowStatusAndWait("检测到盘符 M 已可用");
-                    return true;
-                }
-
-                var targetLetter = TARGET_DRIVE.TrimEnd(':');
-                var targetEntry = $@"\DosDevices\{targetLetter}:";
-
-                if (string.IsNullOrEmpty(newDriveLetter))
-                {
-                    await ShowStatusAndWait("未检测到新盘符，尝试通过卷GUID定位注册表条目...");
-                    // 轮询寻找新增的 \??\Volume{GUID} 条目
-                    var swVol = Stopwatch.StartNew();
-                    string newVolName = null;
-                    byte[] newVolValue = null;
-                    while (swVol.ElapsedMilliseconds < 30000)
-                    {
-                        await Task.Delay(500);
-                        var volumeAfter = GetMountedDevicesVolumeGuids();
-                        foreach (var kv in volumeAfter)
-                        {
-                            if (!volumeBefore.ContainsKey(kv.Key))
-                            {
-                                newVolName = kv.Key;
-                                newVolValue = kv.Value;
-                                break;
-                            }
-                        }
-                        if (newVolName != null) break;
-                    }
-
-                    if (newVolName == null || newVolValue == null)
-                    {
-                        // 此场景常见于：该 VHD/卷曾被手动挂载过，注册表条目（\\DosDevices\\X: 或 \\??\\Volume{GUID}）已存在，因此不会新增
-                        // 继续尝试备用方法，直接为最后挂载磁盘的第一个分区分配盘符 M
-                        await ShowStatusAndWait("未检测到新增卷GUID条目，尝试备用分配盘符方法...");
-                        var assignedFallback = await AssignDriveLetterDirect();
-                        if (assignedFallback)
-                        {
-                            await ShowStatusAndWait("备用方法分配盘符 M 成功");
-                            return true;
-                        }
-
-                        await ShowStatusAndWait("未检测到新增的卷GUID注册表条目，且备用方法也失败");
-                        return false;
-                    }
-
-                    await ShowStatusAndWait($"检测到新增卷GUID条目: {newVolName}，写入 \\DosDevices\\M:...");
-                    var targetLetter2 = TARGET_DRIVE.TrimEnd(':');
-                    var targetEntry2 = $@"\DosDevices\{targetLetter2}:";
-                    var setOk2 = SetDosDevicesEntry(targetEntry2, newVolValue, deleteExistingTarget: true);
-                    if (!setOk2)
-                    {
-                        await ShowStatusAndWait("写入 \\DosDevices\\M: 失败");
-                        return false;
-                    }
-                    await ShowStatusAndWait("已将注册表盘符重映射为 M:，即将重启以应用更改...");
-                    TryRebootSystem();
-                    return true;
-                }
-
-                await ShowStatusAndWait($"检测到新盘符: {newDriveLetter}");
-
-                if (string.Equals(newDriveLetter.Trim(), TARGET_DRIVE, StringComparison.OrdinalIgnoreCase))
-                {
-                    await ShowStatusAndWait("新增盘符已为目标 M:，无需更改");
-                    return true;
-                }
-
-                // 优先使用 \DosDevices\X: 的二进制值
-                var sourceEntry = GetDosDevicesEntryName(newDriveLetter);
-                var sourceValue = ReadMountedDevicesBinary(sourceEntry);
-
-                if (sourceValue != null)
-                {
-                    var remapOk = TryRemapDosDevicesEntry(sourceEntry, sourceValue, targetEntry);
-                    if (!remapOk)
-                    {
-                        await ShowStatusAndWait("注册表盘符重映射失败");
-                        return false;
-                    }
-                }
-                else
-                {
-                    // 回退：通过卷GUID查找二进制值（\\?\\Volume{GUID} => \\??\\Volume{GUID}）
-                    var driveRoot = GetDriveRoot(newDriveLetter);
-                    var sb = new System.Text.StringBuilder(256);
-                    var ok = GetVolumeNameForVolumeMountPoint(driveRoot, sb, (uint)sb.Capacity);
-                    if (!ok)
-                    {
-                        await ShowStatusAndWait("无法获取新盘符的卷GUID路径");
-                        return false;
-                    }
-                    var volRegName = ConvertVolumeGuidPathToRegName(sb.ToString());
-                    var volValue = ReadMountedDevicesBinary(volRegName);
-                    if (volValue == null)
-                    {
-                        await ShowStatusAndWait("无法读取卷GUID对应的注册表二进制值");
-                        return false;
-                    }
-                    // 仅设置目标 M:，不删除卷GUID条目
-                    var setOk = SetDosDevicesEntry(targetEntry, volValue, deleteExistingTarget: true);
-                    if (!setOk)
-                    {
-                        await ShowStatusAndWait("写入 \\DosDevices\\M: 失败");
-                        return false;
-                    }
-                    // 尝试删除原盘符条目（若存在）
-                    TryDeleteMountedDevicesValue(sourceEntry);
-                }
-
-                await ShowStatusAndWait("已将注册表盘符重映射为 M:，即将重启以应用更改...");
-                TryRebootSystem();
+                await ShowStatusAndWait("盘符 M 分配成功");
                 return true;
             }
             catch (Exception ex)
@@ -2741,6 +2617,28 @@ exit";
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern bool GetVolumeNameForVolumeMountPoint(string lpszVolumeMountPoint, System.Text.StringBuilder lpszVolumeName, uint cchBufferLength);
 
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr FindFirstVolume(System.Text.StringBuilder lpszVolumeName, uint cchBufferLength);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool FindNextVolume(IntPtr hFindVolume, System.Text.StringBuilder lpszVolumeName, uint cchBufferLength);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool FindVolumeClose(IntPtr hFindVolume);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool GetVolumePathNamesForVolumeName(string lpszVolumeName, [Out] char[] lpszVolumePathNames, uint cchBufferLength, out uint lpcchReturnLength);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool GetVolumeInformation(string lpRootPathName, System.Text.StringBuilder lpVolumeNameBuffer, uint nVolumeNameSize, out uint lpVolumeSerialNumber, out uint lpMaximumComponentLength, out uint lpFileSystemFlags, System.Text.StringBuilder lpFileSystemNameBuffer, uint nFileSystemNameSize);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool DeleteVolumeMountPoint(string lpszVolumeMountPoint);
+
+        private static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
+        private const int ERROR_NO_MORE_FILES = 18;
+        private const int ERROR_MORE_DATA = 234;
+
         private static string ConvertVolumeGuidPathToRegName(string volumeGuidPath)
         {
             // 输入: \\?\Volume{GUID}\, 输出: \??\Volume{GUID}
@@ -2814,53 +2712,494 @@ exit";
             catch { }
         }
 
+        private sealed class MountedVolumeInfo
+        {
+            public string VolumeGuidPath { get; set; } = string.Empty;
+            public string FileSystem { get; set; }
+            public List<string> AccessPaths { get; set; } = new List<string>();
+            public List<string> SampleEntries { get; set; } = new List<string>();
+            public bool HasPackageFolder { get; set; }
+            public bool HasBinFolder { get; set; }
+            public bool HasStartBat { get; set; }
+            public bool HasStartGameBat { get; set; }
+            public bool HasDriveLetter => AccessPaths.Any(IsDriveLetterPath);
+        }
+
+        private Dictionary<string, MountedVolumeInfo> CaptureCurrentVolumes()
+        {
+            var result = new Dictionary<string, MountedVolumeInfo>(StringComparer.OrdinalIgnoreCase);
+            foreach (var volumeGuidPath in EnumerateVolumeGuidPaths())
+            {
+                var info = InspectMountedVolume(volumeGuidPath);
+                result[info.VolumeGuidPath] = info;
+            }
+            return result;
+        }
+
+        private List<string> EnumerateVolumeGuidPaths()
+        {
+            var result = new List<string>();
+            var buffer = new StringBuilder(1024);
+            var handle = FindFirstVolume(buffer, (uint)buffer.Capacity);
+            if (handle == INVALID_HANDLE_VALUE)
+            {
+                Trace.WriteLine($"FindFirstVolume失败: {FormatWin32Error(Marshal.GetLastWin32Error())}");
+                return result;
+            }
+
+            try
+            {
+                while (true)
+                {
+                    var volumeGuidPath = NormalizeVolumeId(buffer.ToString());
+                    if (!string.IsNullOrWhiteSpace(volumeGuidPath))
+                    {
+                        result.Add(volumeGuidPath);
+                    }
+
+                    buffer.Clear();
+                    if (!FindNextVolume(handle, buffer, (uint)buffer.Capacity))
+                    {
+                        var error = Marshal.GetLastWin32Error();
+                        if (error != ERROR_NO_MORE_FILES)
+                        {
+                            Trace.WriteLine($"FindNextVolume失败: {FormatWin32Error(error)}");
+                        }
+                        break;
+                    }
+                }
+            }
+            finally
+            {
+                FindVolumeClose(handle);
+            }
+
+            return result;
+        }
+
+        private MountedVolumeInfo InspectMountedVolume(string volumeGuidPath)
+        {
+            var normalized = NormalizeVolumeId(volumeGuidPath);
+            return new MountedVolumeInfo
+            {
+                VolumeGuidPath = normalized,
+                AccessPaths = GetVolumeAccessPaths(normalized),
+                FileSystem = GetVolumeFileSystem(normalized),
+                SampleEntries = GetVolumeEntrySample(normalized),
+                HasPackageFolder = DirectoryExistsSafe(normalized, "package"),
+                HasBinFolder = DirectoryExistsSafe(normalized, "bin"),
+                HasStartBat = FileExistsSafe(normalized, "start.bat"),
+                HasStartGameBat = FileExistsSafe(normalized, "start_game.bat")
+            };
+        }
+
+        private List<string> GetVolumeAccessPaths(string volumeGuidPath)
+        {
+            var buffer = new char[256];
+            if (!GetVolumePathNamesForVolumeName(volumeGuidPath, buffer, (uint)buffer.Length, out var requiredLength))
+            {
+                var error = Marshal.GetLastWin32Error();
+                if (error != ERROR_MORE_DATA || requiredLength == 0)
+                {
+                    Trace.WriteLine($"GetVolumePathNamesForVolumeName失败: Volume={volumeGuidPath}, Error={FormatWin32Error(error)}");
+                    return new List<string>();
+                }
+
+                buffer = new char[requiredLength];
+                if (!GetVolumePathNamesForVolumeName(volumeGuidPath, buffer, (uint)buffer.Length, out requiredLength))
+                {
+                    Trace.WriteLine($"GetVolumePathNamesForVolumeName重试失败: Volume={volumeGuidPath}, Error={FormatWin32Error(Marshal.GetLastWin32Error())}");
+                    return new List<string>();
+                }
+            }
+
+            return ParseMultiStringBuffer(buffer);
+        }
+
+        private static string GetVolumeFileSystem(string volumeGuidPath)
+        {
+            var volumeName = new StringBuilder(260);
+            var fileSystemName = new StringBuilder(64);
+            if (!GetVolumeInformation(volumeGuidPath, volumeName, (uint)volumeName.Capacity, out _, out _, out _, fileSystemName, (uint)fileSystemName.Capacity))
+            {
+                return null;
+            }
+
+            return fileSystemName.Length == 0 ? null : fileSystemName.ToString();
+        }
+
+        private static List<string> GetVolumeEntrySample(string volumeGuidPath, int limit = 8)
+        {
+            try
+            {
+                if (!Directory.Exists(volumeGuidPath))
+                {
+                    return new List<string>();
+                }
+
+                return Directory.EnumerateFileSystemEntries(volumeGuidPath, "*", SearchOption.TopDirectoryOnly)
+                    .Select(Path.GetFileName)
+                    .Where(name => !string.IsNullOrWhiteSpace(name))
+                    .Take(limit)
+                    .ToList();
+            }
+            catch
+            {
+                return new List<string>();
+            }
+        }
+
+        private static bool DirectoryExistsSafe(string volumeGuidPath, string childName)
+        {
+            try
+            {
+                return Directory.Exists(Path.Combine(volumeGuidPath, childName));
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool FileExistsSafe(string volumeGuidPath, string childName)
+        {
+            try
+            {
+                return File.Exists(Path.Combine(volumeGuidPath, childName));
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static List<string> ParseMultiStringBuffer(char[] buffer)
+        {
+            var result = new List<string>();
+            var start = 0;
+            for (var i = 0; i < buffer.Length; i++)
+            {
+                if (buffer[i] != '\0')
+                {
+                    continue;
+                }
+
+                if (i == start)
+                {
+                    break;
+                }
+
+                result.Add(new string(buffer, start, i - start));
+                start = i + 1;
+            }
+            return result;
+        }
+
+        private static bool IsDriveLetterPath(string path)
+        {
+            var value = (path ?? string.Empty).Trim();
+            return value.Length >= 3 && char.IsLetter(value[0]) && value[1] == ':' && value[2] == '\\';
+        }
+
+        private static int ScoreMountedVolume(MountedVolumeInfo volume, string expectedFolderName)
+        {
+            var score = 0;
+
+            if (volume.AccessPaths.Any(path => string.Equals(path.TrimEnd('\\'), TARGET_DRIVE, StringComparison.OrdinalIgnoreCase)))
+            {
+                score += 1000;
+            }
+
+            if (string.Equals(volume.FileSystem, "NTFS", StringComparison.OrdinalIgnoreCase))
+            {
+                score += 500;
+            }
+            else if (string.Equals(volume.FileSystem, "exFAT", StringComparison.OrdinalIgnoreCase))
+            {
+                score += 250;
+            }
+            else if (!string.IsNullOrWhiteSpace(volume.FileSystem) && volume.FileSystem.StartsWith("FAT", StringComparison.OrdinalIgnoreCase))
+            {
+                score -= 120;
+            }
+
+            if (volume.AccessPaths.Count == 0)
+            {
+                score += 80;
+            }
+            else if (volume.HasDriveLetter)
+            {
+                score -= 20;
+            }
+            else
+            {
+                score += 20;
+            }
+
+            if (string.Equals(expectedFolderName, "package", StringComparison.OrdinalIgnoreCase) && volume.HasPackageFolder)
+            {
+                score += 700;
+            }
+            if (string.Equals(expectedFolderName, "bin", StringComparison.OrdinalIgnoreCase) && volume.HasBinFolder)
+            {
+                score += 700;
+            }
+
+            if (volume.HasPackageFolder)
+            {
+                score += 120;
+            }
+            if (volume.HasBinFolder)
+            {
+                score += 120;
+            }
+            if (volume.HasStartBat)
+            {
+                score += 100;
+            }
+            if (volume.HasStartGameBat)
+            {
+                score += 100;
+            }
+            if (volume.SampleEntries.Count > 0)
+            {
+                score += 10;
+            }
+
+            return score;
+        }
+
+        private async Task<List<MountedVolumeInfo>> WaitForMountedVolumeCandidatesAsync(Dictionary<string, MountedVolumeInfo> volumesBefore, string expectedFolderName, int timeoutMs)
+        {
+            var sw = Stopwatch.StartNew();
+            long firstSeenAtMs = -1;
+            string lastSignature = null;
+
+            while (sw.ElapsedMilliseconds < timeoutMs)
+            {
+                await Task.Delay(500);
+                var volumesAfter = CaptureCurrentVolumes();
+                var newVolumes = volumesAfter.Values
+                    .Where(v => !volumesBefore.ContainsKey(v.VolumeGuidPath))
+                    .OrderByDescending(v => ScoreMountedVolume(v, expectedFolderName))
+                    .ThenBy(v => v.VolumeGuidPath, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                if (newVolumes.Count == 0)
+                {
+                    continue;
+                }
+
+                if (firstSeenAtMs < 0)
+                {
+                    firstSeenAtMs = sw.ElapsedMilliseconds;
+                }
+
+                var signature = string.Join("|", newVolumes.Select(v => $"{v.VolumeGuidPath}:{v.FileSystem}:{string.Join(",", v.AccessPaths)}"));
+                if (!string.Equals(signature, lastSignature, StringComparison.Ordinal))
+                {
+                    lastSignature = signature;
+                    foreach (var volume in newVolumes)
+                    {
+                        await ShowStatusAndWait($"候选卷: {volume.VolumeGuidPath} FS={volume.FileSystem ?? "(unknown)"} Paths={FormatAccessPaths(volume.AccessPaths)} Sample={FormatSampleEntries(volume.SampleEntries)}");
+                    }
+                }
+
+                if (sw.ElapsedMilliseconds - firstSeenAtMs < 2000)
+                {
+                    continue;
+                }
+
+                return newVolumes;
+            }
+
+            return new List<MountedVolumeInfo>();
+        }
+
+        private async Task<bool> TryAssignTargetDriveLetterAsync(string volumeGuidPath)
+        {
+            var normalizedVolumeGuidPath = NormalizeVolumeId(volumeGuidPath);
+            var currentTarget = TryGetMountedVolumeGuidForMountPoint(TARGET_DRIVE_ROOT);
+            if (string.Equals(currentTarget, normalizedVolumeGuidPath, StringComparison.OrdinalIgnoreCase) && Directory.Exists(TARGET_DRIVE_ROOT))
+            {
+                await ShowStatusAndWait("检测到 M 盘已指向目标数据卷");
+                return true;
+            }
+
+            if (!await ClearTargetDriveMountPointAsync())
+            {
+                return false;
+            }
+
+            if (SetVolumeMountPoint(TARGET_DRIVE_ROOT, normalizedVolumeGuidPath))
+            {
+                if (await WaitForTargetDriveStateAsync(normalizedVolumeGuidPath, 5000))
+                {
+                    return true;
+                }
+
+                Trace.WriteLine($"SetVolumeMountPoint返回成功但校验未通过: Volume={normalizedVolumeGuidPath}");
+            }
+            else
+            {
+                Trace.WriteLine($"SetVolumeMountPoint失败: Volume={normalizedVolumeGuidPath}, Error={FormatWin32Error(Marshal.GetLastWin32Error())}");
+            }
+
+            await ShowStatusAndWait("SetVolumeMountPoint 分配失败，尝试 mountvol 兜底...");
+            if (!await TryRunMountVolAsync(new[] { TARGET_DRIVE_ROOT, normalizedVolumeGuidPath }, "分配 M 盘"))
+            {
+                return false;
+            }
+
+            return await WaitForTargetDriveStateAsync(normalizedVolumeGuidPath, 5000);
+        }
+
+        private async Task<bool> ClearTargetDriveMountPointAsync(bool logStatus = true)
+        {
+            var currentVolume = TryGetMountedVolumeGuidForMountPoint(TARGET_DRIVE_ROOT);
+            if (string.IsNullOrEmpty(currentVolume) && !Directory.Exists(TARGET_DRIVE_ROOT))
+            {
+                return true;
+            }
+
+            if (logStatus)
+            {
+                await ShowStatusAndWait($"检测到旧的 M 盘映射: {currentVolume ?? "(unknown)"}，正在清理...");
+            }
+
+            if (!DeleteVolumeMountPoint(TARGET_DRIVE_ROOT))
+            {
+                Trace.WriteLine($"DeleteVolumeMountPoint失败: Error={FormatWin32Error(Marshal.GetLastWin32Error())}");
+                if (logStatus)
+                {
+                    await ShowStatusAndWait("DeleteVolumeMountPoint 移除失败，尝试 mountvol /d...");
+                }
+
+                if (!await TryRunMountVolAsync(new[] { TARGET_DRIVE_ROOT, "/d" }, "移除 M 盘"))
+                {
+                    return false;
+                }
+            }
+
+            return await WaitForTargetDriveStateAsync(null, 5000);
+        }
+
+        private async Task<bool> WaitForTargetDriveStateAsync(string expectedVolumeGuidPath, int timeoutMs)
+        {
+            var normalizedExpected = string.IsNullOrWhiteSpace(expectedVolumeGuidPath) ? null : NormalizeVolumeId(expectedVolumeGuidPath);
+            var sw = Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < timeoutMs)
+            {
+                var currentVolume = TryGetMountedVolumeGuidForMountPoint(TARGET_DRIVE_ROOT);
+                if (string.IsNullOrEmpty(normalizedExpected))
+                {
+                    if (string.IsNullOrEmpty(currentVolume) && !Directory.Exists(TARGET_DRIVE_ROOT))
+                    {
+                        return true;
+                    }
+                }
+                else if (string.Equals(currentVolume, normalizedExpected, StringComparison.OrdinalIgnoreCase) && Directory.Exists(TARGET_DRIVE_ROOT))
+                {
+                    return true;
+                }
+
+                await Task.Delay(200);
+            }
+
+            return false;
+        }
+
+        private async Task<bool> TryRunMountVolAsync(IEnumerable<string> arguments, string operation)
+        {
+            var process = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = "mountvol",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                }
+            };
+
+            foreach (var argument in arguments)
+            {
+                process.StartInfo.ArgumentList.Add(argument);
+            }
+
+            process.Start();
+            var waitTask = process.WaitForExitAsync();
+            var timeoutTask = Task.Delay(20000);
+            var completed = await Task.WhenAny(waitTask, timeoutTask);
+            if (completed == timeoutTask)
+            {
+                try { process.Kill(); } catch { }
+                Trace.WriteLine($"mountvol {operation} 超时");
+                return false;
+            }
+
+            var output = await process.StandardOutput.ReadToEndAsync();
+            var error = await process.StandardError.ReadToEndAsync();
+            Trace.WriteLine($"mountvol {operation} ExitCode={process.ExitCode}");
+            if (!string.IsNullOrWhiteSpace(output))
+            {
+                Trace.WriteLine($"mountvol {operation} Output={output}");
+            }
+            if (!string.IsNullOrWhiteSpace(error))
+            {
+                Trace.WriteLine($"mountvol {operation} Error={error}");
+            }
+
+            return process.ExitCode == 0;
+        }
+
+        private static string TryGetMountedVolumeGuidForMountPoint(string mountPoint)
+        {
+            var buffer = new StringBuilder(64);
+            if (!GetVolumeNameForVolumeMountPoint(mountPoint, buffer, (uint)buffer.Capacity))
+            {
+                return null;
+            }
+
+            return NormalizeVolumeId(buffer.ToString());
+        }
+
+        private static string FormatAccessPaths(IEnumerable<string> accessPaths)
+        {
+            var paths = accessPaths?.Where(path => !string.IsNullOrWhiteSpace(path)).ToList() ?? new List<string>();
+            return paths.Count == 0 ? "(none)" : string.Join(", ", paths);
+        }
+
+        private static string FormatSampleEntries(IEnumerable<string> sampleEntries)
+        {
+            var entries = sampleEntries?.Where(entry => !string.IsNullOrWhiteSpace(entry)).ToList() ?? new List<string>();
+            return entries.Count == 0 ? "(none)" : string.Join(", ", entries);
+        }
+
+        private static string FormatWin32Error(int errorCode)
+        {
+            return $"{errorCode}: {new System.ComponentModel.Win32Exception(errorCode).Message}";
+        }
+
         public async Task<bool> UnmountDrive()
         {
             try
             {
-                if (!Directory.Exists(TARGET_DRIVE))
+                var currentVolume = TryGetMountedVolumeGuidForMountPoint(TARGET_DRIVE_ROOT);
+                if (string.IsNullOrEmpty(currentVolume) && !Directory.Exists(TARGET_DRIVE_ROOT))
                 {
                     StatusChanged?.Invoke("M盘符已不存在，无需移除");
                     return true;
                 }
 
                 StatusChanged?.Invoke("正在移除M盘符...");
-                
-                var diskpartScript = "select volume M\nremove\nexit";
-                var tempScript = Path.GetTempFileName();
-                await File.WriteAllTextAsync(tempScript, diskpartScript);
-                
-                var process = new Process
+
+                if (!await ClearTargetDriveMountPointAsync(logStatus: false))
                 {
-                    StartInfo = new ProcessStartInfo
-                    {
-                        FileName = "diskpart",
-                        Arguments = $"/s \"{tempScript}\"",
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true
-                    }
-                };
-                
-                process.Start();
-                
-                // 添加超时机制
-                var waitTask = process.WaitForExitAsync();
-                var timeoutTask = Task.Delay(20000); // 20秒超时
-                var completed = await Task.WhenAny(waitTask, timeoutTask);
-                
-                if (completed == timeoutTask)
-                {
-                    try { process.Kill(); } catch { }
-                    StatusChanged?.Invoke("移除M盘符超时，已中止diskpart进程");
-                    if (File.Exists(tempScript))
-                        File.Delete(tempScript);
+                    StatusChanged?.Invoke("移除M盘符失败");
                     return false;
                 }
-                
-                if (File.Exists(tempScript))
-                    File.Delete(tempScript);
                 
                 StatusChanged?.Invoke("M盘符移除完成");
                 return true;
@@ -2877,7 +3216,7 @@ exit";
         {
             StatusChanged?.Invoke($"正在搜索{folderName}文件夹...");
             
-            if (!Directory.Exists(TARGET_DRIVE))
+            if (!Directory.Exists(TARGET_DRIVE_ROOT))
             {
                 StatusChanged?.Invoke($"目标驱动器 {TARGET_DRIVE} 不存在");
                 return null;
@@ -2887,10 +3226,10 @@ exit";
             {
                 try
                 {
-                    StatusChanged?.Invoke($"开始在 {TARGET_DRIVE} 中搜索{folderName}文件夹...");
+                    StatusChanged?.Invoke($"开始在 {TARGET_DRIVE_ROOT} 中搜索{folderName}文件夹...");
                     
                     // 首先检查根目录
-                    var rootDirs = Directory.GetDirectories(TARGET_DRIVE)
+                    var rootDirs = Directory.GetDirectories(TARGET_DRIVE_ROOT)
                         .Select(d => new { Path = d, Name = Path.GetFileName(d) })
                         .ToList();
                     
@@ -2914,7 +3253,7 @@ exit";
                     // 如果根目录没有，递归搜索所有子目录（不区分大小写）
                     StatusChanged?.Invoke($"根目录未找到{folderName}文件夹，开始递归搜索...");
                     
-                    var allDirectories = Directory.GetDirectories(TARGET_DRIVE, "*", SearchOption.AllDirectories)
+                    var allDirectories = Directory.GetDirectories(TARGET_DRIVE_ROOT, "*", SearchOption.AllDirectories)
                         .Where(d => string.Equals(Path.GetFileName(d), folderName, StringComparison.OrdinalIgnoreCase))
                         .ToList();
                     
@@ -3215,7 +3554,7 @@ exit";
                 await Task.Delay(2000);
                 
                 // 验证M盘是否已被删除
-                bool driveRemoved = !Directory.Exists(TARGET_DRIVE);
+                bool driveRemoved = !Directory.Exists(TARGET_DRIVE_ROOT);
                 if (driveRemoved)
                 {
                     await ShowStatusAndWait("盘符M删除成功");
@@ -3295,7 +3634,7 @@ exit";
                 // 等待盘符分配完成
                 await Task.Delay(2000);
                 
-                bool driveExists = Directory.Exists(TARGET_DRIVE);
+                bool driveExists = Directory.Exists(TARGET_DRIVE_ROOT);
                 if (driveExists)
                 {
                     await ShowStatusAndWait("盘符M分配成功");
@@ -3378,7 +3717,7 @@ exit";
                 // 等待盘符分配完成
                 await Task.Delay(2000);
                 
-                bool driveExists = Directory.Exists(TARGET_DRIVE);
+                bool driveExists = Directory.Exists(TARGET_DRIVE_ROOT);
                 if (driveExists)
                 {
                     await ShowStatusAndWait("备用方法盘符M分配成功");
@@ -3558,7 +3897,7 @@ exit";
                     if (!string.IsNullOrWhiteSpace(assignErr)) Debug.WriteLine($"尝试分配分区 {pn} 错误:\n{assignErr}");
 
                     await Task.Delay(1000);
-                    if (Directory.Exists(TARGET_DRIVE))
+                    if (Directory.Exists(TARGET_DRIVE_ROOT))
                     {
                         await ShowStatusAndWait($"已为分区 {pn} 分配盘符 M 成功");
                         return true;
@@ -3576,71 +3915,35 @@ exit";
             }
         }
 
-        // 无 diskpart 的盘符分配实现：枚举卷 → 解析扩展 → 识别虚拟磁盘卷 → 设置 M:\
-        private async Task<bool> AssignDriveLetterWithoutDiskpart(string vhdPath)
+        // 无需 CIM/WMI：基于卷 GUID 差集识别新卷，再用 SetVolumeMountPoint 绑定 M:\。
+        private async Task<bool> AssignDriveLetterWithoutDiskpart(string vhdPath, Dictionary<string, MountedVolumeInfo> volumesBefore)
         {
             try
             {
-                if (Directory.Exists(TARGET_DRIVE))
+                if (Directory.Exists(TARGET_DRIVE_ROOT))
                 {
                     await ShowStatusAndWait("检测到盘符 M 已可用");
                     return true;
                 }
 
-                var volumes = EnumerateVolumes();
-                // 优先尝试未分配盘符的卷，减少对已有盘符（如 N:）的影响
-                foreach (var vol in volumes.OrderBy(v => string.IsNullOrWhiteSpace(v.DriveLetter) ? 0 : 1))
+                await ShowStatusAndWait("VHD挂载成功，正在识别数据卷...");
+                var expectedFolderName = Path.GetFileName(vhdPath).IndexOf("SDHD", StringComparison.OrdinalIgnoreCase) >= 0 ? "bin" : "package";
+                var candidates = await WaitForMountedVolumeCandidatesAsync(volumesBefore, expectedFolderName, 30000);
+                if (candidates.Count == 0)
                 {
-                    await ShowStatusAndWait($"检测卷: {vol.DevicePath} FS={vol.FileSystem} DL={vol.DriveLetter ?? "(none)"}");
-                    if (string.IsNullOrWhiteSpace(vol.FileSystem))
-                        continue;
-
-                    var diskNumbers = GetVolumeDiskNumbers(vol.DevicePath);
-                    await ShowStatusAndWait($"卷磁盘号: {(diskNumbers == null || diskNumbers.Count == 0 ? "(none)" : string.Join(",", diskNumbers))}");
-                    if (diskNumbers == null || diskNumbers.Count == 0)
-                        continue;
-
-                    if (!BelongsToVirtualDisk(diskNumbers))
-                        continue;
-
-                    await ShowStatusAndWait("识别为虚拟磁盘卷，尝试分配 M");
-                    var ok = TrySetDriveLetterM(vol.DevicePath);
-                    await ShowStatusAndWait($"分配接口返回: {ok}");
-                    await Task.Delay(1000);
-                    if (ok && Directory.Exists(TARGET_DRIVE))
-                    {
-                        return true;
-                    }
+                    await ShowStatusAndWait("未识别到新挂载的数据卷");
+                    return false;
                 }
 
-                // 回退优先：若仅有一个“无盘符且为 NTFS”的卷，优先为其分配 M（更贴近挂载的 VHD 数据分区）
-                var noLetterNtfs = volumes.Where(v => string.IsNullOrWhiteSpace(v.DriveLetter) && string.Equals(v.FileSystem ?? string.Empty, "NTFS", StringComparison.OrdinalIgnoreCase)).ToList();
-                if (noLetterNtfs.Count == 1)
+                foreach (var candidate in candidates)
                 {
-                    var targetId = NormalizeVolumeId(noLetterNtfs[0].DevicePath);
-                    await ShowStatusAndWait("未识别到虚拟卷，但仅有一个无盘符的 NTFS 卷，尝试回退分配 M");
-                    await ShowStatusAndWait($"开始调用 CIM AddMountPoint: DeviceID={targetId}");
-                    var ok = TrySetDriveLetterM(noLetterNtfs[0].DevicePath);
-                    await ShowStatusAndWait($"分配接口返回: {ok}");
-                    await Task.Delay(1000);
-                    if (ok && Directory.Exists(TARGET_DRIVE))
+                    await ShowStatusAndWait($"尝试绑定候选卷到 M: {candidate.VolumeGuidPath} FS={candidate.FileSystem ?? "(unknown)"} Paths={FormatAccessPaths(candidate.AccessPaths)}");
+                    if (await TryAssignTargetDriveLetterAsync(candidate.VolumeGuidPath))
                     {
                         return true;
                     }
-                }
 
-                // 次级回退：如果系统中仅存在一个“无盘符且有文件系统”的卷（非 NTFS 场景），尝试分配 M
-                var noLetterWithFs = volumes.Where(v => string.IsNullOrWhiteSpace(v.DriveLetter) && !string.IsNullOrWhiteSpace(v.FileSystem)).ToList();
-                if (noLetterWithFs.Count == 1)
-                {
-                    await ShowStatusAndWait("未识别到虚拟卷，但仅有一个无盘符的文件系统卷，尝试回退分配 M");
-                    var ok = TrySetDriveLetterM(noLetterWithFs[0].DevicePath);
-                    await ShowStatusAndWait($"分配接口返回: {ok}");
-                    await Task.Delay(1000);
-                    if (ok && Directory.Exists(TARGET_DRIVE))
-                    {
-                        return true;
-                    }
+                    Trace.WriteLine($"候选卷绑定失败，继续尝试下一个候选卷: {candidate.VolumeGuidPath}");
                 }
 
                 return false;
@@ -3656,8 +3959,8 @@ exit";
         private class VolumeInfo
         {
             public string DevicePath { get; set; } = string.Empty; // 如 \\?\Volume{GUID}\\
-            public string? FileSystem { get; set; }
-            public string? DriveLetter { get; set; } // 如 "M:"，为空表示未分配
+            public string FileSystem { get; set; }
+            public string DriveLetter { get; set; } // 如 "M:"，为空表示未分配
         }
 
         private List<VolumeInfo> EnumerateVolumes()
@@ -3733,9 +4036,14 @@ exit";
             var result = new List<int>();
             try
             {
-                if (!volumeDevicePath.EndsWith("\\")) volumeDevicePath += "\\";
+                var devicePath = (volumeDevicePath ?? string.Empty).Trim().TrimEnd('\\');
+                if (string.IsNullOrWhiteSpace(devicePath))
+                {
+                    return result;
+                }
+
                 using var handle = CreateFile(
-                    volumeDevicePath,
+                    devicePath,
                     GENERIC_READ,
                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                     IntPtr.Zero,
@@ -3795,50 +4103,6 @@ exit";
                 Debug.WriteLine($"BelongsToVirtualDisk 异常: {ex}");
             }
             return false;
-        }
-
-        private bool TrySetDriveLetterM(string volumeDevicePath)
-        {
-            try
-            {
-                // 仅使用 CIM：用 Key 构建实例（避免查询和转义问题）
-                using var session = CimSession.Create(null);
-                var expectedId = NormalizeVolumeId(volumeDevicePath);
-                Trace.WriteLine($"CIM 目标卷 DeviceID: {expectedId}");
-
-                var volInstance = new CimInstance("Win32_Volume");
-                volInstance.CimInstanceProperties.Add(
-                    Microsoft.Management.Infrastructure.CimProperty.Create(
-                        "DeviceID",
-                        expectedId,
-                        Microsoft.Management.Infrastructure.CimType.String,
-                        Microsoft.Management.Infrastructure.CimFlags.Key));
-
-                var parameters = new CimMethodParametersCollection();
-                var mountDir = TARGET_DRIVE.EndsWith("\\") ? TARGET_DRIVE : TARGET_DRIVE + "\\";
-                parameters.Add(Microsoft.Management.Infrastructure.CimMethodParameter.Create("Directory", mountDir, Microsoft.Management.Infrastructure.CimType.String, Microsoft.Management.Infrastructure.CimFlags.None));
-
-                var result = session.InvokeMethod(@"root\cimv2", volInstance, "AddMountPoint", parameters);
-                var rvParam = result.ReturnValue;
-                if (rvParam != null)
-                {
-                    var val = rvParam.Value;
-                    if (val is uint u && u == 0) return true;
-                    if (val is int i && i == 0) return true;
-                    Trace.WriteLine($"CIM AddMountPoint 返回码: {val}");
-                }
-                else
-                {
-                    Trace.WriteLine("CIM AddMountPoint 未返回码");
-                }
-
-                return false;
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"TrySetDriveLetterM 异常: {ex}");
-                return false;
-            }
         }
 
         private static string NormalizeVolumeId(string id)

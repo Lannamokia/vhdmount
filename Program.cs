@@ -176,39 +176,6 @@ namespace VHDMounter
                 }
                 catch { }
 
-                Trace.WriteLine("准备绑定 AssemblyResolve");
-                // 绑定程序集解析事件，确保 Microsoft.Management.Infrastructure 能被解析
-                AppDomain.CurrentDomain.AssemblyResolve += (sender, ev) =>
-                {
-                    try
-                    {
-                        if (ev.Name.StartsWith("Microsoft.Management.Infrastructure", StringComparison.OrdinalIgnoreCase))
-                        {
-                            var candidates = new[]
-                            {
-                                Path.Combine(AppContext.BaseDirectory, "Microsoft.Management.Infrastructure.dll"),
-                                Path.Combine(AppContext.BaseDirectory, "runtimes", "win10-x64", "lib", "netstandard1.6", "Microsoft.Management.Infrastructure.dll"),
-                                Path.Combine(AppContext.BaseDirectory, "runtimes", "win-x64", "lib", "netstandard1.6", "Microsoft.Management.Infrastructure.dll")
-                            };
-                            foreach (var p in candidates)
-                            {
-                                if (File.Exists(p))
-                                {
-                                    Trace.WriteLine($"AssemblyResolve: 加载 {p}");
-                                    return System.Reflection.Assembly.LoadFrom(p);
-                                }
-                            }
-                            Trace.WriteLine("AssemblyResolve: 未找到 Microsoft.Management.Infrastructure.dll");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Trace.WriteLine($"AssemblyResolve 异常: {ex}");
-                    }
-                    return null;
-                };
-                Trace.WriteLine("AssemblyResolve 绑定完成");
-
                 Trace.WriteLine("准备执行自更新检查");
                 var selfUpdated = TryPerformSelfUpdateFromUsb();
                 Trace.WriteLine($"自更新检查完成 SelfUpdated={selfUpdated}");
