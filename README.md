@@ -88,14 +88,13 @@
 ### 平台与工具升级
 
 - **.NET 版本升级至 8.0**
-  - VHDMounter、Updater、VHDDebugger 从 net6.0 升级至 net8.0
+  - VHDMounter、Updater 从 net6.0 升级至 net8.0
   - RID 规范化：win10-x64 → win-x64（更广泛的兼容性）
-  - 新增 Directory.Build.props，统一 solution 级别的构建属性
 
 - **管理工具替换与扩展**
   - VHDMountAdminTools 全面取代已废弃的 UpdatePackagerGUI
   - Flutter 管理客户端完整集成，支持 TOTP 验证码扫码添加功能
-  - vhdmount.sln 新增，统一管理所有 .NET 子项目（VHDMounter、Updater、VHDDebugger、VHDMountAdminTools）
+  - vhdmount.sln 新增，统一管理所有 .NET 子项目（VHDMounter、Updater、VHDMountAdminTools）
 
 - **CI/CD 流程对齐**
   - GitHub Actions 工作流（build.yml）同步更新，.NET 版本、RID 与产物路径全面同步
@@ -146,6 +145,18 @@
 
 ```
 vhdmount/
+├── docs/
+│   └── plans/
+│       └── machine-log-reporting-plan.md
+├── scripts/
+│   └── build.bat                # 本地构建脚本（生成自包含单文件并复制到 single 目录）
+├── src/
+│   └── VHDMounter/
+│       ├── Program.cs           # 单实例入口
+│       ├── VHDManager.cs        # 客户端核心逻辑
+│       ├── MainWindow.xaml      # 主窗口界面
+│       ├── MainWindow.xaml.cs   # 主窗口逻辑
+│       └── vhdmonter_config.ini # 客户端配置模板
 ├── VHDSelectServer/              # 管理服务
 │   ├── server.js                 # 主服务与路由
 │   ├── database.js               # PostgreSQL 持久化
@@ -159,10 +170,6 @@ vhdmount/
 │   └── MainWindow.xaml.cs        # 打包与注册证书逻辑
 ├── vhd_mount_admin_flutter/      # Flutter 管理客户端（Windows）
 ├── VHDMounter.csproj             # .NET 8 WPF 客户端
-├── VHDManager.cs                 # 客户端核心逻辑
-├── Program.cs                    # 单实例入口
-├── vhdmonter_config.ini          # 客户端配置
-├── build.bat                     # 本地构建脚本（生成自包含单文件并复制到 single 目录）
 ├── single/                       # 打包输出（VHDMounter.exe、Updater.exe、VHDMountAdminTools.exe）
 └── .github/workflows/build.yml   # CI 构建与发布
 ```
@@ -252,7 +259,7 @@ flutter run -d windows
 
 ## 配置说明
 
-### 客户端（`vhdmonter_config.ini`）
+### 客户端（`src/VHDMounter/vhdmonter_config.ini` 模板）
 
 ```ini
 [Settings]
@@ -369,7 +376,7 @@ permissions:
 
 ### 本地构建脚本
 
-- 运行 `build.bat` 执行编译与发布，完成后生成自包含单文件并复制到 `single` 目录：
+- 运行 `scripts\build.bat` 执行编译与发布，完成后生成自包含单文件并复制到 `single` 目录：
   - `single\VHDMounter.exe`
   - `single\Updater.exe`
   - `single\VHDMountAdminTools.exe`

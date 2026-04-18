@@ -66,7 +66,6 @@ namespace VHDMounter
         private bool isProtectionCheckEnabled;
         private string protectionCheckUrl;
         private int protectionCheckInterval;
-        private bool isBlocking = false;
         private bool protectionWasRunning = false;
         private bool hasLocalEvhdFiles;
         private DateTimeOffset? nextPublicKeyRegistrationAttemptUtc;
@@ -1402,7 +1401,6 @@ namespace VHDMounter
         {
             try
             {
-                isBlocking = true;
                 protectionWasRunning = isProtectionCheckEnabled && protectionTimer != null;
                 if (protectionTimer != null)
                 {
@@ -1418,7 +1416,6 @@ namespace VHDMounter
         {
             try
             {
-                isBlocking = false;
                 if (protectionWasRunning && protectionTimer != null)
                 {
                     protectionTimer.Start();
@@ -1432,7 +1429,7 @@ namespace VHDMounter
             catch { }
         }
 
-        private RSACng EnsureOrCreateTpmRsa(string machineId)
+        internal static RSACng EnsureOrCreateTpmRsa(string machineId)
         {
             string keyName = $"VHDMounterKey_{machineId}";
             CngKey key = null;
@@ -1456,7 +1453,7 @@ namespace VHDMounter
             return rsa;
         }
 
-        private string ExportPublicKeyPem(RSA rsa)
+        internal static string ExportPublicKeyPem(RSA rsa)
         {
             var spki = rsa.ExportSubjectPublicKeyInfo();
             var b64 = Convert.ToBase64String(spki);
@@ -1470,12 +1467,12 @@ namespace VHDMounter
             return sb.ToString();
         }
 
-        private string NormalizePemText(string pem)
+        internal static string NormalizePemText(string pem)
         {
             return string.IsNullOrWhiteSpace(pem) ? string.Empty : pem.Trim();
         }
 
-        private string ResolveConfigPath(string rawPath)
+        internal static string ResolveConfigPath(string rawPath)
         {
             if (string.IsNullOrWhiteSpace(rawPath))
             {
@@ -1487,7 +1484,7 @@ namespace VHDMounter
                 : Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, rawPath));
         }
 
-        private X509Certificate2 LoadRegistrationCertificate(Dictionary<string, string> config)
+        internal static X509Certificate2 LoadRegistrationCertificate(Dictionary<string, string> config)
         {
             if (!config.TryGetValue("RegistrationCertificatePath", out var certificatePath) || string.IsNullOrWhiteSpace(certificatePath))
             {
@@ -1518,7 +1515,7 @@ namespace VHDMounter
             return certificate;
         }
 
-        private string BuildRegistrationSigningPayload(string machineId, string keyId, string keyType, string pubkeyPem, long timestamp, string nonce)
+        internal static string BuildRegistrationSigningPayload(string machineId, string keyId, string keyType, string pubkeyPem, long timestamp, string nonce)
         {
             var canonicalMachineId = (machineId ?? string.Empty).Trim();
             var canonicalKeyId = (keyId ?? string.Empty).Trim();
@@ -1556,7 +1553,7 @@ namespace VHDMounter
             return sb.ToString().Trim();
         }
 
-        private string GenerateRegistrationNonce()
+        internal static string GenerateRegistrationNonce()
         {
             var nonceBytes = RandomNumberGenerator.GetBytes(16);
             return Convert.ToHexString(nonceBytes).ToLowerInvariant();
@@ -1928,20 +1925,7 @@ namespace VHDMounter
                 return string.Empty;
             }
 
-            var sanitized = text;
-            sanitized = Regex.Replace(
-                sanitized,
-                "(?i)(\\b(?:password|secret|token|authorization|ciphertext|totpsecret|totpcode|sessionsecret|evhdpassword|registrationcertificatepassword)\\b\\s*[:=]\\s*)([^\\s,;]+)",
-                "$1***");
-            sanitized = Regex.Replace(
-                sanitized,
-                "(?i)([?&](?:password|secret|token|ciphertext|totpSecret|totpCode|sessionSecret|evhdPassword|registrationCertificatePassword)=)([^&\\s]+)",
-                "$1***");
-            sanitized = Regex.Replace(
-                sanitized,
-                "(?i)(\"(?:password|secret|token|authorization|ciphertext|totpSecret|totpCode|sessionSecret|evhdPassword|registrationCertificatePassword)\"\\s*:\\s*\")([^\"]*)(\")",
-                "$1***$3");
-            return sanitized;
+            return MachineLogSanitizer.SanitizeSensitiveText(text);
         }
 
         private static string FormatProcessArgumentsForLog(ProcessStartInfo startInfo)

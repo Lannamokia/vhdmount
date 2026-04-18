@@ -20,7 +20,10 @@ const AuthStatus _authenticatedStatus = AuthStatus(
   otpVerified: true,
 );
 
-MachineRecord _machine(String machineId) {
+MachineRecord _machine(
+  String machineId, {
+  int? logRetentionActiveDaysOverride,
+}) {
   return MachineRecord(
     machineId: machineId,
     protectedState: false,
@@ -31,6 +34,7 @@ MachineRecord _machine(String machineId) {
     keyId: 'key-$machineId',
     keyType: 'RSA',
     registrationCertFingerprint: 'ABC123',
+    logRetentionActiveDaysOverride: logRetentionActiveDaysOverride,
     lastSeen: '2026-04-03T08:00:00Z',
   );
 }
@@ -89,6 +93,69 @@ void main() {
 
     expect(find.text('审计日志'), findsOneWidget);
     expect(find.text('当前仅显示机台 MACHINE-01 的审计记录。'), findsOneWidget);
+  });
+
+  testWidgets('opening machine logs from machine card preserves machine filter', (
+    tester,
+  ) async {
+    _setDesktopViewport(tester, const Size(1600, 960));
+    addTearDown(() => _resetViewport(tester));
+
+    final api = FakeAdminApi(
+      serverStatus: _readyServerStatus,
+      authStatus: _authenticatedStatus,
+      machines: <MachineRecord>[_machine('MACHINE-01'), _machine('MACHINE-02')],
+      machineLogSessions: const <MachineLogSession>[
+        MachineLogSession(
+          machineId: 'MACHINE-01',
+          sessionId: 'SESSION-01',
+          appVersion: '1.0.0',
+          osVersion: 'Windows 11',
+          startedAt: '2026-04-03T08:00:00Z',
+          lastUploadAt: '2026-04-03T08:05:00Z',
+          lastEventAt: '2026-04-03T08:04:00Z',
+          totalCount: 2,
+          warnCount: 0,
+          errorCount: 0,
+          lastLevel: 'info',
+          lastComponent: 'VHDManager',
+        ),
+      ],
+      machineLogEntries: const <MachineLogEntry>[
+        MachineLogEntry(
+          id: 1,
+          machineId: 'MACHINE-01',
+          sessionId: 'SESSION-01',
+          seq: 1,
+          occurredAt: '2026-04-03T08:04:00Z',
+          logDay: '2026-04-03',
+          receivedAt: '2026-04-03T08:05:00Z',
+          level: 'info',
+          component: 'VHDManager',
+          eventKey: 'MOUNT_SUCCESS',
+          message: '卷挂载完成',
+          rawText: 'volume mounted',
+          metadata: <String, dynamic>{'driveLetter': 'Z'},
+          uploadRequestId: 'upload-01',
+        ),
+      ],
+    );
+    final controller = AppController(
+      api: api,
+      clientConfigStore: FakeClientConfigStore(),
+    );
+
+    await tester.pumpWidget(AdminApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('查看机台日志').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('机台日志'), findsAtLeastNWidgets(1));
+    expect(find.text('SESSION-01'), findsAtLeastNWidgets(1));
+    expect(find.text('卷挂载完成'), findsOneWidget);
+    expect(api.lastMachineLogMachineId, 'MACHINE-01');
+    expect(controller.machineLogSelectedMachineId, 'MACHINE-01');
   });
 
   testWidgets('login shell stays stable on narrow windows', (tester) async {
@@ -173,8 +240,9 @@ void main() {
     await tester.pumpWidget(AdminApp(controller: controller));
     await tester.pumpAndSettle();
 
-    expect(find.byType(DashboardSidebarButton), findsNWidgets(4));
+    expect(find.byType(DashboardSidebarButton), findsNWidgets(5));
     expect(find.text('审批、保护、EVHD'), findsOneWidget);
+    expect(find.text('会话、分页、详情'), findsOneWidget);
     expect(find.byType(NavigationRail), findsNothing);
     expect(tester.takeException(), isNull);
   });

@@ -4,7 +4,7 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
-    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationManifest>src\VHDMounter\app.manifest</ApplicationManifest>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
@@ -19,11 +19,6 @@
 
   <ItemGroup>
     <PackageReference Include="System.Management" Version="7.0.2" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Compile Remove="DebugProgram.cs" />
-    <None Include="DebugProgram.cs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -48,7 +43,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="vhdmonter_config.ini">
+    <Content Include="src\VHDMounter\vhdmonter_config.ini" Link="vhdmonter_config.ini">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>Always</CopyToPublishDirectory>
     </Content>

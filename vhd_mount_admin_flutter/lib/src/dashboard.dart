@@ -14,9 +14,14 @@ class DashboardScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    Future<void> openLogsForMachine(String machineId) async {
+      await controller.loadMachineLogSessions(machineId: machineId);
+      onDestinationSelected(1);
+    }
+
     Future<void> openAuditForMachine(String machineId) async {
       await controller.loadAudit(machineId: machineId);
-      onDestinationSelected(2);
+      onDestinationSelected(3);
     }
 
     final destinations = <DashboardDestinationSpec>[
@@ -25,6 +30,12 @@ class DashboardScreen extends StatelessWidget {
         subtitle: '审批、保护、EVHD',
         icon: Icons.dns_rounded,
         color: AppPalette.coral,
+      ),
+      const DashboardDestinationSpec(
+        label: '机台日志',
+        subtitle: '会话、分页、详情',
+        icon: Icons.receipt_long_rounded,
+        color: AppPalette.sun,
       ),
       const DashboardDestinationSpec(
         label: '证书',
@@ -118,7 +129,12 @@ class DashboardScreen extends StatelessWidget {
         final pages = <Widget>[
           MachinesView(
             controller: controller,
+            onOpenLogsForMachine: openLogsForMachine,
             onOpenAuditForMachine: openAuditForMachine,
+            embedInParentScroll: mobile,
+          ),
+          MachineLogsView(
+            controller: controller,
             embedInParentScroll: mobile,
           ),
           CertificatesView(
@@ -345,11 +361,13 @@ class MachinesView extends StatelessWidget {
   const MachinesView({
     super.key,
     required this.controller,
+    required this.onOpenLogsForMachine,
     required this.onOpenAuditForMachine,
     this.embedInParentScroll = false,
   });
 
   final AppController controller;
+  final Future<void> Function(String machineId) onOpenLogsForMachine;
   final Future<void> Function(String machineId) onOpenAuditForMachine;
   final bool embedInParentScroll;
 
@@ -443,6 +461,12 @@ class MachinesView extends StatelessWidget {
                       color: machine.evhdPasswordConfigured
                           ? AppPalette.mint
                           : AppPalette.sun,
+                    ),
+                    StatusChip(
+                      label: controller.describeMachineLogRetention(machine),
+                      color: machine.logRetentionActiveDaysOverride != null
+                          ? AppPalette.coral
+                          : AppPalette.sky,
                     ),
                   ],
                 ),
@@ -553,6 +577,22 @@ class MachinesView extends StatelessWidget {
                     OutlinedButton.icon(
                       onPressed: () async {
                         try {
+                          await onOpenLogsForMachine(machine.machineId);
+                        } catch (error) {
+                          if (!context.mounted) {
+                            return;
+                          }
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(describeError(error))),
+                          );
+                        }
+                      },
+                      icon: const Icon(Icons.receipt_long_rounded),
+                      label: const Text('查看机台日志'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        try {
                           await onOpenAuditForMachine(machine.machineId);
                         } catch (error) {
                           if (!context.mounted) {
@@ -565,6 +605,51 @@ class MachinesView extends StatelessWidget {
                       },
                       icon: const Icon(Icons.history_rounded),
                       label: const Text('查阅审计日志'),
+                    ),
+                    OutlinedButton(
+                      onPressed: () async {
+                        final initialValue = machine.logRetentionActiveDaysOverride
+                            ?.toString() ??
+                            '';
+                        final value = await showSingleInputDialog(
+                          context,
+                          title: '设置日志保留活动日覆盖值',
+                          label: '留空表示继承全局默认值',
+                          initialValue: initialValue,
+                        );
+                        if (value == null) {
+                          return;
+                        }
+
+                        final trimmed = value.trim();
+                        final overrideValue = trimmed.isEmpty
+                            ? null
+                            : int.tryParse(trimmed);
+                        if (trimmed.isNotEmpty && overrideValue == null) {
+                          if (!context.mounted) {
+                            return;
+                          }
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('请输入有效的正整数，或留空恢复继承。')),
+                          );
+                          return;
+                        }
+
+                        try {
+                          await controller.setMachineLogRetentionOverride(
+                            machine.machineId,
+                            overrideValue,
+                          );
+                        } catch (error) {
+                          if (!context.mounted) {
+                            return;
+                          }
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(describeError(error))),
+                          );
+                        }
+                      },
+                      child: const Text('日志保留'),
                     ),
                     OutlinedButton(
                       onPressed: () async {
@@ -1245,6 +1330,10 @@ class SettingsView extends StatefulWidget {
 
 class _SettingsViewState extends State<SettingsView> {
   late final TextEditingController _defaultVhdController;
+  late final TextEditingController _logRetentionDaysController;
+  late final TextEditingController _logInspectionHourController;
+  late final TextEditingController _logInspectionMinuteController;
+  late final TextEditingController _logTimezoneController;
   final TextEditingController _currentPasswordController =
       TextEditingController();
   final TextEditingController _newPasswordController = TextEditingController();
@@ -1265,11 +1354,54 @@ class _SettingsViewState extends State<SettingsView> {
     _defaultVhdController = TextEditingController(
       text: widget.controller.serverStatus?.defaultVhdKeyword ?? 'SDEZ',
     );
+    _logRetentionDaysController = TextEditingController(
+      text: (widget.controller.logRetentionSettings?.defaultRetentionActiveDays ??
+              7)
+          .toString(),
+    );
+    _logInspectionHourController = TextEditingController(
+      text: (widget.controller.logRetentionSettings?.dailyInspectionHour ?? 3)
+          .toString(),
+    );
+    _logInspectionMinuteController = TextEditingController(
+      text: (widget.controller.logRetentionSettings?.dailyInspectionMinute ?? 0)
+          .toString(),
+    );
+    _logTimezoneController = TextEditingController(
+      text: widget.controller.logRetentionSettings?.timezone ?? 'UTC',
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant SettingsView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final logRetention = widget.controller.logRetentionSettings;
+    if (logRetention != null) {
+      final nextDays = logRetention.defaultRetentionActiveDays.toString();
+      final nextHour = logRetention.dailyInspectionHour.toString();
+      final nextMinute = logRetention.dailyInspectionMinute.toString();
+      if (_logRetentionDaysController.text != nextDays) {
+        _logRetentionDaysController.text = nextDays;
+      }
+      if (_logInspectionHourController.text != nextHour) {
+        _logInspectionHourController.text = nextHour;
+      }
+      if (_logInspectionMinuteController.text != nextMinute) {
+        _logInspectionMinuteController.text = nextMinute;
+      }
+      if (_logTimezoneController.text != logRetention.timezone) {
+        _logTimezoneController.text = logRetention.timezone;
+      }
+    }
   }
 
   @override
   void dispose() {
     _defaultVhdController.dispose();
+    _logRetentionDaysController.dispose();
+    _logInspectionHourController.dispose();
+    _logInspectionMinuteController.dispose();
+    _logTimezoneController.dispose();
     _currentPasswordController.dispose();
     _newPasswordController.dispose();
     _confirmPasswordController.dispose();
@@ -1390,6 +1522,7 @@ class _SettingsViewState extends State<SettingsView> {
   @override
   Widget build(BuildContext context) {
     final status = widget.controller.serverStatus;
+    final logRetention = widget.controller.logRetentionSettings;
     final rotationPreparation = widget.controller.otpRotationPreparation;
     final children = <Widget>[
         const PageHeader(
@@ -1398,6 +1531,128 @@ class _SettingsViewState extends State<SettingsView> {
           subtitle: '调整默认启动关键词、OTP 绑定与管理员密码。',
         ),
         const SizedBox(height: 18),
+        SectionPanel(
+          title: '日志保留策略',
+          subtitle: '按活动日志日配置全局默认值与每日巡检时间。',
+          icon: Icons.schedule_send_rounded,
+          color: AppPalette.sun,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              const InfoPanel(
+                title: '活动日志日说明',
+                body: Text(
+                  '这里的保留单位不是自然日，而是“有日志写入的活动日”。机台长时间离线时，不会因为自然时间流逝而提前清理旧日志。',
+                ),
+                icon: Icons.calendar_month_rounded,
+                color: AppPalette.sun,
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: TextField(
+                      controller: _logRetentionDaysController,
+                      decoration: const InputDecoration(
+                        labelText: '默认保留活动日数',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextField(
+                      controller: _logInspectionHourController,
+                      decoration: const InputDecoration(labelText: '每日巡检小时'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextField(
+                      controller: _logInspectionMinuteController,
+                      decoration: const InputDecoration(labelText: '每日巡检分钟'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _logTimezoneController,
+                decoration: const InputDecoration(labelText: '服务端时区'),
+              ),
+              const SizedBox(height: 12),
+              FilledButton.icon(
+                onPressed: () async {
+                  final retentionDays = int.tryParse(
+                    _logRetentionDaysController.text.trim(),
+                  );
+                  final inspectionHour = int.tryParse(
+                    _logInspectionHourController.text.trim(),
+                  );
+                  final inspectionMinute = int.tryParse(
+                    _logInspectionMinuteController.text.trim(),
+                  );
+                  final timezone = _logTimezoneController.text.trim();
+
+                  if (retentionDays == null || retentionDays <= 0) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('默认保留活动日数必须是正整数。')),
+                    );
+                    return;
+                  }
+                  if (inspectionHour == null || inspectionHour < 0 || inspectionHour > 23) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('每日巡检小时必须在 0-23 之间。')),
+                    );
+                    return;
+                  }
+                  if (inspectionMinute == null || inspectionMinute < 0 || inspectionMinute > 59) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('每日巡检分钟必须在 0-59 之间。')),
+                    );
+                    return;
+                  }
+                  if (timezone.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('服务端时区不能为空。')),
+                    );
+                    return;
+                  }
+
+                  try {
+                    await widget.controller.updateLogRetentionSettings(
+                      defaultRetentionActiveDays: retentionDays,
+                      dailyInspectionHour: inspectionHour,
+                      dailyInspectionMinute: inspectionMinute,
+                      timezone: timezone,
+                    );
+                    if (!context.mounted) {
+                      return;
+                    }
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('日志保留策略已更新。')),
+                    );
+                  } catch (error) {
+                    if (!context.mounted) {
+                      return;
+                    }
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(describeError(error))),
+                    );
+                  }
+                },
+                icon: const Icon(Icons.save_rounded),
+                label: const Text('保存日志保留策略'),
+              ),
+              if (logRetention != null) ...<Widget>[
+                const SizedBox(height: 12),
+                Text('当前默认保留：${logRetention.defaultRetentionActiveDays} 个活动日志日'),
+                Text('当前巡检时间：${logRetention.inspectionScheduleLabel} · 时区 ${logRetention.timezone}'),
+                Text('最近一次巡检：${logRetention.localizedLastInspectionAt}'),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
         SectionPanel(
           title: '服务设置',
           subtitle: '更新默认启动关键词。',

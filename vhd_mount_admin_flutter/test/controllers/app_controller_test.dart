@@ -173,6 +173,7 @@ void main() {
           keyId: 'key-01',
           keyType: 'RSA',
           registrationCertFingerprint: 'ABC123',
+          logRetentionActiveDaysOverride: null,
           lastSeen: '2026-04-03T08:00:00Z',
         ),
       ],

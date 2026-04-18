@@ -280,12 +280,20 @@ class _AdminRootState extends State<AdminRoot> {
               });
               if (index == 0) {
                 await controller.loadMachines();
-              } else if (index == 1 && controller.otpVerified) {
+              } else if (index == 1) {
+                await controller.loadMachineLogSessions(
+                  machineId: controller.machineLogSelectedMachineId,
+                  from: controller.machineLogFrom,
+                  to: controller.machineLogTo,
+                );
+              } else if (index == 2 && controller.otpVerified) {
                 await controller.loadCertificates();
-              } else if (index == 2) {
+              } else if (index == 3) {
                 await controller.loadAudit(
                   machineId: controller.auditFilterMachineId,
                 );
+              } else if (index == 4) {
+                await controller.loadLogRetentionSettings();
               }
             },
           );

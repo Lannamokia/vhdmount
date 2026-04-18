@@ -66,10 +66,31 @@ function clone(value) {
 function createFakeDatabase() {
     const machines = new Map();
     const evhdPasswords = new Map();
+    const machineLogSessions = new Map();
+    const machineLogEntries = [];
+    const runtimeSettings = {
+        defaultRetentionActiveDays: 7,
+        dailyInspectionHour: 3,
+        dailyInspectionMinute: 0,
+        timezone: 'UTC',
+        lastInspectionAt: null,
+    };
     let nextId = 1;
+    let nextLogEntryId = 1;
 
     function nowIso() {
         return new Date().toISOString();
+    }
+
+    function sessionKey(machineId, sessionId) {
+        return `${machineId}::${sessionId}`;
+    }
+
+    function encodeCursor(entry) {
+        return Buffer.from(JSON.stringify({
+            occurredAt: entry.occurred_at,
+            id: entry.id,
+        }), 'utf8').toString('base64url');
     }
 
     function syncPasswordFlag(machineId, record) {
@@ -96,6 +117,7 @@ function createFakeDatabase() {
             last_seen: null,
             registration_cert_fingerprint: null,
             registration_cert_subject: null,
+            log_retention_active_days_override: null,
             created_at: timestamp,
             updated_at: timestamp,
             ...overrides,
@@ -114,6 +136,101 @@ function createFakeDatabase() {
         });
         machines.set(machineId, record);
         return clone(record);
+    }
+
+    function ensureMachineExists(machineId) {
+        if (!machines.has(machineId)) {
+            machines.set(machineId, createRecord(machineId));
+        }
+    }
+
+    function rebuildSession(machineId, sessionId) {
+        const key = sessionKey(machineId, sessionId);
+        const relatedEntries = machineLogEntries
+            .filter((entry) => entry.machine_id === machineId && entry.session_id === sessionId)
+            .sort((left, right) => {
+                const timeCompare = new Date(right.occurred_at).getTime() - new Date(left.occurred_at).getTime();
+                return timeCompare !== 0 ? timeCompare : right.id - left.id;
+            });
+
+        if (relatedEntries.length === 0) {
+            machineLogSessions.delete(key);
+            return null;
+        }
+
+        const oldestEntry = relatedEntries[relatedEntries.length - 1];
+        const newestEntry = relatedEntries[0];
+        const current = machineLogSessions.get(key) || {
+            machine_id: machineId,
+            session_id: sessionId,
+            app_version: null,
+            os_version: null,
+            created_at: nowIso(),
+        };
+
+        const nextSession = {
+            ...current,
+            started_at: oldestEntry.occurred_at,
+            last_upload_at: nowIso(),
+            last_event_at: newestEntry.occurred_at,
+            total_count: relatedEntries.length,
+            warn_count: relatedEntries.filter((entry) => entry.level === 'warn').length,
+            error_count: relatedEntries.filter((entry) => entry.level === 'error').length,
+            last_level: newestEntry.level,
+            last_component: newestEntry.component,
+            updated_at: nowIso(),
+        };
+
+        machineLogSessions.set(key, nextSession);
+        return clone(nextSession);
+    }
+
+    function filterMachineLogEntries(filters = {}) {
+        let entries = machineLogEntries.slice();
+
+        if (filters.machineId) {
+            entries = entries.filter((entry) => entry.machine_id === filters.machineId);
+        }
+        if (filters.sessionId) {
+            entries = entries.filter((entry) => entry.session_id === filters.sessionId);
+        }
+        if (filters.level) {
+            entries = entries.filter((entry) => entry.level === filters.level);
+        }
+        if (filters.component) {
+            entries = entries.filter((entry) => entry.component === filters.component);
+        }
+        if (filters.eventKey) {
+            entries = entries.filter((entry) => entry.event_key === filters.eventKey);
+        }
+        if (filters.from) {
+            const fromMs = new Date(filters.from).getTime();
+            entries = entries.filter((entry) => new Date(entry.occurred_at).getTime() >= fromMs);
+        }
+        if (filters.to) {
+            const toMs = new Date(filters.to).getTime();
+            entries = entries.filter((entry) => new Date(entry.occurred_at).getTime() <= toMs);
+        }
+        if (filters.query) {
+            const query = filters.query.toLowerCase();
+            entries = entries.filter((entry) => JSON.stringify(entry).toLowerCase().includes(query));
+        }
+
+        entries.sort((left, right) => {
+            const timeCompare = new Date(right.occurred_at).getTime() - new Date(left.occurred_at).getTime();
+            return timeCompare !== 0 ? timeCompare : right.id - left.id;
+        });
+
+        if (filters.cursor) {
+            const parsed = JSON.parse(Buffer.from(filters.cursor, 'base64url').toString('utf8'));
+            entries = entries.filter((entry) => {
+                const entryTime = new Date(entry.occurred_at).getTime();
+                const cursorTime = new Date(parsed.occurredAt).getTime();
+                return entryTime < cursorTime || (entryTime === cursorTime && entry.id < parsed.id);
+            });
+        }
+
+        return entries;
     }
 
     return {
@@ -239,6 +356,156 @@ function createFakeDatabase() {
                 registration_cert_fingerprint: null,
                 registration_cert_subject: null,
             });
+        },
+        async updateMachineLogRetentionOverride(machineId, retentionActiveDaysOverride) {
+            const current = machines.get(machineId);
+            if (!current) {
+                return null;
+            }
+            return saveRecord(machineId, {
+                ...current,
+                log_retention_active_days_override: retentionActiveDaysOverride,
+            });
+        },
+        async getMachineLogRuntimeSettings() {
+            return clone(runtimeSettings);
+        },
+        async updateMachineLogRuntimeSettings(settings) {
+            Object.assign(runtimeSettings, settings || {});
+            return clone(runtimeSettings);
+        },
+        async getMachineLogAcknowledgedSeq(machineId, sessionId) {
+            return machineLogEntries
+                .filter((entry) => entry.machine_id === machineId && entry.session_id === sessionId)
+                .reduce((maxSeq, entry) => Math.max(maxSeq, entry.seq), 0);
+        },
+        async persistMachineLogBatch({ machineId, sessionId, appVersion, osVersion, entries, uploadRequestId }) {
+            ensureMachineExists(machineId);
+            let insertedCount = 0;
+
+            for (const entry of entries) {
+                const exists = machineLogEntries.some((current) => (
+                    current.machine_id === machineId
+                    && current.session_id === sessionId
+                    && current.seq === entry.seq
+                ));
+                if (exists) {
+                    continue;
+                }
+
+                insertedCount += 1;
+                machineLogEntries.push({
+                    id: nextLogEntryId++,
+                    machine_id: machineId,
+                    session_id: sessionId,
+                    seq: Number(entry.seq),
+                    occurred_at: entry.occurredAt,
+                    log_day: entry.occurredAt.slice(0, 10),
+                    received_at: nowIso(),
+                    level: entry.level,
+                    component: entry.component,
+                    event_key: entry.eventKey,
+                    message: entry.message,
+                    raw_text: entry.rawText,
+                    metadata_json: clone(entry.metadata || {}),
+                    upload_request_id: uploadRequestId || null,
+                    created_at: nowIso(),
+                });
+            }
+
+            const key = sessionKey(machineId, sessionId);
+            const currentSession = machineLogSessions.get(key) || {
+                machine_id: machineId,
+                session_id: sessionId,
+                app_version: appVersion || null,
+                os_version: osVersion || null,
+                created_at: nowIso(),
+            };
+            machineLogSessions.set(key, {
+                ...currentSession,
+                app_version: appVersion || currentSession.app_version,
+                os_version: osVersion || currentSession.os_version,
+            });
+            rebuildSession(machineId, sessionId);
+
+            return {
+                acknowledgedSeq: await this.getMachineLogAcknowledgedSeq(machineId, sessionId),
+                insertedCount,
+                receivedCount: entries.length,
+            };
+        },
+        async getMachineLogSessions({ machineId, from, to, limit = 50 }) {
+            let sessions = Array.from(machineLogSessions.values());
+            if (machineId) {
+                sessions = sessions.filter((session) => session.machine_id === machineId);
+            }
+            if (from) {
+                const fromMs = new Date(from).getTime();
+                sessions = sessions.filter((session) => new Date(session.last_event_at || session.started_at).getTime() >= fromMs);
+            }
+            if (to) {
+                const toMs = new Date(to).getTime();
+                sessions = sessions.filter((session) => new Date(session.last_event_at || session.started_at).getTime() <= toMs);
+            }
+
+            sessions.sort((left, right) => new Date(right.last_event_at || right.started_at).getTime() - new Date(left.last_event_at || left.started_at).getTime());
+            return sessions.slice(0, limit).map((session) => clone(session));
+        },
+        async getMachineLogs(filters) {
+            const limit = Number(filters.limit || 100);
+            const entries = filterMachineLogEntries(filters);
+            const page = entries.slice(0, limit);
+            return {
+                entries: page.map((entry) => clone(entry)),
+                nextCursor: entries.length > limit ? encodeCursor(page[page.length - 1]) : null,
+                hasMore: entries.length > limit,
+            };
+        },
+        async exportMachineLogs(filters) {
+            return this.getMachineLogs(filters);
+        },
+        async runMachineLogRetentionInspection() {
+            let deletedEntryCount = 0;
+            let deletedSessionCount = 0;
+
+            for (const machine of machines.values()) {
+                const retention = machine.log_retention_active_days_override || runtimeSettings.defaultRetentionActiveDays;
+                const machineEntries = machineLogEntries
+                    .filter((entry) => entry.machine_id === machine.machine_id)
+                    .sort((left, right) => right.log_day.localeCompare(left.log_day));
+                const activeDays = [...new Set(machineEntries.map((entry) => entry.log_day))];
+                const keepDays = new Set(activeDays.slice(0, retention));
+                const beforeCount = machineLogEntries.length;
+                for (let index = machineLogEntries.length - 1; index >= 0; index--) {
+                    const entry = machineLogEntries[index];
+                    if (entry.machine_id === machine.machine_id && !keepDays.has(entry.log_day)) {
+                        machineLogEntries.splice(index, 1);
+                    }
+                }
+                deletedEntryCount += beforeCount - machineLogEntries.length;
+            }
+
+            for (const key of Array.from(machineLogSessions.keys())) {
+                const session = machineLogSessions.get(key);
+                if (!session) {
+                    continue;
+                }
+                const exists = machineLogEntries.some((entry) => entry.machine_id === session.machine_id && entry.session_id === session.session_id);
+                if (!exists) {
+                    machineLogSessions.delete(key);
+                    deletedSessionCount += 1;
+                } else {
+                    rebuildSession(session.machine_id, session.session_id);
+                }
+            }
+
+            runtimeSettings.lastInspectionAt = nowIso();
+            return {
+                inspectedMachineCount: machines.size,
+                deletedEntryCount,
+                deletedSessionCount,
+                ranAt: runtimeSettings.lastInspectionAt,
+            };
         },
     };
 }
@@ -737,6 +1004,170 @@ test('机台注册必须使用可信证书签名且拒绝 nonce 重放', async (
 
     assert.ok(envelopeResponse.body.ciphertext);
     assert.notEqual(envelopeResponse.body.ciphertext, 'EnvelopeSecret-456');
+    assert.ok(envelopeResponse.body.logChannelBootstrapId);
+    assert.ok(envelopeResponse.body.logChannelBootstrapCiphertext);
+    assert.ok(envelopeResponse.body.logChannelBootstrapExpiresAt);
+
+    const bootstrapPlaintext = crypto.privateDecrypt({
+        key: machineKeyPair.privateKey,
+        padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+        oaepHash: 'sha1',
+    }, Buffer.from(envelopeResponse.body.logChannelBootstrapCiphertext, 'base64')).toString('utf8');
+    const bootstrapPayload = JSON.parse(bootstrapPlaintext);
+    assert.equal(bootstrapPayload.bootstrapId, envelopeResponse.body.logChannelBootstrapId);
+    assert.ok(bootstrapPayload.bootstrapSecret);
+    assert.equal(bootstrapPayload.expiresAt, envelopeResponse.body.logChannelBootstrapExpiresAt);
+});
+
+test('管理员可以配置全局与单机日志保留策略', async (t) => {
+    const { client } = await createInitializedHarness(t);
+
+    await client.post('/api/auth/login').send({ password: 'ComplexPassword123!' }).expect(200);
+
+    await client
+        .post('/api/machines')
+        .send({
+            machineId: 'MACHINE-RET-01',
+            protected: false,
+            vhdKeyword: 'SAFEBOOT',
+        })
+        .expect(201);
+
+    const initialSettings = await client
+        .get('/api/settings/log-retention')
+        .expect(200);
+
+    assert.equal(initialSettings.body.defaultRetentionActiveDays, 7);
+    assert.equal(initialSettings.body.dailyInspectionHour, 3);
+    assert.equal(initialSettings.body.dailyInspectionMinute, 0);
+    assert.equal(initialSettings.body.timezone, 'UTC');
+
+    const updatedSettings = await client
+        .post('/api/settings/log-retention')
+        .send({
+            defaultRetentionActiveDays: 30,
+            dailyInspectionHour: 1,
+            dailyInspectionMinute: 15,
+            timezone: 'Asia/Shanghai',
+        })
+        .expect(200);
+
+    assert.equal(updatedSettings.body.defaultRetentionActiveDays, 30);
+    assert.equal(updatedSettings.body.dailyInspectionHour, 1);
+    assert.equal(updatedSettings.body.dailyInspectionMinute, 15);
+    assert.equal(updatedSettings.body.timezone, 'Asia/Shanghai');
+
+    const machineOverride = await client
+        .post('/api/machines/MACHINE-RET-01/log-retention')
+        .send({ retentionActiveDaysOverride: 45 })
+        .expect(200);
+
+    assert.equal(machineOverride.body.retentionActiveDaysOverride, 45);
+
+    const machineDetail = await client
+        .get('/api/machines/MACHINE-RET-01')
+        .expect(200);
+
+    assert.equal(machineDetail.body.machine.log_retention_active_days_override, 45);
+
+    const clearedOverride = await client
+        .post('/api/machines/MACHINE-RET-01/log-retention')
+        .send({ retentionActiveDaysOverride: null })
+        .expect(200);
+
+    assert.equal(clearedOverride.body.retentionActiveDaysOverride, null);
+});
+
+test('管理员可以按机台分页查询并导出机台日志', async (t) => {
+    const { client, fakeDatabase, totpSecret } = await createInitializedHarness(t);
+
+    await client.post('/api/auth/login').send({ password: 'ComplexPassword123!' }).expect(200);
+    await client
+        .post('/api/machines')
+        .send({
+            machineId: 'MACHINE-LOG-01',
+            protected: false,
+            vhdKeyword: 'SAFEBOOT',
+        })
+        .expect(201);
+
+    await fakeDatabase.persistMachineLogBatch({
+        machineId: 'MACHINE-LOG-01',
+        sessionId: '20260419T120300Z-7b1d2c',
+        appVersion: '1.5.0',
+        osVersion: 'Windows 11',
+        uploadRequestId: 'req-01',
+        entries: [
+            {
+                sessionId: '20260419T120300Z-7b1d2c',
+                seq: 1,
+                occurredAt: '2026-04-19T12:03:00.000Z',
+                level: 'info',
+                component: 'Program',
+                eventKey: 'TRACE_LINE',
+                message: 'boot complete',
+                rawText: 'boot complete',
+                metadata: { stage: 'boot' },
+            },
+            {
+                sessionId: '20260419T120300Z-7b1d2c',
+                seq: 2,
+                occurredAt: '2026-04-19T12:04:00.000Z',
+                level: 'warn',
+                component: 'VHDManager',
+                eventKey: 'EVHD_MOUNT_WAIT',
+                message: 'waiting for mount',
+                rawText: 'waiting for mount',
+                metadata: { targetDrive: 'M:' },
+            },
+        ],
+    });
+
+    const sessionsResponse = await client
+        .get('/api/machine-log-sessions')
+        .query({ machineId: 'MACHINE-LOG-01' })
+        .expect(200);
+
+    assert.equal(sessionsResponse.body.count, 1);
+    assert.equal(sessionsResponse.body.sessions[0].session_id, '20260419T120300Z-7b1d2c');
+    assert.equal(sessionsResponse.body.sessions[0].warn_count, 1);
+
+    const firstPage = await client
+        .get('/api/machine-logs')
+        .query({ machineId: 'MACHINE-LOG-01', limit: 1 })
+        .expect(200);
+
+    assert.equal(firstPage.body.count, 1);
+    assert.equal(firstPage.body.hasMore, true);
+    assert.ok(firstPage.body.nextCursor);
+    assert.equal(firstPage.body.entries[0].seq, 2);
+
+    const secondPage = await client
+        .get('/api/machine-logs')
+        .query({ machineId: 'MACHINE-LOG-01', limit: 1, cursor: firstPage.body.nextCursor })
+        .expect(200);
+
+    assert.equal(secondPage.body.count, 1);
+    assert.equal(secondPage.body.hasMore, false);
+    assert.equal(secondPage.body.entries[0].seq, 1);
+
+    await client
+        .get('/api/machine-logs/export')
+        .query({ machineId: 'MACHINE-LOG-01', format: 'text' })
+        .expect(403);
+
+    await client
+        .post('/api/auth/otp/verify')
+        .send({ code: authenticator.generate(totpSecret) })
+        .expect(200);
+
+    const exportResponse = await client
+        .get('/api/machine-logs/export')
+        .query({ machineId: 'MACHINE-LOG-01', format: 'text' })
+        .expect(200);
+
+    assert.match(exportResponse.text, /EVHD_MOUNT_WAIT/);
+    assert.match(exportResponse.text, /boot complete/);
 });
 
 test('服务端会拒绝非法 machineId 输入', async (t) => {

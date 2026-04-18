@@ -1,4 +1,8 @@
 @echo off
+setlocal
+set "ROOT_DIR=%~dp0.."
+pushd "%ROOT_DIR%"
+
 echo VHD Mounter Build Script
 echo ==================
 
@@ -36,4 +40,6 @@ if %ERRORLEVEL% EQU 0 (
     echo Build failed!
 )
 
+popd
+endlocal
 pause

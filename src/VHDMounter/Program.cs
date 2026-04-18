@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Globalization;
 
@@ -131,6 +132,55 @@ namespace VHDMounter
                 var fileListener = new TextWriterTraceListener(logStream, "VHDMounterFileLogger");
                 Trace.Listeners.Add(fileListener);
                 Trace.AutoFlush = true;
+
+                MachineLogClientConfiguration machineLogConfig = null;
+                MachineLogBuffer machineLogBuffer = null;
+                MachineLogTraceListener machineLogTraceListener = null;
+                MachineLogRealtimeChannel machineLogRealtimeChannel = null;
+                var machineLogDiagnosticsPath = Path.Combine(AppContext.BaseDirectory, "machine-log-client.log");
+                var machineLogDiagnosticsLock = new object();
+                Action<string> machineLogDiagnostics = (message) =>
+                {
+                    try
+                    {
+                        var sanitized = MachineLogSanitizer.SanitizeSensitiveText(message);
+                        var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} MACHINE_LOG: {sanitized}{Environment.NewLine}";
+                        lock (machineLogDiagnosticsLock)
+                        {
+                            File.AppendAllText(machineLogDiagnosticsPath, line, Encoding.UTF8);
+                        }
+                    }
+                    catch
+                    {
+                    }
+                };
+
+                try
+                {
+                    var configPath = Path.Combine(AppContext.BaseDirectory, "vhdmonter_config.ini");
+                    machineLogConfig = MachineLogClientConfiguration.Load(configPath, machineLogDiagnostics);
+                    if (machineLogConfig.EnableLogUpload)
+                    {
+                        machineLogBuffer = new MachineLogBuffer(
+                            machineLogConfig.SpoolPath,
+                            MachineLogClientConfiguration.GenerateSessionId(),
+                            machineLogConfig.MachineLogUploadMaxSpoolBytes,
+                            machineLogDiagnostics);
+                        machineLogTraceListener = new MachineLogTraceListener(machineLogBuffer);
+                        Trace.Listeners.Add(machineLogTraceListener);
+                        machineLogDiagnostics($"机台日志 spool 已初始化: {machineLogConfig.SpoolPath}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    machineLogDiagnostics($"初始化机台日志本地 spool 失败: {ex.Message}");
+                    machineLogTraceListener?.Dispose();
+                    machineLogBuffer?.Dispose();
+                    machineLogTraceListener = null;
+                    machineLogBuffer = null;
+                    machineLogConfig = null;
+                }
+
                 Trace.WriteLine($"==== VHDMounter 启动 {DateTime.Now:yyyy-MM-dd HH:mm:ss} ====");
 
                 try
@@ -184,11 +234,36 @@ namespace VHDMounter
                     try
                     {
                         cts.Cancel();
+                        machineLogRealtimeChannel?.Dispose();
+                        if (machineLogTraceListener != null)
+                        {
+                            Trace.Listeners.Remove(machineLogTraceListener);
+                            machineLogTraceListener.Dispose();
+                        }
+                        machineLogBuffer?.Dispose();
                         fileListener.Flush();
                         fileListener.Close();
                     }
                     catch { }
                     return;
+                }
+
+                try
+                {
+                    if (machineLogConfig?.EnableLogUpload == true && machineLogBuffer != null)
+                    {
+                        machineLogRealtimeChannel = new MachineLogRealtimeChannel(
+                            machineLogConfig,
+                            machineLogBuffer,
+                            machineLogDiagnostics);
+                        machineLogRealtimeChannel.Start(cts.Token);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    machineLogDiagnostics($"启动机台日志实时通道失败: {ex.Message}");
+                    machineLogRealtimeChannel?.Dispose();
+                    machineLogRealtimeChannel = null;
                 }
 
                 Trace.WriteLine("准备创建 WPF Application");
@@ -211,6 +286,13 @@ namespace VHDMounter
                 try
                 {
                     cts.Cancel();
+                    machineLogRealtimeChannel?.Dispose();
+                    if (machineLogTraceListener != null)
+                    {
+                        Trace.Listeners.Remove(machineLogTraceListener);
+                        machineLogTraceListener.Dispose();
+                    }
+                    machineLogBuffer?.Dispose();
                     fileListener.Flush();
                     fileListener.Close();
                 }
