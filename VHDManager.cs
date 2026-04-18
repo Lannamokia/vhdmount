@@ -3016,9 +3016,9 @@ exit";
             return new List<MountedVolumeInfo>();
         }
 
-        private async Task<bool> TryAssignTargetDriveLetterAsync(string volumeGuidPath)
+        private async Task<bool> TryAssignTargetDriveLetterAsync(MountedVolumeInfo volume)
         {
-            var normalizedVolumeGuidPath = NormalizeVolumeId(volumeGuidPath);
+            var normalizedVolumeGuidPath = NormalizeVolumeId(volume.VolumeGuidPath);
             var currentTarget = TryGetMountedVolumeGuidForMountPoint(TARGET_DRIVE_ROOT);
             if (string.Equals(currentTarget, normalizedVolumeGuidPath, StringComparison.OrdinalIgnoreCase) && Directory.Exists(TARGET_DRIVE_ROOT))
             {
@@ -3027,6 +3027,11 @@ exit";
             }
 
             if (!await ClearTargetDriveMountPointAsync())
+            {
+                return false;
+            }
+
+            if (!await RemoveCandidateDriveLettersAsync(normalizedVolumeGuidPath, volume.AccessPaths))
             {
                 return false;
             }
@@ -3052,6 +3057,62 @@ exit";
             }
 
             return await WaitForTargetDriveStateAsync(normalizedVolumeGuidPath, 5000);
+        }
+
+        private async Task<bool> RemoveCandidateDriveLettersAsync(string volumeGuidPath, IEnumerable<string> accessPaths)
+        {
+            var driveLetterPaths = accessPaths
+                .Where(IsDriveLetterPath)
+                .Select(NormalizeDriveRootPath)
+                .Where(path => !string.Equals(path, TARGET_DRIVE_ROOT, StringComparison.OrdinalIgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (driveLetterPaths.Count == 0)
+            {
+                return true;
+            }
+
+            await ShowStatusAndWait($"候选卷已有盘符: {FormatAccessPaths(driveLetterPaths)}，正在切换到目标盘符 {TARGET_DRIVE}...");
+
+            foreach (var driveLetterPath in driveLetterPaths)
+            {
+                if (!DeleteVolumeMountPoint(driveLetterPath))
+                {
+                    Trace.WriteLine($"DeleteVolumeMountPoint候选卷盘符失败: Path={driveLetterPath}, Error={FormatWin32Error(Marshal.GetLastWin32Error())}");
+                    await ShowStatusAndWait($"移除候选卷盘符 {driveLetterPath} 失败，尝试 mountvol /d...");
+                    if (!await TryRunMountVolAsync(new[] { driveLetterPath, "/d" }, $"移除候选卷盘符 {driveLetterPath}"))
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            if (!await WaitForVolumeDriveLettersClearedAsync(volumeGuidPath, 5000))
+            {
+                Trace.WriteLine($"候选卷盘符移除后仍检测到驱动器号: Volume={volumeGuidPath}, Paths={FormatAccessPaths(GetVolumeAccessPaths(volumeGuidPath))}");
+                return false;
+            }
+
+            return true;
+        }
+
+        private async Task<bool> WaitForVolumeDriveLettersClearedAsync(string volumeGuidPath, int timeoutMs)
+        {
+            var normalizedVolumeGuidPath = NormalizeVolumeId(volumeGuidPath);
+            var sw = Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < timeoutMs)
+            {
+                var currentPaths = GetVolumeAccessPaths(normalizedVolumeGuidPath);
+                if (!currentPaths.Any(path => IsDriveLetterPath(path) && !string.Equals(NormalizeDriveRootPath(path), TARGET_DRIVE_ROOT, StringComparison.OrdinalIgnoreCase)))
+                {
+                    return true;
+                }
+
+                await Task.Delay(200);
+            }
+
+            return false;
         }
 
         private async Task<bool> ClearTargetDriveMountPointAsync(bool logStatus = true)
@@ -3175,6 +3236,21 @@ exit";
         {
             var entries = sampleEntries?.Where(entry => !string.IsNullOrWhiteSpace(entry)).ToList() ?? new List<string>();
             return entries.Count == 0 ? "(none)" : string.Join(", ", entries);
+        }
+
+        private static string NormalizeDriveRootPath(string path)
+        {
+            var value = (path ?? string.Empty).Trim();
+            if (value.Length == 2 && char.IsLetter(value[0]) && value[1] == ':')
+            {
+                value += "\\";
+            }
+            else if (value.Length >= 2 && char.IsLetter(value[0]) && value[1] == ':' && !value.EndsWith("\\", StringComparison.Ordinal))
+            {
+                value += "\\";
+            }
+
+            return value;
         }
 
         private static string FormatWin32Error(int errorCode)
@@ -3938,7 +4014,7 @@ exit";
                 foreach (var candidate in candidates)
                 {
                     await ShowStatusAndWait($"尝试绑定候选卷到 M: {candidate.VolumeGuidPath} FS={candidate.FileSystem ?? "(unknown)"} Paths={FormatAccessPaths(candidate.AccessPaths)}");
-                    if (await TryAssignTargetDriveLetterAsync(candidate.VolumeGuidPath))
+                    if (await TryAssignTargetDriveLetterAsync(candidate))
                     {
                         return true;
                     }

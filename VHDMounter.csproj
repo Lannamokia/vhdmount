@@ -43,6 +43,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Remove="EVHDMountTester\**\*.cs" />
+    <None Include="EVHDMountTester\**\*.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Content Include="vhdmonter_config.ini">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>Always</CopyToPublishDirectory>

@@ -11,7 +11,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VHDMountAdminTools", "VHDMo
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Updater", "Updater\Updater.csproj", "{ED343F03-4390-3BCA-479A-106C6AB7F588}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EVHDMountProbe", "EVHDMountProbe\EVHDMountProbe.csproj", "{C1E78A17-0BF1-4EC6-956B-9AFAA899D1CC}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EVHDMountTester", "EVHDMountTester\EVHDMountTester.csproj", "{C1E78A17-0BF1-4EC6-956B-9AFAA899D1CC}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
