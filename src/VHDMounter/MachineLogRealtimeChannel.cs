@@ -34,7 +34,6 @@ namespace VHDMounter
         private readonly string keyId;
         private readonly string appVersion;
         private readonly string osVersion;
-        private readonly string timeZone;
 
         private Task backgroundTask;
         private CancellationTokenSource lifetimeCts;
@@ -55,7 +54,6 @@ namespace VHDMounter
             keyId = $"VHDMounterKey_{machineId}";
             appVersion = typeof(Program).Assembly.GetName().Version?.ToString() ?? "unknown";
             osVersion = Environment.OSVersion.VersionString;
-            timeZone = TimeZoneInfo.Local.Id;
         }
 
         public void Start(CancellationToken cancellationToken)
@@ -296,7 +294,6 @@ namespace VHDMounter
                             sessionId,
                             appVersion,
                             osVersion,
-                            timezone = timeZone,
                             entries = batch,
                         }).ConfigureAwait(false);
                         await WaitForAcknowledgementAsync(

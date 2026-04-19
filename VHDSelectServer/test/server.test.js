@@ -1356,6 +1356,24 @@ test('管理员可以配置全局与单机日志保留策略', async (t) => {
     assert.equal(clearedOverride.body.retentionActiveDaysOverride, null);
 });
 
+test('管理员更新日志保留策略时必须提供 IANA 时区', async (t) => {
+    const { client } = await createInitializedHarness(t);
+
+    await client.post('/api/auth/login').send({ password: 'ComplexPassword123!' }).expect(200);
+
+    const response = await client
+        .post('/api/settings/log-retention')
+        .send({
+            defaultRetentionActiveDays: 30,
+            dailyInspectionHour: 1,
+            dailyInspectionMinute: 15,
+            timezone: 'China Standard Time',
+        })
+        .expect(400);
+
+    assert.match(response.body.error, /IANA 时区/);
+});
+
 test('管理员可以按机台分页查询并导出机台日志', async (t) => {
     const { client, fakeDatabase, totpSecret } = await createInitializedHarness(t);
 

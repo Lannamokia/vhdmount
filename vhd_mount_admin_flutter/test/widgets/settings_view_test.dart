@@ -240,4 +240,65 @@ void main() {
     expect(api.logRetentionSettings.dailyInspectionMinute, 30);
     expect(api.logRetentionSettings.timezone, 'Asia/Shanghai');
   });
+
+  testWidgets('settings view rejects non-IANA timezone locally', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 960);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final api = FakeAdminApi(
+      serverStatus: const ServerStatus(
+        initialized: true,
+        pendingInitialization: false,
+        databaseReady: true,
+        defaultVhdKeyword: 'SAFEBOOT',
+        trustedRegistrationCertificateCount: 1,
+      ),
+      authStatus: const AuthStatus(
+        initialized: true,
+        isAuthenticated: true,
+        otpVerified: true,
+      ),
+      logRetentionSettings: const LogRetentionSettings(
+        defaultRetentionActiveDays: 7,
+        dailyInspectionHour: 3,
+        dailyInspectionMinute: 0,
+        timezone: 'UTC',
+        lastInspectionAt: '2026-04-03T00:00:00Z',
+      ),
+    );
+    final controller = AppController(
+      api: api,
+      clientConfigStore: FakeClientConfigStore(),
+    );
+
+    await tester.pumpWidget(AdminApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(DashboardSidebarButton).at(4));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(_textFieldWithLabel('默认保留活动日数'), '21');
+    await tester.enterText(_textFieldWithLabel('每日巡检小时'), '5');
+    await tester.enterText(_textFieldWithLabel('每日巡检分钟'), '30');
+    await tester.enterText(_textFieldWithLabel('服务端时区'), 'China Standard Time');
+    await tester.scrollUntilVisible(
+      find.text('保存日志保留策略'),
+      300,
+      scrollable: _settingsScrollable(),
+    );
+    await tester.tap(find.text('保存日志保留策略'));
+    await tester.pumpAndSettle();
+
+    expect(api.updateLogRetentionSettingsCalls, 0);
+    expect(
+      find.text('服务端时区必须是 IANA 时区，例如 UTC 或 Asia/Shanghai。'),
+      findsOneWidget,
+    );
+  });
 }

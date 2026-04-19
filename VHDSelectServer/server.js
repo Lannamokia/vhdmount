@@ -11,7 +11,7 @@ const session = require('express-session');
 
 const { AuditLog } = require('./auditLog');
 const { ensureWritableDirectory, writeJsonAtomic } = require('./configStoreUtils');
-const { createDatabase } = require('./database');
+const { assertMachineLogTimeZone, createDatabase } = require('./database');
 const {
     attachMachineLogWebSocketServer,
     buildMachineLogTextExport,
@@ -831,7 +831,7 @@ async function createApp(options = {}) {
             0,
         );
         const timezone = req.body?.timezone
-            ? assertString(req.body.timezone, 'timezone', 1, 128)
+            ? assertMachineLogTimeZone(assertString(req.body.timezone, 'timezone', 1, 128), 'timezone')
             : 'UTC';
 
         const settings = await runtime.database.updateMachineLogRuntimeSettings({

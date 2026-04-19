@@ -1,6 +1,7 @@
 const { Pool } = require('pg');
 
 const { runSchemaMigrations } = require('./schemaMigrations');
+const { ValidationError } = require('./validators');
 
 const MACHINE_SELECT_COLUMNS = `
     id,
@@ -152,9 +153,43 @@ function normalizeMachineLogRuntimeSettings(raw = {}) {
         defaultRetentionActiveDays: Number(raw.defaultRetentionActiveDays || DEFAULT_MACHINE_LOG_RUNTIME_SETTINGS.defaultRetentionActiveDays),
         dailyInspectionHour: Number(raw.dailyInspectionHour ?? DEFAULT_MACHINE_LOG_RUNTIME_SETTINGS.dailyInspectionHour),
         dailyInspectionMinute: Number(raw.dailyInspectionMinute ?? DEFAULT_MACHINE_LOG_RUNTIME_SETTINGS.dailyInspectionMinute),
-        timezone: String(raw.timezone || DEFAULT_MACHINE_LOG_RUNTIME_SETTINGS.timezone).trim() || DEFAULT_MACHINE_LOG_RUNTIME_SETTINGS.timezone,
+        timezone: normalizeMachineLogTimeZone(raw.timezone, DEFAULT_MACHINE_LOG_RUNTIME_SETTINGS.timezone),
         lastInspectionAt: raw.lastInspectionAt || null,
     };
+}
+
+function isValidIanaTimeZone(value) {
+    const candidate = String(value || '').trim();
+    if (!candidate) {
+        return false;
+    }
+
+    try {
+        new Intl.DateTimeFormat('en-CA', { timeZone: candidate }).format(new Date());
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function normalizeMachineLogTimeZone(value, fallback = DEFAULT_MACHINE_LOG_RUNTIME_SETTINGS.timezone) {
+    const fallbackTimeZone = String(fallback || DEFAULT_MACHINE_LOG_RUNTIME_SETTINGS.timezone).trim()
+        || DEFAULT_MACHINE_LOG_RUNTIME_SETTINGS.timezone;
+    const candidate = String(value || '').trim();
+    if (!candidate) {
+        return fallbackTimeZone;
+    }
+
+    return isValidIanaTimeZone(candidate) ? candidate : fallbackTimeZone;
+}
+
+function assertMachineLogTimeZone(value, fieldName = 'timezone') {
+    const candidate = String(value || '').trim();
+    if (!candidate || !isValidIanaTimeZone(candidate)) {
+        throw new ValidationError(`${fieldName} 必须是有效的 IANA 时区，例如 UTC 或 Asia/Shanghai`);
+    }
+
+    return candidate;
 }
 
 function clampText(value, maxLength) {
@@ -200,8 +235,9 @@ function formatLogDay(occurredAt, timeZone = 'UTC') {
         throw new Error('occurredAt 无效');
     }
 
+    const effectiveTimeZone = normalizeMachineLogTimeZone(timeZone, DEFAULT_MACHINE_LOG_RUNTIME_SETTINGS.timezone);
     const formatter = new Intl.DateTimeFormat('en-CA', {
-        timeZone,
+        timeZone: effectiveTimeZone,
         year: 'numeric',
         month: '2-digit',
         day: '2-digit',
@@ -591,6 +627,10 @@ class PostgresDatabase {
                 ...(settings || {}),
             });
 
+            if (settings && Object.prototype.hasOwnProperty.call(settings, 'timezone')) {
+                next.timezone = assertMachineLogTimeZone(settings.timezone, 'timezone');
+            }
+
             for (const [propertyKey, settingKey] of Object.entries(MACHINE_LOG_RUNTIME_SETTING_KEY_MAP)) {
                 if (next[propertyKey] === current[propertyKey]) {
                     continue;
@@ -635,11 +675,14 @@ class PostgresDatabase {
         return existingClient ? work(existingClient) : this.withClient(work);
     }
 
-    async persistMachineLogBatch({ machineId, sessionId, appVersion, osVersion, entries, uploadRequestId, timezone }) {
+    async persistMachineLogBatch({ machineId, sessionId, appVersion, osVersion, entries, uploadRequestId }) {
         try {
             return await this.withTransaction(async (client) => {
                 const settings = await this._getMachineLogRuntimeSettingsWithClient(client);
-                const effectiveTimeZone = String(timezone || settings.timezone || 'UTC').trim() || 'UTC';
+                const effectiveTimeZone = normalizeMachineLogTimeZone(
+                    settings.timezone,
+                    DEFAULT_MACHINE_LOG_RUNTIME_SETTINGS.timezone,
+                );
                 const normalizedEntries = (Array.isArray(entries) ? entries : []).map((entry) => {
                     const occurredAt = new Date(entry.occurredAt || entry.occurred_at || new Date().toISOString());
                     return {
@@ -1000,8 +1043,13 @@ function createDatabase(rawConfig, logger = console) {
 }
 
 module.exports = {
+    assertMachineLogTimeZone,
     createDatabase,
     DEFAULT_MACHINE_LOG_RUNTIME_SETTINGS,
+    formatLogDay,
+    isValidIanaTimeZone,
+    normalizeMachineLogRuntimeSettings,
+    normalizeMachineLogTimeZone,
     normalizeDbConfig,
     PostgresDatabase,
 };

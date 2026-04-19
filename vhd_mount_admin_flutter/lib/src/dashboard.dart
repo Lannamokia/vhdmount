@@ -1348,6 +1348,18 @@ class _SettingsViewState extends State<SettingsView> {
   final TextEditingController _otpRotateNewCodeController =
       TextEditingController();
 
+  bool _isLikelyIanaTimeZone(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) {
+      return false;
+    }
+    if (trimmed == 'UTC' || trimmed == 'GMT') {
+      return true;
+    }
+
+    return RegExp(r'^[A-Za-z_]+(?:/[A-Za-z0-9_.+-]+)+$').hasMatch(trimmed);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1577,7 +1589,11 @@ class _SettingsViewState extends State<SettingsView> {
               const SizedBox(height: 12),
               TextField(
                 controller: _logTimezoneController,
-                decoration: const InputDecoration(labelText: '服务端时区'),
+                decoration: const InputDecoration(
+                  labelText: '服务端时区',
+                  hintText: 'UTC 或 Asia/Shanghai',
+                  helperText: '仅支持 IANA 时区，不支持 China Standard Time 这类 Windows 时区名。',
+                ),
               ),
               const SizedBox(height: 12),
               FilledButton.icon(
@@ -1614,6 +1630,14 @@ class _SettingsViewState extends State<SettingsView> {
                   if (timezone.isEmpty) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(content: Text('服务端时区不能为空。')),
+                    );
+                    return;
+                  }
+                  if (!_isLikelyIanaTimeZone(timezone)) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('服务端时区必须是 IANA 时区，例如 UTC 或 Asia/Shanghai。'),
+                      ),
                     );
                     return;
                   }

@@ -535,7 +535,6 @@ function attachMachineLogWebSocketServer({ server, runtime, logger = console }) 
                     osVersion: payload.osVersion || null,
                     entries: normalizedEntries,
                     uploadRequestId: state.connectionId,
-                    timezone: payload.timezone || null,
                 });
 
                 state.acknowledgedSeq = Math.max(state.acknowledgedSeq, result.acknowledgedSeq);
