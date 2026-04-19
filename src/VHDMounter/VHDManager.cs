@@ -2093,10 +2093,15 @@ namespace VHDMounter
                 stdout,
                 "not attached",
                 "not currently attached",
+                "already detached",
+                "is already detached",
                 "isn't attached",
                 "尚未连接",
                 "未连接",
-                "未附加");
+                "未附加",
+                "已经分离",
+                "已分离",
+                "虚拟磁盘已经分离");
         }
 
         private static bool DiskPartOutputIndicatesIoError(string stderr, string stdout)
