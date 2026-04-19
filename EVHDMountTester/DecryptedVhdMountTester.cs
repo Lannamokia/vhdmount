@@ -198,7 +198,25 @@ internal static class DecryptedVhdMountTester
         var script = $@"select vdisk file=""{vhdPath}""
 attach vdisk
 exit";
-        return await RunDiskPartScriptAsync(script, "attach-vhd", log, logError);
+        var result = await RunDiskPartScriptWithResultAsync(script, "attach-vhd", log, logError);
+        if (result.TimedOut)
+        {
+            return false;
+        }
+
+        if (result.ExitCode == 0)
+        {
+            return true;
+        }
+
+        if (OutputContainsAny(result.StandardError, result.StandardOutput, "already attached", "already connected", "已经连接", "已连接"))
+        {
+            log("VHD_MOUNT_TEST_WARN: diskpart 报告目标 VHD 已连接，将继续后续卷识别流程。");
+            return true;
+        }
+
+        logError($"VHD_MOUNT_TEST_ERROR: diskpart attach-vhd 退出码 {result.ExitCode}");
+        return false;
     }
 
     private static async Task<bool> DetachVhdAsync(string vhdPath, Action<string> log, Action<string> logError)
@@ -208,23 +226,46 @@ exit";
             var script = $@"select vdisk file=""{vhdPath}""
 detach vdisk
 exit";
-            if (await RunDiskPartScriptAsync(script, "detach-vhd", log, logError))
+            var detachResult = await RunDiskPartScriptWithResultAsync(script, "detach-vhd", log, logError);
+            if (detachResult.TimedOut)
+            {
+                return false;
+            }
+
+            if (detachResult.ExitCode == 0)
             {
                 return true;
             }
 
-            log("VHD_MOUNT_TEST_WARN: 按文件路径分离 VHD 失败，尝试通用 detach 脚本。");
-        }
-        else
-        {
-            log("VHD_MOUNT_TEST_WARN: 原始 VHD 路径已不可访问，尝试通用 detach 脚本。");
+            if (OutputContainsAny(detachResult.StandardError, detachResult.StandardOutput, "not attached", "not currently attached", "尚未连接", "未连接", "未附加"))
+            {
+                log("VHD_MOUNT_TEST_WARN: 目标 VHD 当前未连接，无需分离。");
+                return true;
+            }
+
+            log("VHD_MOUNT_TEST_WARN: 按文件路径分离 VHD 失败。由于缺少可靠的无路径 fallback，本次不再使用 select vdisk file=*。");
+            return false;
         }
 
-        var fallbackScript = "select vdisk file=*\ndetach vdisk\nexit";
-        return await RunDiskPartScriptAsync(fallbackScript, "detach-vhd-fallback", log, logError);
+        log("VHD_MOUNT_TEST_WARN: 原始 VHD 路径已不可访问，跳过 detach；避免使用无效的 select vdisk file=* fallback。");
+        return false;
+    }
+
+    private sealed record DiskPartCommandResult(bool TimedOut, int ExitCode, string StandardOutput, string StandardError);
+
+    private static bool OutputContainsAny(string stderr, string stdout, params string[] needles)
+    {
+        var combined = string.Concat(stderr ?? string.Empty, "\n", stdout ?? string.Empty);
+        return needles.Any(needle => combined.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0);
     }
 
     private static async Task<bool> RunDiskPartScriptAsync(string script, string operation, Action<string> log, Action<string> logError, int timeoutMs = 30000)
+    {
+        var result = await RunDiskPartScriptWithResultAsync(script, operation, log, logError, timeoutMs);
+        return !result.TimedOut && result.ExitCode == 0;
+    }
+
+    private static async Task<DiskPartCommandResult> RunDiskPartScriptWithResultAsync(string script, string operation, Action<string> log, Action<string> logError, int timeoutMs = 30000)
     {
         var tempScript = Path.GetTempFileName();
         await File.WriteAllTextAsync(tempScript, script, Encoding.ASCII);
@@ -252,7 +293,7 @@ exit";
             {
                 try { process.Kill(entireProcessTree: true); } catch { }
                 logError($"VHD_MOUNT_TEST_ERROR: diskpart {operation} 超时。");
-                return false;
+                return new DiskPartCommandResult(true, process.HasExited ? process.ExitCode : -1, string.Empty, string.Empty);
             }
 
             var output = await process.StandardOutput.ReadToEndAsync();
@@ -266,13 +307,7 @@ exit";
                 logError($"VHD_MOUNT_TEST_DISKPART_{operation.ToUpperInvariant()}_ERROR:\n{error.TrimEnd()}");
             }
 
-            if (process.ExitCode != 0)
-            {
-                logError($"VHD_MOUNT_TEST_ERROR: diskpart {operation} 退出码 {process.ExitCode}");
-                return false;
-            }
-
-            return true;
+            return new DiskPartCommandResult(false, process.ExitCode, output, error);
         }
         finally
         {

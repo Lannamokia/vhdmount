@@ -434,8 +434,24 @@ namespace VHDMounter
             // 程序关闭时卸载VHD
             try
             {
-                _ = vhdManager.UnmountVHD();
-                vhdManager.StopEncryptedEvhdMount();
+                Task.Run(async () =>
+                {
+                    try
+                    {
+                        await vhdManager.UnmountVHD();
+                    }
+                    catch
+                    {
+                    }
+
+                    try
+                    {
+                        vhdManager.StopEncryptedEvhdMount();
+                    }
+                    catch
+                    {
+                    }
+                }).GetAwaiter().GetResult();
             }
             catch { }
             
