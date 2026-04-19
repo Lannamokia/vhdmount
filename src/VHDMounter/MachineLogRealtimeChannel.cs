@@ -385,7 +385,7 @@ namespace VHDMounter
 
             using var serverHelloDoc = JsonDocument.Parse(await ReceiveTextMessageAsync(clientWebSocket, cancellationToken).ConfigureAwait(false));
             var serverHello = ParseServerHello(serverHelloDoc.RootElement, bootstrap.BootstrapId);
-            var sharedSecret = clientEcdh.DeriveKeyMaterial(ImportRemotePublicKey(serverHello.ServerEcdhPublicKey));
+            var sharedSecret = clientEcdh.DeriveRawSecretAgreement(ImportRemotePublicKey(serverHello.ServerEcdhPublicKey));
             var derivedKeys = DeriveSessionKeys(sharedSecret, bootstrap.BootstrapSecret, clientNonce, serverHello.Nonce);
             var transcriptHash = HashTranscript(
                 MachineLogProtocolVersion,
