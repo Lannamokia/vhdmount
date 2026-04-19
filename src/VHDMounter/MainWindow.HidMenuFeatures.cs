@@ -228,10 +228,10 @@ namespace VHDMounter
                 case ServiceMenuItemKind.SystemInfo:
                     currentSystemInfoPageIndex = 0;
                     currentOverlayState = OverlayState.SystemInfo;
-                    systemInfoService?.Start();
                     if (systemInfoService != null)
                     {
                         latestSystemInfoSnapshot = await systemInfoService.RefreshNowAsync();
+                        systemInfoService.Start();
                     }
                     RenderOverlay();
                     break;

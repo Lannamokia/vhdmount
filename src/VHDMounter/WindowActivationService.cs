@@ -46,11 +46,17 @@ namespace VHDMounter
                 }
 
                 window.ShowInTaskbar = true;
-                window.WindowState = WindowState.Maximized;
                 window.Topmost = true;
+
+                if (window.WindowState == WindowState.Minimized)
+                {
+                    window.WindowState = WindowState.Normal;
+                }
+
+                window.WindowState = WindowState.Maximized;
                 window.Activate();
 
-                NativeMethods.ShowWindowAsync(hwnd, NativeMethods.SW_RESTORE);
+                NativeMethods.ShowWindowAsync(hwnd, NativeMethods.SW_SHOWMAXIMIZED);
                 NativeMethods.BringWindowToTop(hwnd);
                 NativeMethods.SetForegroundWindow(hwnd);
 
@@ -72,13 +78,13 @@ namespace VHDMounter
 
             return window.Dispatcher.InvokeAsync(() =>
             {
-                window.WindowState = WindowState.Minimized;
-                window.ShowInTaskbar = false;
+                window.ShowInTaskbar = context.PreviousShowInTaskbar;
+                window.WindowState = context.PreviousWindowState;
                 window.Topmost = context.PreviousTopmost;
 
                 if (context.PreviousForegroundWindow != IntPtr.Zero)
                 {
-                    NativeMethods.ShowWindowAsync(context.PreviousForegroundWindow, NativeMethods.SW_RESTORE);
+                    NativeMethods.BringWindowToTop(context.PreviousForegroundWindow);
                     NativeMethods.SetForegroundWindow(context.PreviousForegroundWindow);
                 }
             }).Task;

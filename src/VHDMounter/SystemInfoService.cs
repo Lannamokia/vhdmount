@@ -17,6 +17,7 @@ namespace VHDMounter
     {
         private readonly Computer computer;
         private readonly object lifecycleSync = new object();
+        private readonly SemaphoreSlim snapshotGate = new SemaphoreSlim(1, 1);
         private CancellationTokenSource refreshCts;
         private Task refreshTask;
         private CpuTimesSample lastCpuSample;
@@ -87,9 +88,7 @@ namespace VHDMounter
         public async Task<SystemInfoSnapshot> RefreshNowAsync()
         {
             ThrowIfDisposed();
-            var snapshot = await Task.Run(BuildSnapshot);
-            PublishSnapshot(snapshot);
-            return snapshot;
+            return await RefreshSnapshotAsync(CancellationToken.None);
         }
 
         public void Dispose()
@@ -117,8 +116,7 @@ namespace VHDMounter
             {
                 try
                 {
-                    var snapshot = await Task.Run(BuildSnapshot, token);
-                    PublishSnapshot(snapshot);
+                    await RefreshSnapshotAsync(token);
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested)
                 {
@@ -137,6 +135,26 @@ namespace VHDMounter
                 {
                     break;
                 }
+            }
+        }
+
+        private async Task<SystemInfoSnapshot> RefreshSnapshotAsync(CancellationToken token)
+        {
+            await snapshotGate.WaitAsync(token).ConfigureAwait(false);
+            try
+            {
+                ThrowIfDisposed();
+                var snapshot = await Task.Run(() =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    return BuildSnapshot();
+                }, token).ConfigureAwait(false);
+                PublishSnapshot(snapshot);
+                return snapshot;
+            }
+            finally
+            {
+                snapshotGate.Release();
             }
         }
 
@@ -388,7 +406,7 @@ namespace VHDMounter
                             continue;
                         }
 
-                        var dedicatedBytes = Convert.ToUInt64(description.DedicatedVideoMemory);
+                        var dedicatedBytes = description.DedicatedVideoMemory.Value.ToUInt64();
                         if (dedicatedBytes == 0)
                         {
                             continue;

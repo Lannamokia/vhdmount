@@ -5,6 +5,7 @@ namespace VHDMounter
 {
     internal static class NativeMethods
     {
+        internal const int SW_SHOWMAXIMIZED = 3;
         internal const int SW_SHOW = 5;
         internal const int SW_RESTORE = 9;
 
