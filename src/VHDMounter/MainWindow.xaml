@@ -7,6 +7,23 @@
         Topmost="True"
         Background="White"
         KeyDown="Window_KeyDown">
+
+    <Window.Resources>
+        <Style x:Key="OverlayCardStyle" TargetType="Border">
+            <Setter Property="Background" Value="#FFF4E3BF"/>
+            <Setter Property="BorderBrush" Value="#FFB7791F"/>
+            <Setter Property="BorderThickness" Value="2"/>
+            <Setter Property="CornerRadius" Value="18"/>
+            <Setter Property="Padding" Value="18"/>
+            <Setter Property="Margin" Value="0,0,0,14"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                    <Setter Property="Background" Value="#FFDCEAFE"/>
+                    <Setter Property="BorderBrush" Value="#FF1D4ED8"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
     
     <Grid>
         <Grid.RowDefinitions>
@@ -78,6 +95,95 @@
                                  Maximum="100"
                                  Visibility="Collapsed"/>
                 </StackPanel>
+            </Grid>
+        </Grid>
+
+        <Grid x:Name="ServiceMenuOverlay"
+              Grid.RowSpan="2"
+              Visibility="Collapsed"
+              Background="#AA111827"
+              Panel.ZIndex="10">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="7*"/>
+                <RowDefinition Height="9*"/>
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="1"
+                  HorizontalAlignment="Center"
+                  VerticalAlignment="Center">
+                <Border Width="860"
+                        MaxWidth="{Binding ActualWidth, ElementName=CircularDisplayRegionHost}"
+                        Padding="36"
+                        Background="#FFF9F6EE"
+                        BorderBrush="#FF111827"
+                        BorderThickness="3"
+                        CornerRadius="30">
+                    <DockPanel LastChildFill="True">
+                        <TextBlock x:Name="OverlayFooterText"
+                                   DockPanel.Dock="Bottom"
+                                   Margin="0,24,0,0"
+                                   FontSize="18"
+                                   FontWeight="SemiBold"
+                                   Foreground="#FF4B5563"
+                                   TextAlignment="Center"
+                                   TextWrapping="Wrap"/>
+
+                        <StackPanel DockPanel.Dock="Top"
+                                    Margin="0,0,0,24">
+                            <TextBlock x:Name="OverlayTitleText"
+                                       FontSize="34"
+                                       FontWeight="Bold"
+                                       Foreground="#FF111827"
+                                       TextAlignment="Center"/>
+                            <TextBlock x:Name="OverlaySubtitleText"
+                                       Margin="0,12,0,0"
+                                       FontSize="20"
+                                       Foreground="#FF374151"
+                                       TextAlignment="Center"
+                                       TextWrapping="Wrap"/>
+                            <TextBlock x:Name="OverlayPageIndicatorText"
+                                       Margin="0,8,0,0"
+                                       FontSize="18"
+                                       FontWeight="SemiBold"
+                                       Foreground="#FF92400E"
+                                       TextAlignment="Center"/>
+                        </StackPanel>
+
+                        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled">
+                            <ItemsControl x:Name="OverlayItemsControl">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Style="{StaticResource OverlayCardStyle}">
+                                            <StackPanel>
+                                                <DockPanel LastChildFill="True">
+                                                    <TextBlock Text="{Binding Value}"
+                                                               DockPanel.Dock="Right"
+                                                               Margin="16,0,0,0"
+                                                               FontSize="22"
+                                                               FontWeight="Bold"
+                                                               Foreground="#FF111827"
+                                                               TextAlignment="Right"/>
+                                                    <TextBlock Text="{Binding Title}"
+                                                               FontSize="24"
+                                                               FontWeight="Bold"
+                                                               Foreground="#FF111827"
+                                                               TextWrapping="Wrap"/>
+                                                </DockPanel>
+
+                                                <TextBlock Text="{Binding Detail}"
+                                                           Margin="0,10,0,0"
+                                                           FontSize="18"
+                                                           Foreground="#FF4B5563"
+                                                           TextWrapping="Wrap"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </DockPanel>
+                </Border>
             </Grid>
         </Grid>
     </Grid>

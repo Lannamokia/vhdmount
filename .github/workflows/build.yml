@@ -4,6 +4,8 @@ on:
     branches:
       - main
       - dev
+      - maimoller
+      - maimoller_control_test
     tags:
       - "*"
   workflow_dispatch:
@@ -20,11 +22,15 @@ jobs:
       - name: Restore
         run: |
           dotnet restore ./VHDMounter.csproj
+          dotnet restore ./VHDMounter.csproj -p:EnableHidMenuFeatures=true
           dotnet restore ./Updater/Updater.csproj
           dotnet restore ./VHDMountAdminTools/VHDMountAdminTools.csproj
         shell: pwsh
-      - name: Publish VHDMounter
-        run: dotnet publish ./VHDMounter.csproj -c Release -r win-x64
+      - name: Publish VHDMounter Base
+        run: dotnet publish ./VHDMounter.csproj -c Release -r win-x64 -p:EnableHidMenuFeatures=false -o ./artifacts/publish/VHDMounter
+        shell: pwsh
+      - name: Publish VHDMounter Maimoller
+        run: dotnet publish ./VHDMounter.csproj -c Release -r win-x64 -p:EnableHidMenuFeatures=true -o ./artifacts/publish/VHDMounter_Maimoller
         shell: pwsh
       - name: Publish Updater
         run: dotnet publish ./Updater/Updater.csproj -c Release -r win-x64
@@ -35,7 +41,8 @@ jobs:
       - name: Zip artifacts
         run: |
           New-Item -ItemType Directory -Force -Path ./artifacts | Out-Null
-          Compress-Archive -Path ./bin/Release/net8.0-windows/win-x64/publish -DestinationPath ./artifacts/VHDMounter-win-x64.zip -Force
+          Compress-Archive -Path ./artifacts/publish/VHDMounter/* -DestinationPath ./artifacts/VHDMounter-win-x64.zip -Force
+          Compress-Archive -Path ./artifacts/publish/VHDMounter_Maimoller/* -DestinationPath ./artifacts/VHDMounter_Maimoller-win-x64.zip -Force
           Compress-Archive -Path ./Updater/bin/Release/net8.0-windows/win-x64/publish -DestinationPath ./artifacts/Updater-win-x64.zip -Force
           Compress-Archive -Path ./VHDMountAdminTools/bin/Release/net8.0-windows/win-x64/publish -DestinationPath ./artifacts/VHDMountAdminTools-win-x64.zip -Force
         shell: pwsh
@@ -44,6 +51,11 @@ jobs:
         with:
           name: VHDMounter-win-x64
           path: artifacts/VHDMounter-win-x64.zip
+      - name: Upload VHDMounter Maimoller artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VHDMounter_Maimoller-win-x64
+          path: artifacts/VHDMounter_Maimoller-win-x64.zip
       - name: Upload Updater artifact
         uses: actions/upload-artifact@v4
         with:
@@ -69,6 +81,7 @@ jobs:
         with:
           files: |
             artifacts/VHDMounter-win-x64.zip
+            artifacts/VHDMounter_Maimoller-win-x64.zip
             artifacts/Updater-win-x64.zip
             artifacts/VHDMountAdminTools-win-x64.zip
             artifacts/CHECKSUMS.sha256

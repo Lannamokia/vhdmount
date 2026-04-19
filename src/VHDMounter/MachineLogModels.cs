@@ -40,17 +40,11 @@ namespace VHDMounter
 
         public string MachineId { get; private set; } = "MACHINE_001";
 
-        public string EvhdEnvelopeUrl { get; private set; } = string.Empty;
-
-        public string BootImageSelectUrl { get; private set; } = string.Empty;
+        public string ServerBaseUrl { get; private set; } = ServiceEndpointResolver.DefaultServerBaseUrl;
 
         public string RegistrationCertificatePath { get; private set; } = string.Empty;
 
         public string RegistrationCertificatePassword { get; private set; } = string.Empty;
-
-        public string MachineLogServerIp { get; private set; } = "127.0.0.1";
-
-        public int MachineLogServerPort { get; private set; } = 8080;
 
         public int MachineLogUploadIntervalMs { get; private set; } = 3000;
 
@@ -62,40 +56,12 @@ namespace VHDMounter
 
         public string ResolveEnvelopeUrl()
         {
-            if (!string.IsNullOrWhiteSpace(EvhdEnvelopeUrl))
-            {
-                return EvhdEnvelopeUrl.Trim();
-            }
-
-            if (!string.IsNullOrWhiteSpace(BootImageSelectUrl))
-            {
-                return BootImageSelectUrl.Replace(
-                    "boot-image-select",
-                    "evhd-envelope",
-                    StringComparison.OrdinalIgnoreCase);
-            }
-
-            return $"http://{MachineLogServerIp}:{MachineLogServerPort}/api/evhd-envelope";
+            return ServiceEndpointResolver.CombineHttpEndpoint(ServerBaseUrl, "api/evhd-envelope");
         }
 
         public Uri ResolveWebSocketUri()
         {
-            if (!string.IsNullOrWhiteSpace(MachineLogServerIp) &&
-                Uri.TryCreate(MachineLogServerIp.Trim(), UriKind.Absolute, out var configuredUri))
-            {
-                return new UriBuilder("ws", configuredUri.Host, configuredUri.Port, "/ws/machine-log").Uri;
-            }
-
-            if (Uri.TryCreate(ResolveEnvelopeUrl(), UriKind.Absolute, out var envelopeUri))
-            {
-                var host = string.IsNullOrWhiteSpace(MachineLogServerIp)
-                    ? envelopeUri.Host
-                    : MachineLogServerIp.Trim();
-                var port = MachineLogServerPort > 0 ? MachineLogServerPort : envelopeUri.Port;
-                return new UriBuilder("ws", host, port, "/ws/machine-log").Uri;
-            }
-
-            return new UriBuilder("ws", MachineLogServerIp, MachineLogServerPort, "/ws/machine-log").Uri;
+            return ServiceEndpointResolver.BuildWebSocketEndpoint(ServerBaseUrl, "ws/machine-log");
         }
 
         public static string GenerateSessionId()
@@ -135,12 +101,9 @@ namespace VHDMounter
                 ConfigPath = configPath,
                 EnableLogUpload = ParseBool(values, "EnableLogUpload", false),
                 MachineId = ParseString(values, "MachineId", "MACHINE_001"),
-                EvhdEnvelopeUrl = ParseString(values, "EvhdEnvelopeUrl", string.Empty),
-                BootImageSelectUrl = ParseString(values, "BootImageSelectUrl", string.Empty),
+                ServerBaseUrl = ServiceEndpointResolver.ResolveServerBaseUrl(values),
                 RegistrationCertificatePath = ParseString(values, "RegistrationCertificatePath", string.Empty),
                 RegistrationCertificatePassword = ParseString(values, "RegistrationCertificatePassword", string.Empty),
-                MachineLogServerIp = ParseString(values, "MachineLogServerIp", "127.0.0.1"),
-                MachineLogServerPort = ParseInt(values, "MachineLogServerPort", 8080, 1, 65535),
                 MachineLogUploadIntervalMs = ParseInt(values, "MachineLogUploadIntervalMs", 3000, 250, 60000),
                 MachineLogUploadBatchSize = ParseInt(values, "MachineLogUploadBatchSize", 200, 1, 200),
                 MachineLogUploadMaxSpoolBytes = ParseLong(values, "MachineLogUploadMaxSpoolBytes", 50L * 1024L * 1024L, 1024L * 1024L, 512L * 1024L * 1024L),

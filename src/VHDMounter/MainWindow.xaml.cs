@@ -52,6 +52,10 @@ namespace VHDMounter
             vhdManager.BlockingChanged += OnBlockingChanged;
             vhdManager.GameCrashed += OnGameCrashed;
             vhdManager.GameStarted += OnGameStarted;
+
+#if FEATURE_HID_MENU
+            InitializeFeatureServices();
+#endif
             
             // 注册关机事件监听
             SystemEvents.SessionEnding += OnSessionEnding;
@@ -102,6 +106,9 @@ namespace VHDMounter
                         this.Topmost = true;
                         this.ShowInTaskbar = true;
                         this.WindowState = WindowState.Maximized;
+#if FEATURE_HID_MENU
+                        SetWindowHiddenForGame(false);
+#endif
                         break;
                     case UiStage.CrashRecovering:
                         StatusText.Text = "游戏程序异常退出，正在尝试重启";
@@ -111,6 +118,9 @@ namespace VHDMounter
                         this.ShowInTaskbar = true;
                         this.WindowState = WindowState.Maximized;
                         this.Activate();
+#if FEATURE_HID_MENU
+                        SetWindowHiddenForGame(false);
+#endif
                         break;
                     case UiStage.Error:
                         StatusText.Text = "运行发生错误，请联系管理员调阅日志";
@@ -120,6 +130,10 @@ namespace VHDMounter
                         this.ShowInTaskbar = true;
                         this.WindowState = WindowState.Maximized;
                         this.Activate();
+#if FEATURE_HID_MENU
+                        SetWindowHiddenForGame(false);
+                        DismissServiceMenuForFatalStage();
+#endif
                         break;
                 }
             });
@@ -264,6 +278,7 @@ namespace VHDMounter
 
         private void ShowVHDSelector(List<string> vhdFiles)
         {
+            isProcessing = false;
             Dispatcher.Invoke(() =>
             {
                 VHDListBox.ItemsSource = vhdFiles.Select(f => System.IO.Path.GetFileName(f)).ToList();
@@ -354,11 +369,7 @@ namespace VHDMounter
                 }
 
                 // 切换后隐藏自身 UI 并进入监控（异常重启使用 start_game.bat）
-                Dispatcher.Invoke(() =>
-                {
-                    this.WindowState = WindowState.Minimized;
-                    this.ShowInTaskbar = false;
-                });
+                HideWindowForGameMonitoring();
                 await vhdManager.MonitorAndRestart(targetFolder);
             }
             catch (Exception ex)
@@ -399,65 +410,21 @@ namespace VHDMounter
 
         private void OnGameCrashed()
         {
+#if FEATURE_HID_MENU
+            PromoteServiceMenuToForeground();
+#endif
             SetStage(UiStage.CrashRecovering);
         }
 
         private void OnGameStarted()
         {
             // 游戏已正常启动后，隐藏自身界面
-            Dispatcher.Invoke(() =>
-            {
-                this.WindowState = WindowState.Minimized;
-                this.ShowInTaskbar = false;
-            });
+            HideWindowForGameMonitoring();
         }
 
         private async void Window_KeyDown(object sender, KeyEventArgs e)
         {
-            // 全局检测 Delete 三击
-            if (e.Key == Key.Delete)
-            {
-                var now = DateTime.Now;
-                if ((now - lastDelPressTime) <= delPressWindow)
-                {
-                    delPressCount++;
-                }
-                else
-                {
-                    delPressCount = 1;
-                }
-                lastDelPressTime = now;
-                if (delPressCount >= 3)
-                {
-                    delPressCount = 0;
-                    await SafeShutdown();
-                    return;
-                }
-            }
-
-            // 仅在选择器可见时处理上下与回车
-            if (VHDSelector.Visibility == Visibility.Visible)
-            {
-                switch (e.Key)
-                {
-                    case Key.Up:
-                        if (VHDListBox.SelectedIndex > 0)
-                            VHDListBox.SelectedIndex--;
-                        break;
-                    case Key.Down:
-                        if (VHDListBox.SelectedIndex < VHDListBox.Items.Count - 1)
-                            VHDListBox.SelectedIndex++;
-                        break;
-                    case Key.Enter:
-                        if (!isProcessing && VHDListBox.SelectedIndex >= 0 && availableVHDs != null)
-                        {
-                            isProcessing = true;
-                            string selectedVHD = availableVHDs[VHDListBox.SelectedIndex];
-                            await ProcessSelectedVHD(selectedVHD);
-                        }
-                        break;
-                }
-            }
+            await HandleKeyDownAsync(e);
         }
 
         
@@ -474,6 +441,10 @@ namespace VHDMounter
             
             // 取消注册关机事件
             SystemEvents.SessionEnding -= OnSessionEnding;
+
+#if FEATURE_HID_MENU
+            DisposeFeatureServices();
+#endif
             
             base.OnClosed(e);
         }

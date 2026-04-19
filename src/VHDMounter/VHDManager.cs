@@ -94,7 +94,7 @@ namespace VHDMounter
                 isProtectionCheckEnabled = config.TryGetValue("EnableProtectionCheck", out var enableCheck) && 
                                          bool.TryParse(enableCheck, out var enabled) && enabled;
                 
-                protectionCheckUrl = config.TryGetValue("ProtectionCheckUrl", out var url) ? url : "http://localhost:8080/api/protect";
+                protectionCheckUrl = ServiceEndpointResolver.ResolveProtectionCheckUrl(config);
                 
                 protectionCheckInterval = config.TryGetValue("ProtectionCheckInterval", out var interval) && 
                                         int.TryParse(interval, out var intervalMs) ? intervalMs : 500;
@@ -1098,12 +1098,8 @@ namespace VHDMounter
                     StatusChanged?.Invoke("远程VHD选择功能已禁用");
                     return null;
                 }
-                
-                if (!config.TryGetValue("BootImageSelectUrl", out var url) || string.IsNullOrWhiteSpace(url))
-                {
-                    StatusChanged?.Invoke("未配置BootImageSelectUrl");
-                    return null;
-                }
+
+                var url = ServiceEndpointResolver.ResolveBootImageSelectUrl(config);
                 
                 // 添加Machine ID参数
                 var requestUrl = $"{url}?machineId={Uri.EscapeDataString(machineId)}";
@@ -1144,24 +1140,7 @@ namespace VHDMounter
             try
             {
                 var config = ReadConfig();
-                string url = null;
-                if (config.TryGetValue("EvhdEnvelopeUrl", out var envelopeUrl) && !string.IsNullOrWhiteSpace(envelopeUrl))
-                {
-                    url = envelopeUrl;
-                }
-                else if (config.TryGetValue("EvhdPasswordUrl", out var legacyUrl) && !string.IsNullOrWhiteSpace(legacyUrl))
-                {
-                    url = legacyUrl.Replace("evhd-password", "evhd-envelope");
-                }
-                else if (config.TryGetValue("BootImageSelectUrl", out var bootUrl) && !string.IsNullOrWhiteSpace(bootUrl))
-                {
-                    url = bootUrl.Replace("boot-image-select", "evhd-envelope");
-                }
-                else
-                {
-                    StatusChanged?.Invoke("未配置EvhdEnvelopeUrl/EvhdPasswordUrl或BootImageSelectUrl");
-                    return null;
-                }
+                var url = ServiceEndpointResolver.ResolveEvhdEnvelopeUrl(config);
 
                 var requestUrl = $"{url}?machineId={Uri.EscapeDataString(machineId)}";
                 StatusChanged?.Invoke($"正在从远程获取EVHD封装信封: {requestUrl}");
@@ -1263,24 +1242,7 @@ namespace VHDMounter
             try
             {
                 var config = ReadConfig();
-                string url = null;
-                if (config.TryGetValue("EvhdEnvelopeUrl", out var envelopeUrl) && !string.IsNullOrWhiteSpace(envelopeUrl))
-                {
-                    url = envelopeUrl;
-                }
-                else if (config.TryGetValue("EvhdPasswordUrl", out var legacyUrl) && !string.IsNullOrWhiteSpace(legacyUrl))
-                {
-                    url = legacyUrl.Replace("evhd-password", "evhd-envelope");
-                }
-                else if (config.TryGetValue("BootImageSelectUrl", out var bootUrl) && !string.IsNullOrWhiteSpace(bootUrl))
-                {
-                    url = bootUrl.Replace("boot-image-select", "evhd-envelope");
-                }
-                else
-                {
-                    StatusChanged?.Invoke("未配置EvhdEnvelopeUrl/EvhdPasswordUrl或BootImageSelectUrl");
-                    return null;
-                }
+                var url = ServiceEndpointResolver.ResolveEvhdEnvelopeUrl(config);
 
                 // 准备TPM RSA密钥（不主动注册，仅在400未注册公钥时注册）
                 var rsa = EnsureOrCreateTpmRsa(machineId);
