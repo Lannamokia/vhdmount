@@ -52,6 +52,7 @@ if %errorlevel% equ 0 (
     echo    User: postgres
     echo.
     echo You can now start the VHDSelectServer:
+    echo    npm run migrate
     echo    node server.js
     echo.
 ) else (

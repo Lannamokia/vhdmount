@@ -2,10 +2,18 @@ name: VHDSelectServer Docker Build & Release
 
 on:
   push:
+    branches:
+      - main
+      - dev
+      - maimoller_control_test
     paths:
       - 'VHDSelectServer/**'
       - '.github/workflows/docker-image.yml'
   pull_request:
+    branches:
+      - main
+      - dev
+      - maimoller_control_test
     paths:
       - 'VHDSelectServer/**'
       - '.github/workflows/docker-image.yml'
