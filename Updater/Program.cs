@@ -15,6 +15,12 @@ namespace Updater
 {
     class Program
     {
+        private static readonly string[] RelaunchExecutableNames =
+        {
+            "VHDMounter_Maimoller.exe",
+            "VHDMounter.exe",
+        };
+
         public class UpdateManifestFile
         {
             public string path { get; set; } = string.Empty;
@@ -228,6 +234,41 @@ namespace Updater
             }
             return blocks;
         }
+
+        private static string ResolveMainProgramPath(string baseDir)
+        {
+            foreach (var executableName in RelaunchExecutableNames)
+            {
+                var candidate = Path.Combine(baseDir, executableName);
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            return null;
+        }
+
+        private static void RelaunchMainProgram(string baseDir)
+        {
+            var executablePath = ResolveMainProgramPath(baseDir);
+            if (string.IsNullOrWhiteSpace(executablePath))
+            {
+                Trace.WriteLine("未找到可重新拉起的主程序，已跳过自动启动");
+                return;
+            }
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = executablePath,
+                UseShellExecute = true,
+                Verb = "runas",
+                WorkingDirectory = baseDir
+            };
+            Process.Start(psi);
+            Trace.WriteLine($"已重新拉起主程序: {Path.GetFileName(executablePath)}");
+        }
+
         private static bool VerifyFileHash(string path, string expectedSha256, long expectedSize)
         {
             if (!File.Exists(path)) return false;
@@ -377,19 +418,7 @@ namespace Updater
             {
                 try
                 {
-                    var exe = Path.Combine(baseDir, "VHDMounter.exe");
-                    if (File.Exists(exe))
-                    {
-                        var psi = new ProcessStartInfo
-                        {
-                            FileName = exe,
-                            UseShellExecute = true,
-                            Verb = "runas",
-                            WorkingDirectory = baseDir
-                        };
-                        Process.Start(psi);
-                        Trace.WriteLine("已重新拉起主程序");
-                    }
+                    RelaunchMainProgram(baseDir);
                 }
                 catch (Exception ex)
                 {
