@@ -68,7 +68,7 @@ staging/
 *.md
 !README.md
 !**/README.md
-!docs/**/*.md
+docs/**/*.md
 !VHDSelectServer/*.md
 README.old.md
 SECURITY_AUDIT_*.md
