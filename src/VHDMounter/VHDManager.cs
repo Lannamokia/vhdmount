@@ -2042,6 +2042,179 @@ namespace VHDMounter
             return $"EVHD挂载进程提前退出，退出码 {exitCode}";
         }
 
+        private sealed class DiskPartCommandResult
+        {
+            public bool TimedOut { get; init; }
+            public int ExitCode { get; init; }
+            public string StandardOutput { get; init; } = string.Empty;
+            public string StandardError { get; init; } = string.Empty;
+        }
+
+        private static string BuildProcessFailureDetail(string prefix, int exitCode, string stderr, string stdout)
+        {
+            var errorText = string.IsNullOrWhiteSpace(stderr) ? null : SanitizeSensitiveText(stderr.Trim());
+            var outputText = string.IsNullOrWhiteSpace(stdout) ? null : SanitizeSensitiveText(stdout.Trim());
+
+            if (!string.IsNullOrEmpty(errorText))
+            {
+                return $"{prefix}（退出码 {exitCode}）: {errorText}";
+            }
+
+            if (!string.IsNullOrEmpty(outputText))
+            {
+                return $"{prefix}（退出码 {exitCode}）: {outputText}";
+            }
+
+            return $"{prefix}（退出码 {exitCode}）";
+        }
+
+        private static async Task<DiskPartCommandResult> RunDiskPartScriptAsync(string script, string operation, int timeoutMs)
+        {
+            var tempScript = Path.GetTempFileName();
+            await File.WriteAllTextAsync(tempScript, script, new UTF8Encoding(false));
+
+            try
+            {
+                using var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "diskpart",
+                        Arguments = $"/s \"{tempScript}\"",
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
+                    }
+                };
+
+                Trace.WriteLine($"DISKPART_{operation}: Begin TimeoutMs={timeoutMs}");
+                process.Start();
+
+                var waitTask = process.WaitForExitAsync();
+                var timeoutTask = Task.Delay(timeoutMs);
+                var completed = await Task.WhenAny(waitTask, timeoutTask);
+                if (completed == timeoutTask)
+                {
+                    try { process.Kill(entireProcessTree: true); } catch { }
+                    Trace.WriteLine($"DISKPART_{operation}: TimedOutAfterMs={timeoutMs}");
+                    return new DiskPartCommandResult
+                    {
+                        TimedOut = true,
+                        ExitCode = process.HasExited ? process.ExitCode : -1
+                    };
+                }
+
+                var stdout = await process.StandardOutput.ReadToEndAsync();
+                var stderr = await process.StandardError.ReadToEndAsync();
+
+                Trace.WriteLine($"DISKPART_{operation}: ExitCode={process.ExitCode}");
+                if (!string.IsNullOrWhiteSpace(stdout))
+                {
+                    Trace.WriteLine($"DISKPART_{operation}_STDOUT:\n{SanitizeSensitiveText(stdout.TrimEnd())}");
+                }
+                if (!string.IsNullOrWhiteSpace(stderr))
+                {
+                    Trace.WriteLine($"DISKPART_{operation}_STDERR:\n{SanitizeSensitiveText(stderr.TrimEnd())}");
+                }
+
+                return new DiskPartCommandResult
+                {
+                    ExitCode = process.ExitCode,
+                    StandardOutput = stdout,
+                    StandardError = stderr
+                };
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(tempScript))
+                    {
+                        File.Delete(tempScript);
+                    }
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        private static bool TryProbeReadableFile(string path, out long length, out string failureReason)
+        {
+            try
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                length = stream.Length;
+                if (length <= 0)
+                {
+                    failureReason = "文件长度为 0";
+                    return false;
+                }
+
+                failureReason = string.Empty;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                length = -1;
+                failureReason = ex.Message;
+                return false;
+            }
+        }
+
+        private static async Task<bool> WaitForVhdFileReadyAsync(string vhdPath, int timeoutMs, int stableSamplesRequired = 2)
+        {
+            var sw = Stopwatch.StartNew();
+            long? lastLength = null;
+            var stableSamples = 0;
+            string lastState = null;
+
+            while (sw.ElapsedMilliseconds < timeoutMs)
+            {
+                if (TryProbeReadableFile(vhdPath, out var length, out var failureReason))
+                {
+                    if (lastLength.HasValue && lastLength.Value == length)
+                    {
+                        stableSamples++;
+                    }
+                    else
+                    {
+                        lastLength = length;
+                        stableSamples = 1;
+                    }
+
+                    var currentState = $"Length={length}, StableSamples={stableSamples}/{stableSamplesRequired}";
+                    if (!string.Equals(lastState, currentState, StringComparison.Ordinal))
+                    {
+                        Trace.WriteLine($"VHD_READY_PROBE: Path={SanitizeSensitiveText(vhdPath)}, {currentState}");
+                        lastState = currentState;
+                    }
+
+                    if (stableSamples >= stableSamplesRequired)
+                    {
+                        return true;
+                    }
+                }
+                else
+                {
+                    lastLength = null;
+                    stableSamples = 0;
+                    var currentState = $"ProbeFailed={SanitizeSensitiveText(failureReason)}";
+                    if (!string.Equals(lastState, currentState, StringComparison.Ordinal))
+                    {
+                        Trace.WriteLine($"VHD_READY_PROBE: Path={SanitizeSensitiveText(vhdPath)}, {currentState}");
+                        lastState = currentState;
+                    }
+                }
+
+                await Task.Delay(500);
+            }
+
+            Trace.WriteLine($"VHD_READY_TIMEOUT: Path={SanitizeSensitiveText(vhdPath)}, LastState={SanitizeSensitiveText(lastState ?? string.Empty)}");
+            return false;
+        }
+
         // 挂载EVHD到N盘，并从其中提取解密后的VHD再挂载
         public async Task<bool> MountEVHDAndAttachDecryptedVHD(string evhdPath)
         {
@@ -2357,55 +2530,29 @@ namespace VHDMounter
                 // 仅记录系统当前真实存在的卷，后续通过卷 GUID 差集识别新挂载的数据卷。
                 var volumesBefore = CaptureCurrentVolumes();
 
+                if (!await WaitForVhdFileReadyAsync(vhdPath, 10000))
+                {
+                    await ShowStatusAndWait($"挂载失败: 解密后的VHD文件未在预期时间内就绪 ({Path.GetFileName(vhdPath)})");
+                    return false;
+                }
+
                 // 第一步：仅挂载VHD，不分配盘符
                 await ShowStatusAndWait("步骤1: 挂载VHD文件...");
                 var attachScript = $@"select vdisk file=""{vhdPath}""
 attach vdisk
 exit";
-                
-                var tempScript = Path.GetTempFileName();
-                await File.WriteAllTextAsync(tempScript, attachScript);
-                
-                var process = new Process
-                {
-                    StartInfo = new ProcessStartInfo
-                    {
-                        FileName = "diskpart",
-                        Arguments = $"/s \"{tempScript}\"",
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true
-                    }
-                };
-                
-                process.Start();
 
-                // 设定挂载超时（60秒），防止卡死
-                var waitTask = process.WaitForExitAsync();
-                var timeoutTask = Task.Delay(60000);
-                var completed = await Task.WhenAny(waitTask, timeoutTask);
-                
-                if (completed == timeoutTask)
+                Trace.WriteLine($"VHD_ATTACH_BEGIN: Path={SanitizeSensitiveText(vhdPath)}");
+                var attachResult = await RunDiskPartScriptAsync(attachScript, "ATTACH_VHD", 60000);
+                if (attachResult.TimedOut)
                 {
-                    try { process.Kill(); } catch { }
                     await ShowStatusAndWait("VHD挂载超时（超过60秒），已中止diskpart进程");
-                    if (File.Exists(tempScript))
-                        File.Delete(tempScript);
                     return false;
                 }
 
-                string attachOutput = await process.StandardOutput.ReadToEndAsync();
-                string attachError = await process.StandardError.ReadToEndAsync();
-                
-                if (File.Exists(tempScript))
-                    File.Delete(tempScript);
-                
-                if (process.ExitCode != 0)
+                if (attachResult.ExitCode != 0)
                 {
-                    await ShowStatusAndWait($"VHD挂载失败: {attachError.Trim()}");
-                    Debug.WriteLine($"VHD挂载输出: {attachOutput}");
-                    Debug.WriteLine($"VHD挂载错误: {attachError}");
+                    await ShowStatusAndWait(BuildProcessFailureDetail("VHD挂载失败", attachResult.ExitCode, attachResult.StandardError, attachResult.StandardOutput));
                     return false;
                 }
 
@@ -4142,58 +4289,18 @@ exit";
             {
                 // 直接分离VHD文件，不移除驱动器字母
                 var diskpartScript = "select vdisk file=*\ndetach vdisk\nexit";
-                var tempScript = Path.GetTempFileName();
-                await File.WriteAllTextAsync(tempScript, diskpartScript);
-                
                 await ShowStatusAndWait("正在执行VHD解除挂载脚本...");
-                
-                var process = new Process
+
+                var detachResult = await RunDiskPartScriptAsync(diskpartScript, "DETACH_VHD", 30000);
+                if (detachResult.TimedOut)
                 {
-                    StartInfo = new ProcessStartInfo
-                    {
-                        FileName = "diskpart",
-                        Arguments = $"/s \"{tempScript}\"",
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true
-                    }
-                };
-                
-                process.Start();
-                
-                // 添加超时机制，防止解除挂载时卡住
-                var waitTask = process.WaitForExitAsync();
-                var timeoutTask = Task.Delay(30000); // 30秒超时
-                var completed = await Task.WhenAny(waitTask, timeoutTask);
-                
-                if (completed == timeoutTask)
-                {
-                    try { process.Kill(); } catch { }
                     StatusChanged?.Invoke("解除VHD挂载超时（超过30秒），已中止diskpart进程");
-                    if (File.Exists(tempScript))
-                        File.Delete(tempScript);
                     return false;
                 }
-                
-                // 获取进程输出用于调试
-                string output = "";
-                string error = "";
-                try
+
+                if (detachResult.ExitCode != 0)
                 {
-                    output = await process.StandardOutput.ReadToEndAsync();
-                    error = await process.StandardError.ReadToEndAsync();
-                }
-                catch { }
-                
-                if (File.Exists(tempScript))
-                    File.Delete(tempScript);
-                
-                if (process.ExitCode != 0 && !string.IsNullOrWhiteSpace(error))
-                {
-                    StatusChanged?.Invoke($"解除VHD挂载警告: {error.Trim()}");
-                    Debug.WriteLine($"UnmountVHD输出: {output}");
-                    Debug.WriteLine($"UnmountVHD错误: {error}");
+                    StatusChanged?.Invoke(BuildProcessFailureDetail("解除VHD挂载警告", detachResult.ExitCode, detachResult.StandardError, detachResult.StandardOutput));
                 }
                 
                 StatusChanged?.Invoke("VHD解除挂载完成");
