@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:vhd_mount_admin_flutter/app.dart';
@@ -52,7 +54,11 @@ void main() {
         isAuthenticated: false,
         otpVerified: false,
       ),
-      getServerStatusError: Exception('offline'),
+      getServerStatusError: SocketException(
+        'Connection refused',
+        address: InternetAddress.loopbackIPv4,
+        port: 8080,
+      ),
     );
     final controller = AppController(
       api: api,
@@ -63,7 +69,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('连接你的 VHD 服务'), findsOneWidget);
-    expect(find.textContaining('offline'), findsOneWidget);
+    expect(find.textContaining('无法连接到本机服务端'), findsOneWidget);
+    expect(find.textContaining('Connection refused'), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('shows dashboard when admin is authenticated', (tester) async {
@@ -86,6 +94,7 @@ void main() {
             keyId: 'key-01',
             keyType: 'RSA',
             registrationCertFingerprint: 'ABC123',
+            logRetentionActiveDaysOverride: null,
             lastSeen: '2026-04-03T08:00:00Z',
           ),
         ],

@@ -13,4 +13,5 @@ part 'src/data.dart';
 part 'src/state.dart';
 part 'src/shell.dart';
 part 'src/dashboard.dart';
+part 'src/machine_logs.dart';
 part 'src/dialogs.dart';

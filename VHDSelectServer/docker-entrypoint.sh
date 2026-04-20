@@ -172,6 +172,11 @@ END
 EOSQL
 }
 
+run_schema_migrations() {
+    log "执行数据库 schema migrations..."
+    su-exec nodejs node /app/migrate.js
+}
+
 # 等待外部数据库连接
 wait_for_external_db() {
     log "等待外部数据库连接..."
@@ -246,30 +251,19 @@ init_embedded_db() {
     su-exec postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;" 2>/dev/null || true
     su-exec postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;" 2>/dev/null || true
     
-    # 初始化数据库表结构
-    log "初始化数据库表结构..."
-    if [ -f "/app/scripts/init-db.sql" ]; then
-        # 使用应用数据库用户执行初始化脚本，确保新对象默认由 $DB_USER 创建。
-        PGPASSWORD="$DB_PASSWORD" psql -v ON_ERROR_STOP=1 -h localhost -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -f /app/scripts/init-db.sql
-        # 对复用的数据卷，按当前 public schema 中真实存在的对象统一修复所有权与权限。
-        repair_public_schema_ownership
-    fi
+    # 执行应用内置的 schema_version 迁移。
+    run_schema_migrations
+    # 对复用的数据卷，按当前 public schema 中真实存在的对象统一修复所有权与权限。
+    repair_public_schema_ownership
     
     log "内置数据库初始化完成"
 }
 
 # 初始化外部数据库表结构
 init_external_db() {
-    log "初始化外部数据库表结构..."
-    
-    # 检查是否需要初始化表结构
-    if ! PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -c "SELECT 1 FROM machines LIMIT 1;" 2>/dev/null; then
-        log "创建数据库表结构..."
-        PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -f /app/scripts/init-db.sql
-        log "外部数据库表结构初始化完成"
-    else
-        log "外部数据库表结构已存在，跳过初始化"
-    fi
+    log "执行外部数据库 schema migrations..."
+    run_schema_migrations
+    log "外部数据库 schema migrations 完成"
 }
 
 # 启动Node.js应用

@@ -22,8 +22,21 @@ class AppController extends ChangeNotifier {
   List<MachineRecord> machines = <MachineRecord>[];
   List<TrustedCertificateRecord> certificates = <TrustedCertificateRecord>[];
   List<AuditEntry> auditEntries = <AuditEntry>[];
+  LogRetentionSettings? logRetentionSettings;
+  List<MachineLogSession> machineLogSessions = <MachineLogSession>[];
+  List<MachineLogEntry> machineLogEntries = <MachineLogEntry>[];
   List<String> rememberedBaseUrls = <String>[];
   String? auditFilterMachineId;
+  String? machineLogSelectedMachineId;
+  String? machineLogSelectedSessionId;
+  String? machineLogLevel;
+  String? machineLogComponent;
+  String? machineLogEventKey;
+  String? machineLogQuery;
+  String? machineLogFrom;
+  String? machineLogTo;
+  String? machineLogCursor;
+  bool machineLogHasMore = false;
 
   String get baseUrl => api.baseUrl;
 
@@ -37,6 +50,24 @@ class AppController extends ChangeNotifier {
     auditFilterMachineId = normalized == null || normalized.isEmpty
         ? null
         : normalized;
+    if (notify) {
+      notifyListeners();
+    }
+  }
+
+  void _clearMachineLogState({bool notify = true}) {
+    machineLogSessions = <MachineLogSession>[];
+    machineLogEntries = <MachineLogEntry>[];
+    machineLogSelectedMachineId = null;
+    machineLogSelectedSessionId = null;
+    machineLogLevel = null;
+    machineLogComponent = null;
+    machineLogEventKey = null;
+    machineLogQuery = null;
+    machineLogFrom = null;
+    machineLogTo = null;
+    machineLogCursor = null;
+    machineLogHasMore = false;
     if (notify) {
       notifyListeners();
     }
@@ -166,12 +197,15 @@ class AppController extends ChangeNotifier {
         auditEntries = await api.getAuditEntries(
           machineId: auditFilterMachineId,
         );
+        logRetentionSettings = await api.getLogRetentionSettings();
       } else {
         _clearOtpVerification(notify: false);
         otpRotationPreparation = null;
         machines = <MachineRecord>[];
         certificates = <TrustedCertificateRecord>[];
         auditEntries = <AuditEntry>[];
+        logRetentionSettings = null;
+        _clearMachineLogState(notify: false);
       }
     } catch (error) {
       serverStatus = null;
@@ -181,6 +215,8 @@ class AppController extends ChangeNotifier {
       machines = <MachineRecord>[];
       certificates = <TrustedCertificateRecord>[];
       auditEntries = <AuditEntry>[];
+      logRetentionSettings = null;
+      _clearMachineLogState(notify: false);
       _clearOtpVerification(notify: false);
       errorMessage = describeError(error);
     } finally {
@@ -240,6 +276,8 @@ class AppController extends ChangeNotifier {
     await _runAction(api.logout);
     _clearOtpVerification(notify: false);
     otpRotationPreparation = null;
+    logRetentionSettings = null;
+    _clearMachineLogState(notify: false);
     await bootstrap();
   }
 
@@ -308,6 +346,199 @@ class AppController extends ChangeNotifier {
       () => api.getAuditEntries(machineId: auditFilterMachineId),
     );
     notifyListeners();
+  }
+
+  Future<void> loadLogRetentionSettings() async {
+    logRetentionSettings = await _runAction(api.getLogRetentionSettings);
+    notifyListeners();
+  }
+
+  Future<void> updateLogRetentionSettings({
+    required int defaultRetentionActiveDays,
+    required int dailyInspectionHour,
+    required int dailyInspectionMinute,
+    required String timezone,
+  }) async {
+    logRetentionSettings = await _runAction(
+      () => api.updateLogRetentionSettings(
+        defaultRetentionActiveDays: defaultRetentionActiveDays,
+        dailyInspectionHour: dailyInspectionHour,
+        dailyInspectionMinute: dailyInspectionMinute,
+        timezone: timezone,
+      ),
+    );
+    notifyListeners();
+  }
+
+  Future<void> setMachineLogRetentionOverride(
+    String machineId,
+    int? retentionActiveDaysOverride,
+  ) async {
+    await _runAction(
+      () => api.setMachineLogRetentionOverride(
+        machineId,
+        retentionActiveDaysOverride,
+      ),
+    );
+    await loadMachines();
+  }
+
+  Future<void> loadMachineLogSessions({
+    String? machineId,
+    String? from,
+    String? to,
+    bool loadEntries = true,
+  }) async {
+    machineLogSelectedMachineId = machineId?.trim().isEmpty == true
+        ? null
+        : machineId?.trim();
+    machineLogFrom = from?.trim().isEmpty == true ? null : from?.trim();
+    machineLogTo = to?.trim().isEmpty == true ? null : to?.trim();
+    machineLogSessions = await _runAction(
+      () => api.getMachineLogSessions(
+        machineId: machineLogSelectedMachineId,
+        from: machineLogFrom,
+        to: machineLogTo,
+      ),
+    );
+
+    final hasSelectedSession = machineLogSessions.any(
+      (session) => session.sessionId == machineLogSelectedSessionId,
+    );
+    if (!hasSelectedSession) {
+      machineLogSelectedSessionId = machineLogSessions.isNotEmpty
+          ? machineLogSessions.first.sessionId
+          : null;
+    }
+
+    notifyListeners();
+
+    if (loadEntries) {
+      await loadMachineLogs(
+        machineId: machineLogSelectedMachineId,
+        sessionId: machineLogSelectedSessionId,
+        level: machineLogLevel,
+        component: machineLogComponent,
+        eventKey: machineLogEventKey,
+        query: machineLogQuery,
+        from: machineLogFrom,
+        to: machineLogTo,
+      );
+    }
+  }
+
+  Future<void> loadMachineLogs({
+    String? machineId,
+    String? sessionId,
+    String? level,
+    String? component,
+    String? eventKey,
+    String? query,
+    String? from,
+    String? to,
+    bool append = false,
+  }) async {
+    machineLogSelectedMachineId = machineId?.trim().isEmpty == true
+        ? null
+        : machineId?.trim();
+    machineLogSelectedSessionId = sessionId?.trim().isEmpty == true
+        ? null
+        : sessionId?.trim();
+    machineLogLevel = level?.trim().isEmpty == true ? null : level?.trim();
+    machineLogComponent = component?.trim().isEmpty == true
+        ? null
+        : component?.trim();
+    machineLogEventKey = eventKey?.trim().isEmpty == true
+        ? null
+        : eventKey?.trim().toUpperCase();
+    machineLogQuery = query?.trim().isEmpty == true ? null : query?.trim();
+    machineLogFrom = from?.trim().isEmpty == true ? null : from?.trim();
+    machineLogTo = to?.trim().isEmpty == true ? null : to?.trim();
+
+    final page = await _runAction(
+      () => api.getMachineLogs(
+        MachineLogFilter(
+          machineId: machineLogSelectedMachineId,
+          sessionId: machineLogSelectedSessionId,
+          level: machineLogLevel,
+          component: machineLogComponent,
+          eventKey: machineLogEventKey,
+          query: machineLogQuery,
+          from: machineLogFrom,
+          to: machineLogTo,
+          cursor: append ? machineLogCursor : null,
+        ),
+      ),
+    );
+
+    machineLogEntries = append
+        ? <MachineLogEntry>[...machineLogEntries, ...page.entries]
+        : page.entries;
+    machineLogCursor = page.nextCursor;
+    machineLogHasMore = page.hasMore;
+    notifyListeners();
+  }
+
+  Future<void> loadMoreMachineLogs() async {
+    if (!machineLogHasMore || machineLogCursor == null) {
+      return;
+    }
+
+    await loadMachineLogs(
+      machineId: machineLogSelectedMachineId,
+      sessionId: machineLogSelectedSessionId,
+      level: machineLogLevel,
+      component: machineLogComponent,
+      eventKey: machineLogEventKey,
+      query: machineLogQuery,
+      from: machineLogFrom,
+      to: machineLogTo,
+      append: true,
+    );
+  }
+
+  void clearMachineLogFilters({bool notify = true}) {
+    _clearMachineLogState(notify: false);
+    if (notify) {
+      notifyListeners();
+    }
+  }
+
+  Future<String> exportMachineLogs({String format = 'text'}) {
+    return _runAction(
+      () => api.exportMachineLogs(
+        MachineLogFilter(
+          machineId: machineLogSelectedMachineId,
+          sessionId: machineLogSelectedSessionId,
+          level: machineLogLevel,
+          component: machineLogComponent,
+          eventKey: machineLogEventKey,
+          query: machineLogQuery,
+          from: machineLogFrom,
+          to: machineLogTo,
+          limit: 5000,
+        ),
+        format: format,
+      ),
+    );
+  }
+
+  int? effectiveMachineLogRetentionDays(MachineRecord machine) {
+    return machine.logRetentionActiveDaysOverride ??
+        logRetentionSettings?.defaultRetentionActiveDays;
+  }
+
+  String describeMachineLogRetention(MachineRecord machine) {
+    final override = machine.logRetentionActiveDaysOverride;
+    if (override != null) {
+      return '日志保留：$override 个活动日覆盖';
+    }
+
+    final inherited = logRetentionSettings?.defaultRetentionActiveDays;
+    if (inherited == null) {
+      return '日志保留：继承默认值';
+    }
+    return '日志保留：继承 $inherited 个活动日';
   }
 
   Future<void> addMachine(MachineDraft draft) async {

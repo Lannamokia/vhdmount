@@ -4,7 +4,8 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
-    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationManifest>src\VHDMounter\app.manifest</ApplicationManifest>
+    <AssemblyName>VHDMounter</AssemblyName>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
@@ -12,23 +13,34 @@
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <PublishTrimmed>false</PublishTrimmed>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <EnableHidMenuFeatures Condition="'$(EnableHidMenuFeatures)' == ''">false</EnableHidMenuFeatures>
     <Version>1.5.0</Version>
     <AssemblyVersion>1.5.0.0</AssemblyVersion>
     <FileVersion>1.5.0.0</FileVersion>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(EnableHidMenuFeatures)' == 'true'">
+    <DefineConstants>$(DefineConstants);FEATURE_HID_MENU</DefineConstants>
+    <AssemblyName>VHDMounter_Maimoller</AssemblyName>
+  </PropertyGroup>
+
   <ItemGroup>
-    <PackageReference Include="System.Management" Version="7.0.2" />
-    <PackageReference Include="Microsoft.Management.Infrastructure" Version="2.0.0" />
+    <PackageReference Include="System.Management" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(EnableHidMenuFeatures)' == 'true'">
+    <PackageReference Include="HidSharp" Version="2.1.0" />
+    <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.3" />
+    <PackageReference Include="Vortice.DXGI" Version="3.6.2" />
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Remove="DebugProgram.cs" />
-    <None Include="DebugProgram.cs" />
-  </ItemGroup>
-
-  <ItemGroup>
+    <Compile Remove="Program.cs" />
+    <Compile Remove="VHDManager.cs" />
+    <Compile Remove="VHDMounter.Tests\**\*.cs" />
     <Compile Remove="Updater\**\*.cs" />
+    <None Include="VHDMounter.Tests\**\*.cs" />
     <None Include="Updater\**\*.cs" />
   </ItemGroup>
 
@@ -44,7 +56,27 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="vhdmonter_config.ini">
+    <Compile Remove="EVHDMountTester\**\*.cs" />
+    <None Include="EVHDMountTester\**\*.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(EnableHidMenuFeatures)' != 'true'">
+    <Compile Remove="src\VHDMounter\AudioEndpointService.cs" />
+    <Compile Remove="src\VHDMounter\MainWindow.HidMenuFeatures.cs" />
+    <Compile Remove="src\VHDMounter\MainWindow.SystemSettingsFeatures.cs" />
+    <Compile Remove="src\VHDMounter\MaimollerInputModels.cs" />
+    <Compile Remove="src\VHDMounter\MaimollerInputService.cs" />
+    <Compile Remove="src\VHDMounter\NativeMethods.cs" />
+    <Compile Remove="src\VHDMounter\NetworkConfigurationModels.cs" />
+    <Compile Remove="src\VHDMounter\NetworkConfigurationService.cs" />
+    <Compile Remove="src\VHDMounter\SystemInfoModels.cs" />
+    <Compile Remove="src\VHDMounter\SystemInfoService.cs" />
+    <Compile Remove="src\VHDMounter\SystemMenuModels.cs" />
+    <Compile Remove="src\VHDMounter\WindowActivationService.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="src\VHDMounter\vhdmonter_config.ini" Link="vhdmonter_config.ini">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>Always</CopyToPublishDirectory>
     </Content>

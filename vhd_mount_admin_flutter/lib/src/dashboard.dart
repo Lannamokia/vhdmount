@@ -14,9 +14,14 @@ class DashboardScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    Future<void> openLogsForMachine(String machineId) async {
+      await controller.loadMachineLogSessions(machineId: machineId);
+      onDestinationSelected(1);
+    }
+
     Future<void> openAuditForMachine(String machineId) async {
       await controller.loadAudit(machineId: machineId);
-      onDestinationSelected(2);
+      onDestinationSelected(3);
     }
 
     final destinations = <DashboardDestinationSpec>[
@@ -25,6 +30,12 @@ class DashboardScreen extends StatelessWidget {
         subtitle: '审批、保护、EVHD',
         icon: Icons.dns_rounded,
         color: AppPalette.coral,
+      ),
+      const DashboardDestinationSpec(
+        label: '机台日志',
+        subtitle: '会话、分页、详情',
+        icon: Icons.receipt_long_rounded,
+        color: AppPalette.sun,
       ),
       const DashboardDestinationSpec(
         label: '证书',
@@ -44,16 +55,6 @@ class DashboardScreen extends StatelessWidget {
         icon: Icons.tune_rounded,
         color: AppPalette.sun,
       ),
-    ];
-
-    final pages = <Widget>[
-      MachinesView(
-        controller: controller,
-        onOpenAuditForMachine: openAuditForMachine,
-      ),
-      CertificatesView(controller: controller),
-      AuditView(controller: controller),
-      SettingsView(controller: controller),
     ];
 
     Future<void> openOtpDialog() async {
@@ -84,46 +85,75 @@ class DashboardScreen extends StatelessWidget {
       }
     }
 
-    final overviewCards = <Widget>[
-      OverviewStatCard(
-        label: '数据库',
-        value: controller.serverStatus?.databaseReady == true ? '已连接' : '异常',
-        icon: Icons.storage_rounded,
-        color: controller.serverStatus?.databaseReady == true
-            ? AppPalette.mint
-            : AppPalette.coral,
-        caption: '服务端数据库链路健康状态。',
-      ),
-      OverviewStatCard(
-        label: '默认关键词',
-        value: controller.serverStatus?.defaultVhdKeyword ?? 'SDEZ',
-        icon: Icons.bolt_rounded,
-        color: AppPalette.coral,
-        caption: '所有机台的默认启动关键字。',
-      ),
-      OverviewStatCard(
-        label: 'OTP',
-        value: controller.otpVerified ? '已验证' : '待验证',
-        icon: Icons.verified_user_rounded,
-        color: controller.otpVerified ? AppPalette.mint : AppPalette.sun,
-        caption: controller.otpVerified ? '高敏操作已解锁。' : '证书与敏感操作仍受保护。',
-      ),
-      OverviewStatCard(
-        label: '当前入口',
-        value: controller.baseUrl.replaceFirst(RegExp(r'^https?://'), ''),
-        icon: Icons.link_rounded,
-        color: AppPalette.sky,
-        caption: '当前连接的管理服务地址。',
-      ),
-    ];
-
     return LayoutBuilder(
       builder: (context, constraints) {
+        final mobile = constraints.maxWidth < 720;
         final compact =
-            constraints.maxWidth < 1100 || constraints.maxHeight < 720;
+            mobile || constraints.maxWidth < 1100 || constraints.maxHeight < 720;
+        final extendBodyForBottomNav = mobile && compact;
+        final showOverviewCaptions = !mobile;
+        final overviewCards = <Widget>[
+          OverviewStatCard(
+            label: '数据库',
+            value: controller.serverStatus?.databaseReady == true ? '已连接' : '异常',
+            icon: Icons.storage_rounded,
+            color: controller.serverStatus?.databaseReady == true
+                ? AppPalette.mint
+                : AppPalette.coral,
+            caption: showOverviewCaptions ? '服务端数据库链路健康状态。' : null,
+          ),
+          OverviewStatCard(
+            label: '默认关键词',
+            value: controller.serverStatus?.defaultVhdKeyword ?? 'SDEZ',
+            icon: Icons.bolt_rounded,
+            color: AppPalette.coral,
+            caption: showOverviewCaptions ? '所有机台的默认启动关键字。' : null,
+          ),
+          OverviewStatCard(
+            label: 'OTP',
+            value: controller.otpVerified ? '已验证' : '待验证',
+            icon: Icons.verified_user_rounded,
+            color: controller.otpVerified ? AppPalette.mint : AppPalette.sun,
+            caption: showOverviewCaptions
+                ? (controller.otpVerified ? '高敏操作已解锁。' : '证书与敏感操作仍受保护。')
+                : null,
+          ),
+          OverviewStatCard(
+            label: '当前入口',
+            value: controller.baseUrl.replaceFirst(RegExp(r'^https?://'), ''),
+            icon: Icons.link_rounded,
+            color: AppPalette.sky,
+            caption: showOverviewCaptions ? '当前连接的管理服务地址。' : null,
+          ),
+        ];
+        final pages = <Widget>[
+          MachinesView(
+            controller: controller,
+            onOpenLogsForMachine: openLogsForMachine,
+            onOpenAuditForMachine: openAuditForMachine,
+            embedInParentScroll: mobile,
+          ),
+          MachineLogsView(
+            controller: controller,
+            embedInParentScroll: mobile,
+          ),
+          CertificatesView(
+            controller: controller,
+            embedInParentScroll: mobile,
+          ),
+          AuditView(
+            controller: controller,
+            embedInParentScroll: mobile,
+          ),
+          SettingsView(
+            controller: controller,
+            embedInParentScroll: mobile,
+          ),
+        ];
         final overviewSection = OverviewStatsGrid(
           cards: overviewCards,
-          singleRow: compact,
+          singleRow: compact && !mobile,
+          forceTwoColumnGrid: mobile,
         );
 
         final pageBody = AnimatedSwitcher(
@@ -146,48 +176,51 @@ class DashboardScreen extends StatelessWidget {
           ),
         );
 
+        final contentChildren = <Widget>[
+          PageHeader(
+            eyebrow: 'Control Room',
+            title: 'VHD Mount Admin',
+            subtitle: '',
+            actions: <Widget>[
+              FilledButton.tonalIcon(
+                onPressed: openOtpDialog,
+                icon: const Icon(Icons.key_rounded),
+                label: Text(controller.otpVerified ? '重新验证 OTP' : '验证 OTP'),
+              ),
+              OutlinedButton.icon(
+                onPressed: () async {
+                  await controller.bootstrap();
+                },
+                icon: const Icon(Icons.sync_rounded),
+                label: const Text('刷新'),
+              ),
+              TextButton.icon(
+                onPressed: () async {
+                  await controller.logout();
+                },
+                icon: const Icon(Icons.logout_rounded),
+                label: const Text('登出'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          overviewSection,
+          if (controller.errorMessage != null) ...<Widget>[
+            const SizedBox(height: 16),
+            ErrorBanner(message: controller.errorMessage!),
+          ],
+          const SizedBox(height: 20),
+          if (mobile) pageBody else Expanded(child: pageBody),
+        ];
+
         final contentColumn = Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            PageHeader(
-              eyebrow: 'Control Room',
-              title: 'VHD Mount Admin',
-              subtitle: '',
-              actions: <Widget>[
-                FilledButton.tonalIcon(
-                  onPressed: openOtpDialog,
-                  icon: const Icon(Icons.key_rounded),
-                  label: Text(controller.otpVerified ? '重新验证 OTP' : '验证 OTP'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: () async {
-                    await controller.bootstrap();
-                  },
-                  icon: const Icon(Icons.sync_rounded),
-                  label: const Text('刷新'),
-                ),
-                TextButton.icon(
-                  onPressed: () async {
-                    await controller.logout();
-                  },
-                  icon: const Icon(Icons.logout_rounded),
-                  label: const Text('登出'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 18),
-            overviewSection,
-            if (controller.errorMessage != null) ...<Widget>[
-              const SizedBox(height: 16),
-              ErrorBanner(message: controller.errorMessage!),
-            ],
-            const SizedBox(height: 20),
-            Expanded(child: pageBody),
-          ],
+          children: contentChildren,
         );
 
         return Scaffold(
-          backgroundColor: Colors.transparent,
+          backgroundColor: AppPalette.canvasWarm,
+          extendBody: extendBodyForBottomNav,
           bottomNavigationBar: compact
               ? NavigationBar(
                   selectedIndex: selectedIndex,
@@ -205,8 +238,18 @@ class DashboardScreen extends StatelessWidget {
           body: AdminBackdrop(
             child: SafeArea(
               child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: compact
+                padding: EdgeInsets.all(mobile ? 16 : 20),
+                child: mobile
+                    ? SingleChildScrollView(
+                        padding: EdgeInsets.only(
+                          bottom: extendBodyForBottomNav ? 112 : 20,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: contentChildren,
+                        ),
+                      )
+                    : compact
                     ? contentColumn
                     : Row(
                         children: <Widget>[
@@ -318,14 +361,407 @@ class MachinesView extends StatelessWidget {
   const MachinesView({
     super.key,
     required this.controller,
+    required this.onOpenLogsForMachine,
     required this.onOpenAuditForMachine,
+    this.embedInParentScroll = false,
   });
 
   final AppController controller;
+  final Future<void> Function(String machineId) onOpenLogsForMachine;
   final Future<void> Function(String machineId) onOpenAuditForMachine;
+  final bool embedInParentScroll;
 
   @override
   Widget build(BuildContext context) {
+    final emptyState = Center(
+      child: SizedBox(
+        width: 420,
+        child: const InfoPanel(
+          title: '当前还没有机器记录',
+          body: Text('可以先创建机台，再继续做审批、保护和 EVHD 配置。'),
+          icon: Icons.add_business_rounded,
+          color: AppPalette.sky,
+        ),
+      ),
+    );
+    final machinesList = ListView.separated(
+      itemCount: controller.machines.length,
+      shrinkWrap: embedInParentScroll,
+      physics: embedInParentScroll
+          ? const NeverScrollableScrollPhysics()
+          : null,
+      padding: EdgeInsets.zero,
+      separatorBuilder: (_, _) => const SizedBox(height: 12),
+      itemBuilder: (context, index) {
+        final machine = controller.machines[index];
+        return Card(
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    AccentIconBadge(
+                      icon: machine.approved
+                          ? Icons.memory_rounded
+                          : Icons.pending_actions_rounded,
+                      color: machine.approved
+                          ? AppPalette.mint
+                          : AppPalette.sun,
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(
+                            machine.machineId,
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            machine.keyType == null
+                                ? '尚未提交注册密钥'
+                                : '密钥类型：${machine.keyType}',
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodyMedium
+                                ?.copyWith(color: AppPalette.muted),
+                          ),
+                        ],
+                      ),
+                    ),
+                    StatusChip(
+                      label: machine.approved ? '已审批' : '待审批',
+                      color: machine.approved ? AppPalette.mint : AppPalette.sun,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: <Widget>[
+                    StatusChip(
+                      label: '当前启动关键词 ${machine.vhdKeyword}',
+                      color: AppPalette.sky,
+                    ),
+                    StatusChip(
+                      label: machine.protectedState ? '保护开启' : '保护关闭',
+                      color: machine.protectedState
+                          ? AppPalette.coral
+                          : AppPalette.mint,
+                    ),
+                    StatusChip(
+                      label: machine.evhdPasswordConfigured
+                          ? 'EVHD 已配置'
+                          : 'EVHD 未配置',
+                      color: machine.evhdPasswordConfigured
+                          ? AppPalette.mint
+                          : AppPalette.sun,
+                    ),
+                    StatusChip(
+                      label: controller.describeMachineLogRetention(machine),
+                      color: machine.logRetentionActiveDaysOverride != null
+                          ? AppPalette.coral
+                          : AppPalette.sky,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Text('Key ID: ${machine.keyId ?? '未注册'}'),
+                Text('最后在线: ${machine.lastSeen ?? '未知'}'),
+                if (machine.registrationCertFingerprint != null)
+                  Text('注册证书: ${machine.registrationCertFingerprint}'),
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: <Widget>[
+                    FilledButton.tonal(
+                      onPressed: () async {
+                        try {
+                          await controller.setMachineApproval(
+                            machine.machineId,
+                            !machine.approved,
+                          );
+                          if (!context.mounted) {
+                            return;
+                          }
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(machine.approved ? '已取消审批。' : '已审批通过。'),
+                            ),
+                          );
+                        } catch (error) {
+                          if (!context.mounted) {
+                            return;
+                          }
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(describeError(error))),
+                          );
+                        }
+                      },
+                      child: Text(machine.approved ? '取消审批' : '审批通过'),
+                    ),
+                    OutlinedButton(
+                      onPressed: () async {
+                        try {
+                          await controller.setMachineProtection(
+                            machine.machineId,
+                            !machine.protectedState,
+                          );
+                          if (!context.mounted) {
+                            return;
+                          }
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(machine.protectedState ? '已关闭保护。' : '已开启保护。'),
+                            ),
+                          );
+                        } catch (error) {
+                          if (!context.mounted) {
+                            return;
+                          }
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(describeError(error))),
+                          );
+                        }
+                      },
+                      child: Text(machine.protectedState ? '关闭保护' : '开启保护'),
+                    ),
+                    OutlinedButton(
+                      onPressed: () async {
+                        try {
+                          await controller.resetMachineRegistration(machine.machineId);
+                        } catch (error) {
+                          if (!context.mounted) {
+                            return;
+                          }
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(describeError(error))),
+                          );
+                        }
+                      },
+                      child: const Text('重置注册'),
+                    ),
+                    OutlinedButton(
+                      onPressed: () async {
+                        final value = await showSingleInputDialog(
+                          context,
+                          title: '设置启动关键词',
+                          label: '启动关键词',
+                          initialValue: machine.vhdKeyword,
+                        );
+                        if (value == null || value.trim().isEmpty) {
+                          return;
+                        }
+                        try {
+                          await controller.setMachineVhd(
+                            machine.machineId,
+                            value.trim().toUpperCase(),
+                          );
+                        } catch (error) {
+                          if (!context.mounted) {
+                            return;
+                          }
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(describeError(error))),
+                          );
+                        }
+                      },
+                      child: const Text('设置启动关键词'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        try {
+                          await onOpenLogsForMachine(machine.machineId);
+                        } catch (error) {
+                          if (!context.mounted) {
+                            return;
+                          }
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(describeError(error))),
+                          );
+                        }
+                      },
+                      icon: const Icon(Icons.receipt_long_rounded),
+                      label: const Text('查看机台日志'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        try {
+                          await onOpenAuditForMachine(machine.machineId);
+                        } catch (error) {
+                          if (!context.mounted) {
+                            return;
+                          }
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(describeError(error))),
+                          );
+                        }
+                      },
+                      icon: const Icon(Icons.history_rounded),
+                      label: const Text('查阅审计日志'),
+                    ),
+                    OutlinedButton(
+                      onPressed: () async {
+                        final initialValue = machine.logRetentionActiveDaysOverride
+                            ?.toString() ??
+                            '';
+                        final value = await showSingleInputDialog(
+                          context,
+                          title: '设置日志保留活动日覆盖值',
+                          label: '留空表示继承全局默认值',
+                          initialValue: initialValue,
+                        );
+                        if (value == null) {
+                          return;
+                        }
+
+                        final trimmed = value.trim();
+                        final overrideValue = trimmed.isEmpty
+                            ? null
+                            : int.tryParse(trimmed);
+                        if (trimmed.isNotEmpty && overrideValue == null) {
+                          if (!context.mounted) {
+                            return;
+                          }
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('请输入有效的正整数，或留空恢复继承。')),
+                          );
+                          return;
+                        }
+
+                        try {
+                          await controller.setMachineLogRetentionOverride(
+                            machine.machineId,
+                            overrideValue,
+                          );
+                        } catch (error) {
+                          if (!context.mounted) {
+                            return;
+                          }
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(describeError(error))),
+                          );
+                        }
+                      },
+                      child: const Text('日志保留'),
+                    ),
+                    OutlinedButton(
+                      onPressed: () async {
+                        final value = await showSingleInputDialog(
+                          context,
+                          title: '设置 EVHD 密码',
+                          label: 'EVHD 密码',
+                          obscureText: true,
+                        );
+                        if (value == null || value.isEmpty) {
+                          return;
+                        }
+                        try {
+                          await controller.setMachineEvhdPassword(
+                            machine.machineId,
+                            value,
+                          );
+                        } catch (error) {
+                          if (!context.mounted) {
+                            return;
+                          }
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(describeError(error))),
+                          );
+                        }
+                      },
+                      child: const Text('设置 EVHD'),
+                    ),
+                    FilledButton(
+                      onPressed: () async {
+                        final reason = await showSingleInputDialog(
+                          context,
+                          title: '读取 EVHD 明文',
+                          label: '查询原因',
+                          initialValue: 'support investigation',
+                        );
+                        if (reason == null || reason.trim().isEmpty) {
+                          return;
+                        }
+                        try {
+                          final password = await controller.readPlainEvhdPassword(
+                            machine.machineId,
+                            reason.trim(),
+                          );
+                          if (!context.mounted) {
+                            return;
+                          }
+                          await showDialog<void>(
+                            context: context,
+                            builder: (context) => AlertDialog(
+                              title: const Text('EVHD 明文'),
+                              content: SelectableText(password),
+                              actions: <Widget>[
+                                TextButton(
+                                  onPressed: () => Navigator.of(context).pop(),
+                                  child: const Text('关闭'),
+                                ),
+                              ],
+                            ),
+                          );
+                        } catch (error) {
+                          if (!context.mounted) {
+                            return;
+                          }
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(describeError(error))),
+                          );
+                        }
+                      },
+                      child: const Text('读取明文'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        final confirmed = await showConfirmDialog(
+                          context,
+                          title: '删除机台',
+                          message:
+                              '确认删除 ${machine.machineId} 吗？这会移除该机台的管理记录与已保存的 EVHD 密码。',
+                          confirmLabel: '删除',
+                        );
+                        if (confirmed != true) {
+                          return;
+                        }
+                        try {
+                          await controller.deleteMachine(machine.machineId);
+                          if (!context.mounted) {
+                            return;
+                          }
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('机台 ${machine.machineId} 已删除。')),
+                          );
+                        } catch (error) {
+                          if (!context.mounted) {
+                            return;
+                          }
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(describeError(error))),
+                          );
+                        }
+                      },
+                      icon: const Icon(Icons.delete_outline_rounded),
+                      label: const Text('删除机台'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
@@ -373,379 +809,112 @@ class MachinesView extends StatelessWidget {
         ),
         const SizedBox(height: 16),
         if (controller.machines.isEmpty)
-          Expanded(
-            child: Center(
-              child: SizedBox(
-                width: 420,
-                child: const InfoPanel(
-                  title: '当前还没有机器记录',
-                  body: Text('可以先创建机台，再继续做审批、保护和 EVHD 配置。'),
-                  icon: Icons.add_business_rounded,
-                  color: AppPalette.sky,
-                ),
-              ),
-            ),
-          )
+          if (embedInParentScroll) emptyState else Expanded(child: emptyState)
         else
-          Expanded(
-            child: ListView.separated(
-              itemCount: controller.machines.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 12),
-              itemBuilder: (context, index) {
-                final machine = controller.machines[index];
-                return Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(18),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: <Widget>[
-                            AccentIconBadge(
-                              icon: machine.approved
-                                  ? Icons.memory_rounded
-                                  : Icons.pending_actions_rounded,
-                              color: machine.approved
-                                  ? AppPalette.mint
-                                  : AppPalette.sun,
-                            ),
-                            const SizedBox(width: 14),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: <Widget>[
-                                  Text(
-                                    machine.machineId,
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.titleLarge,
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    machine.keyType == null
-                                        ? '尚未提交注册密钥'
-                                        : '密钥类型：${machine.keyType}',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .bodyMedium
-                                        ?.copyWith(color: AppPalette.muted),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            StatusChip(
-                              label: machine.approved ? '已审批' : '待审批',
-                              color: machine.approved
-                                  ? AppPalette.mint
-                                  : AppPalette.sun,
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: <Widget>[
-                            StatusChip(
-                              label: '当前启动关键词 ${machine.vhdKeyword}',
-                              color: AppPalette.sky,
-                            ),
-                            StatusChip(
-                              label: machine.protectedState ? '保护开启' : '保护关闭',
-                              color: machine.protectedState
-                                  ? AppPalette.coral
-                                  : AppPalette.mint,
-                            ),
-                            StatusChip(
-                              label: machine.evhdPasswordConfigured
-                                  ? 'EVHD 已配置'
-                                  : 'EVHD 未配置',
-                              color: machine.evhdPasswordConfigured
-                                  ? AppPalette.mint
-                                  : AppPalette.sun,
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        Text('Key ID: ${machine.keyId ?? '未注册'}'),
-                        Text('最后在线: ${machine.lastSeen ?? '未知'}'),
-                        if (machine.registrationCertFingerprint != null)
-                          Text('注册证书: ${machine.registrationCertFingerprint}'),
-                        const SizedBox(height: 16),
-                        Wrap(
-                          spacing: 10,
-                          runSpacing: 10,
-                          children: <Widget>[
-                            FilledButton.tonal(
-                              onPressed: () async {
-                                try {
-                                  await controller.setMachineApproval(
-                                    machine.machineId,
-                                    !machine.approved,
-                                  );
-                                  if (!context.mounted) {
-                                    return;
-                                  }
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        machine.approved ? '已取消审批。' : '已审批通过。',
-                                      ),
-                                    ),
-                                  );
-                                } catch (error) {
-                                  if (!context.mounted) {
-                                    return;
-                                  }
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(describeError(error)),
-                                    ),
-                                  );
-                                }
-                              },
-                              child: Text(machine.approved ? '取消审批' : '审批通过'),
-                            ),
-                            OutlinedButton(
-                              onPressed: () async {
-                                try {
-                                  await controller.setMachineProtection(
-                                    machine.machineId,
-                                    !machine.protectedState,
-                                  );
-                                  if (!context.mounted) {
-                                    return;
-                                  }
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        machine.protectedState
-                                            ? '已关闭保护。'
-                                            : '已开启保护。',
-                                      ),
-                                    ),
-                                  );
-                                } catch (error) {
-                                  if (!context.mounted) {
-                                    return;
-                                  }
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(describeError(error)),
-                                    ),
-                                  );
-                                }
-                              },
-                              child: Text(
-                                machine.protectedState ? '关闭保护' : '开启保护',
-                              ),
-                            ),
-                            OutlinedButton(
-                              onPressed: () async {
-                                try {
-                                  await controller.resetMachineRegistration(
-                                    machine.machineId,
-                                  );
-                                } catch (error) {
-                                  if (!context.mounted) {
-                                    return;
-                                  }
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(describeError(error)),
-                                    ),
-                                  );
-                                }
-                              },
-                              child: const Text('重置注册'),
-                            ),
-                            OutlinedButton(
-                              onPressed: () async {
-                                final value = await showSingleInputDialog(
-                                  context,
-                                  title: '设置启动关键词',
-                                  label: '启动关键词',
-                                  initialValue: machine.vhdKeyword,
-                                );
-                                if (value == null || value.trim().isEmpty) {
-                                  return;
-                                }
-                                try {
-                                  await controller.setMachineVhd(
-                                    machine.machineId,
-                                    value.trim().toUpperCase(),
-                                  );
-                                } catch (error) {
-                                  if (!context.mounted) {
-                                    return;
-                                  }
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(describeError(error)),
-                                    ),
-                                  );
-                                }
-                              },
-                              child: const Text('设置启动关键词'),
-                            ),
-                            OutlinedButton.icon(
-                              onPressed: () async {
-                                try {
-                                  await onOpenAuditForMachine(
-                                    machine.machineId,
-                                  );
-                                } catch (error) {
-                                  if (!context.mounted) {
-                                    return;
-                                  }
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(describeError(error)),
-                                    ),
-                                  );
-                                }
-                              },
-                              icon: const Icon(Icons.history_rounded),
-                              label: const Text('查阅审计日志'),
-                            ),
-                            OutlinedButton(
-                              onPressed: () async {
-                                final value = await showSingleInputDialog(
-                                  context,
-                                  title: '设置 EVHD 密码',
-                                  label: 'EVHD 密码',
-                                  obscureText: true,
-                                );
-                                if (value == null || value.isEmpty) {
-                                  return;
-                                }
-                                try {
-                                  await controller.setMachineEvhdPassword(
-                                    machine.machineId,
-                                    value,
-                                  );
-                                } catch (error) {
-                                  if (!context.mounted) {
-                                    return;
-                                  }
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(describeError(error)),
-                                    ),
-                                  );
-                                }
-                              },
-                              child: const Text('设置 EVHD'),
-                            ),
-                            FilledButton(
-                              onPressed: () async {
-                                final reason = await showSingleInputDialog(
-                                  context,
-                                  title: '读取 EVHD 明文',
-                                  label: '查询原因',
-                                  initialValue: 'support investigation',
-                                );
-                                if (reason == null || reason.trim().isEmpty) {
-                                  return;
-                                }
-                                try {
-                                  final password = await controller
-                                      .readPlainEvhdPassword(
-                                        machine.machineId,
-                                        reason.trim(),
-                                      );
-                                  if (!context.mounted) {
-                                    return;
-                                  }
-                                  await showDialog<void>(
-                                    context: context,
-                                    builder: (context) => AlertDialog(
-                                      title: const Text('EVHD 明文'),
-                                      content: SelectableText(password),
-                                      actions: <Widget>[
-                                        TextButton(
-                                          onPressed: () =>
-                                              Navigator.of(context).pop(),
-                                          child: const Text('关闭'),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                } catch (error) {
-                                  if (!context.mounted) {
-                                    return;
-                                  }
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(describeError(error)),
-                                    ),
-                                  );
-                                }
-                              },
-                              child: const Text('读取明文'),
-                            ),
-                            OutlinedButton.icon(
-                              onPressed: () async {
-                                final confirmed = await showConfirmDialog(
-                                  context,
-                                  title: '删除机台',
-                                  message:
-                                      '确认删除 ${machine.machineId} 吗？这会移除该机台的管理记录与已保存的 EVHD 密码。',
-                                  confirmLabel: '删除',
-                                );
-                                if (confirmed != true) {
-                                  return;
-                                }
-                                try {
-                                  await controller.deleteMachine(
-                                    machine.machineId,
-                                  );
-                                  if (!context.mounted) {
-                                    return;
-                                  }
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        '机台 ${machine.machineId} 已删除。',
-                                      ),
-                                    ),
-                                  );
-                                } catch (error) {
-                                  if (!context.mounted) {
-                                    return;
-                                  }
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(describeError(error)),
-                                    ),
-                                  );
-                                }
-                              },
-                              icon: const Icon(Icons.delete_outline_rounded),
-                              label: const Text('删除机台'),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
+          if (embedInParentScroll)
+            machinesList
+          else
+            Expanded(child: machinesList),
       ],
     );
   }
 }
 
 class CertificatesView extends StatelessWidget {
-  const CertificatesView({super.key, required this.controller});
+  const CertificatesView({
+    super.key,
+    required this.controller,
+    this.embedInParentScroll = false,
+  });
 
   final AppController controller;
+  final bool embedInParentScroll;
 
   @override
   Widget build(BuildContext context) {
+    final emptyState = Center(
+      child: SizedBox(
+        width: 420,
+        child: const InfoPanel(
+          title: '当前没有可信注册证书',
+          body: Text('可以在完成 OTP 验证后导入第一张机台注册证书。'),
+          icon: Icons.verified_user_rounded,
+          color: AppPalette.sky,
+        ),
+      ),
+    );
+    final certificatesList = ListView.separated(
+      itemCount: controller.certificates.length,
+      shrinkWrap: embedInParentScroll,
+      physics: embedInParentScroll
+          ? const NeverScrollableScrollPhysics()
+          : null,
+      padding: EdgeInsets.zero,
+      separatorBuilder: (_, _) => const SizedBox(height: 12),
+      itemBuilder: (context, index) {
+        final certificate = controller.certificates[index];
+        return Card(
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    const AccentIconBadge(
+                      icon: Icons.verified_user_rounded,
+                      color: AppPalette.sky,
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(
+                            certificate.name,
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            certificate.subject,
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodyMedium
+                                ?.copyWith(color: AppPalette.muted),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () async {
+                        try {
+                          await controller.removeTrustedCertificate(
+                            certificate.fingerprint256,
+                          );
+                        } catch (error) {
+                          if (!context.mounted) {
+                            return;
+                          }
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(describeError(error))),
+                          );
+                        }
+                      },
+                      icon: const Icon(Icons.delete_outline_rounded),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Text('Fingerprint: ${certificate.fingerprint256}'),
+                Text('Valid: ${certificate.validFrom} -> ${certificate.validTo}'),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
@@ -808,103 +977,26 @@ class CertificatesView extends StatelessWidget {
             color: AppPalette.sun,
           )
         else if (controller.certificates.isEmpty)
-          Expanded(
-            child: Center(
-              child: SizedBox(
-                width: 420,
-                child: const InfoPanel(
-                  title: '当前没有可信注册证书',
-                  body: Text('可以在完成 OTP 验证后导入第一张机台注册证书。'),
-                  icon: Icons.verified_user_rounded,
-                  color: AppPalette.sky,
-                ),
-              ),
-            ),
-          )
+          if (embedInParentScroll) emptyState else Expanded(child: emptyState)
         else
-          Expanded(
-            child: ListView.separated(
-              itemCount: controller.certificates.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 12),
-              itemBuilder: (context, index) {
-                final certificate = controller.certificates[index];
-                return Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(18),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: <Widget>[
-                            const AccentIconBadge(
-                              icon: Icons.verified_user_rounded,
-                              color: AppPalette.sky,
-                            ),
-                            const SizedBox(width: 14),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: <Widget>[
-                                  Text(
-                                    certificate.name,
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.titleLarge,
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    certificate.subject,
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .bodyMedium
-                                        ?.copyWith(color: AppPalette.muted),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            IconButton(
-                              onPressed: () async {
-                                try {
-                                  await controller.removeTrustedCertificate(
-                                    certificate.fingerprint256,
-                                  );
-                                } catch (error) {
-                                  if (!context.mounted) {
-                                    return;
-                                  }
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(describeError(error)),
-                                    ),
-                                  );
-                                }
-                              },
-                              icon: const Icon(Icons.delete_outline_rounded),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        Text('Fingerprint: ${certificate.fingerprint256}'),
-                        Text(
-                          'Valid: ${certificate.validFrom} -> ${certificate.validTo}',
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
+          if (embedInParentScroll)
+            certificatesList
+          else
+            Expanded(child: certificatesList),
       ],
     );
   }
 }
 
 class AuditView extends StatefulWidget {
-  const AuditView({super.key, required this.controller});
+  const AuditView({
+    super.key,
+    required this.controller,
+    this.embedInParentScroll = false,
+  });
 
   final AppController controller;
+  final bool embedInParentScroll;
 
   @override
   State<AuditView> createState() => _AuditViewState();
@@ -1042,17 +1134,99 @@ class _AuditViewState extends State<AuditView> {
             ),
           ),
         if (controller.auditEntries.isEmpty)
-          Expanded(
-            child: Center(
+          if (widget.embedInParentScroll)
+            Center(
               child: Text(
                 controller.auditFilterMachineId == null
                     ? '暂时没有审计记录。'
                     : '所选机台暂时没有审计记录。',
               ),
-            ),
-          )
+            )
+          else
+            Expanded(
+              child: Center(
+                child: Text(
+                  controller.auditFilterMachineId == null
+                      ? '暂时没有审计记录。'
+                      : '所选机台暂时没有审计记录。',
+                ),
+              ),
+            )
         else if (visibleEntries.isEmpty)
-          const Expanded(child: Center(child: Text('没有匹配搜索条件的审计记录。')))
+          if (widget.embedInParentScroll)
+            const Center(child: Text('没有匹配搜索条件的审计记录。'))
+          else
+            const Expanded(child: Center(child: Text('没有匹配搜索条件的审计记录。')))
+        else if (widget.embedInParentScroll)
+          ListView.separated(
+            itemCount: visibleEntries.length,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            padding: EdgeInsets.zero,
+            separatorBuilder: (_, _) => const SizedBox(height: 12),
+            itemBuilder: (context, index) {
+              final entry = visibleEntries[index];
+              final presentation = entry.presentation;
+              return Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          AccentIconBadge(
+                            icon: entry.result == 'success'
+                                ? Icons.task_alt_rounded
+                                : Icons.error_outline_rounded,
+                            color: entry.result == 'success'
+                                ? AppPalette.mint
+                                : AppPalette.coral,
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: <Widget>[
+                                Text(
+                                  presentation.title,
+                                  style: Theme.of(context).textTheme.titleMedium,
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  presentation.description,
+                                  style: Theme.of(context).textTheme.bodyMedium,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Text('时间：${entry.localizedTimestamp}', style: Theme.of(context).textTheme.bodyMedium),
+                      const SizedBox(height: 2),
+                      Text(
+                        '操作主体：${entry.localizedActor} · 结果：${entry.localizedResult} · 来源：${entry.normalizedIp}',
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                      if (entry.machineId != null) ...<Widget>[
+                        const SizedBox(height: 2),
+                        Text('机台：${entry.machineId}', style: Theme.of(context).textTheme.bodyMedium),
+                      ],
+                      const SizedBox(height: 2),
+                      Text('接口：${entry.displayPath}', style: Theme.of(context).textTheme.bodyMedium),
+                      const SizedBox(height: 2),
+                      Text(
+                        '事件键：${entry.type.isEmpty ? 'unknown' : entry.type}',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          )
         else
           Expanded(
             child: ListView.separated(
@@ -1141,9 +1315,14 @@ class _AuditViewState extends State<AuditView> {
 }
 
 class SettingsView extends StatefulWidget {
-  const SettingsView({super.key, required this.controller});
+  const SettingsView({
+    super.key,
+    required this.controller,
+    this.embedInParentScroll = false,
+  });
 
   final AppController controller;
+  final bool embedInParentScroll;
 
   @override
   State<SettingsView> createState() => _SettingsViewState();
@@ -1151,6 +1330,10 @@ class SettingsView extends StatefulWidget {
 
 class _SettingsViewState extends State<SettingsView> {
   late final TextEditingController _defaultVhdController;
+  late final TextEditingController _logRetentionDaysController;
+  late final TextEditingController _logInspectionHourController;
+  late final TextEditingController _logInspectionMinuteController;
+  late final TextEditingController _logTimezoneController;
   final TextEditingController _currentPasswordController =
       TextEditingController();
   final TextEditingController _newPasswordController = TextEditingController();
@@ -1165,17 +1348,72 @@ class _SettingsViewState extends State<SettingsView> {
   final TextEditingController _otpRotateNewCodeController =
       TextEditingController();
 
+  bool _isLikelyIanaTimeZone(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) {
+      return false;
+    }
+    if (trimmed == 'UTC' || trimmed == 'GMT') {
+      return true;
+    }
+
+    return RegExp(r'^[A-Za-z_]+(?:/[A-Za-z0-9_.+-]+)+$').hasMatch(trimmed);
+  }
+
   @override
   void initState() {
     super.initState();
     _defaultVhdController = TextEditingController(
       text: widget.controller.serverStatus?.defaultVhdKeyword ?? 'SDEZ',
     );
+    _logRetentionDaysController = TextEditingController(
+      text: (widget.controller.logRetentionSettings?.defaultRetentionActiveDays ??
+              7)
+          .toString(),
+    );
+    _logInspectionHourController = TextEditingController(
+      text: (widget.controller.logRetentionSettings?.dailyInspectionHour ?? 3)
+          .toString(),
+    );
+    _logInspectionMinuteController = TextEditingController(
+      text: (widget.controller.logRetentionSettings?.dailyInspectionMinute ?? 0)
+          .toString(),
+    );
+    _logTimezoneController = TextEditingController(
+      text: widget.controller.logRetentionSettings?.timezone ?? 'UTC',
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant SettingsView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final logRetention = widget.controller.logRetentionSettings;
+    if (logRetention != null) {
+      final nextDays = logRetention.defaultRetentionActiveDays.toString();
+      final nextHour = logRetention.dailyInspectionHour.toString();
+      final nextMinute = logRetention.dailyInspectionMinute.toString();
+      if (_logRetentionDaysController.text != nextDays) {
+        _logRetentionDaysController.text = nextDays;
+      }
+      if (_logInspectionHourController.text != nextHour) {
+        _logInspectionHourController.text = nextHour;
+      }
+      if (_logInspectionMinuteController.text != nextMinute) {
+        _logInspectionMinuteController.text = nextMinute;
+      }
+      if (_logTimezoneController.text != logRetention.timezone) {
+        _logTimezoneController.text = logRetention.timezone;
+      }
+    }
   }
 
   @override
   void dispose() {
     _defaultVhdController.dispose();
+    _logRetentionDaysController.dispose();
+    _logInspectionHourController.dispose();
+    _logInspectionMinuteController.dispose();
+    _logTimezoneController.dispose();
     _currentPasswordController.dispose();
     _newPasswordController.dispose();
     _confirmPasswordController.dispose();
@@ -1296,15 +1534,149 @@ class _SettingsViewState extends State<SettingsView> {
   @override
   Widget build(BuildContext context) {
     final status = widget.controller.serverStatus;
+    final logRetention = widget.controller.logRetentionSettings;
     final rotationPreparation = widget.controller.otpRotationPreparation;
-    return ListView(
-      children: <Widget>[
+    final children = <Widget>[
         const PageHeader(
           eyebrow: 'Security Settings',
           title: '服务设置',
           subtitle: '调整默认启动关键词、OTP 绑定与管理员密码。',
         ),
         const SizedBox(height: 18),
+        SectionPanel(
+          title: '日志保留策略',
+          subtitle: '按活动日志日配置全局默认值与每日巡检时间。',
+          icon: Icons.schedule_send_rounded,
+          color: AppPalette.sun,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              const InfoPanel(
+                title: '活动日志日说明',
+                body: Text(
+                  '这里的保留单位不是自然日，而是“有日志写入的活动日”。机台长时间离线时，不会因为自然时间流逝而提前清理旧日志。',
+                ),
+                icon: Icons.calendar_month_rounded,
+                color: AppPalette.sun,
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: TextField(
+                      controller: _logRetentionDaysController,
+                      decoration: const InputDecoration(
+                        labelText: '默认保留活动日数',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextField(
+                      controller: _logInspectionHourController,
+                      decoration: const InputDecoration(labelText: '每日巡检小时'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextField(
+                      controller: _logInspectionMinuteController,
+                      decoration: const InputDecoration(labelText: '每日巡检分钟'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _logTimezoneController,
+                decoration: const InputDecoration(
+                  labelText: '服务端时区',
+                  hintText: 'UTC 或 Asia/Shanghai',
+                  helperText: '仅支持 IANA 时区，不支持 China Standard Time 这类 Windows 时区名。',
+                ),
+              ),
+              const SizedBox(height: 12),
+              FilledButton.icon(
+                onPressed: () async {
+                  final retentionDays = int.tryParse(
+                    _logRetentionDaysController.text.trim(),
+                  );
+                  final inspectionHour = int.tryParse(
+                    _logInspectionHourController.text.trim(),
+                  );
+                  final inspectionMinute = int.tryParse(
+                    _logInspectionMinuteController.text.trim(),
+                  );
+                  final timezone = _logTimezoneController.text.trim();
+
+                  if (retentionDays == null || retentionDays <= 0) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('默认保留活动日数必须是正整数。')),
+                    );
+                    return;
+                  }
+                  if (inspectionHour == null || inspectionHour < 0 || inspectionHour > 23) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('每日巡检小时必须在 0-23 之间。')),
+                    );
+                    return;
+                  }
+                  if (inspectionMinute == null || inspectionMinute < 0 || inspectionMinute > 59) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('每日巡检分钟必须在 0-59 之间。')),
+                    );
+                    return;
+                  }
+                  if (timezone.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('服务端时区不能为空。')),
+                    );
+                    return;
+                  }
+                  if (!_isLikelyIanaTimeZone(timezone)) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('服务端时区必须是 IANA 时区，例如 UTC 或 Asia/Shanghai。'),
+                      ),
+                    );
+                    return;
+                  }
+
+                  try {
+                    await widget.controller.updateLogRetentionSettings(
+                      defaultRetentionActiveDays: retentionDays,
+                      dailyInspectionHour: inspectionHour,
+                      dailyInspectionMinute: inspectionMinute,
+                      timezone: timezone,
+                    );
+                    if (!context.mounted) {
+                      return;
+                    }
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('日志保留策略已更新。')),
+                    );
+                  } catch (error) {
+                    if (!context.mounted) {
+                      return;
+                    }
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(describeError(error))),
+                    );
+                  }
+                },
+                icon: const Icon(Icons.save_rounded),
+                label: const Text('保存日志保留策略'),
+              ),
+              if (logRetention != null) ...<Widget>[
+                const SizedBox(height: 12),
+                Text('当前默认保留：${logRetention.defaultRetentionActiveDays} 个活动日志日'),
+                Text('当前巡检时间：${logRetention.inspectionScheduleLabel} · 时区 ${logRetention.timezone}'),
+                Text('最近一次巡检：${logRetention.localizedLastInspectionAt}'),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
         SectionPanel(
           title: '服务设置',
           subtitle: '更新默认启动关键词。',
@@ -1549,8 +1921,16 @@ class _SettingsViewState extends State<SettingsView> {
             ],
           ),
         ),
-      ],
-    );
+      ];
+
+    if (widget.embedInParentScroll) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: children,
+      );
+    }
+
+    return ListView(children: children);
   }
 }
 

@@ -62,8 +62,11 @@ docker-compose -f docker-compose.external-db.yml up -d
 
 ```bash
 npm install
+npm run migrate
 npm start
 ```
+
+如果服务目录中已经存在初始化完成的 `server-security.json`，`npm run migrate` 会优先读取其中保存的数据库配置；否则使用当前环境变量中的 `DB_*` 配置。应用启动时也会自动执行同一套 schema migrations。
 
 默认监听地址：`http://localhost:8080`
 
@@ -183,6 +186,12 @@ GET /api/init/status
 npm test
 ```
 
+## 数据库迁移
+
+- 迁移文件位于 `migrations/`，按 `001_xxx.sql`、`002_xxx.sql` 这种连续版本号管理。
+- 应用启动时会自动执行 schema_version 迁移；也可以手动运行 `npm run migrate`。
+- `init-db.sql` 与 `setup_postgresql.sql` 现在只作为迁移包装脚本，不再各自维护一份独立的完整表结构快照。
+
 当前测试覆盖：
 
 - 初始化流程
@@ -200,6 +209,12 @@ npm test
 VHDSelectServer/
 ├── server.js
 ├── database.js
+├── schemaMigrations.js
+├── migrate.js
+├── migrations/
+│   ├── 001_initial_schema.sql
+│   ├── 002_machine_security_columns.sql
+│   └── 003_machine_log_schema.sql
 ├── securityStore.js
 ├── registrationAuth.js
 ├── auditLog.js

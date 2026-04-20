@@ -10,6 +10,7 @@ obj/
 publish/
 single/
 NuGet.Config
+artifacts/
 
 # ============ Node.js / VHDSelectServer ============
 node_modules/
@@ -45,12 +46,17 @@ pgdata/
 
 # ============ Logs & Temporary Files ============
 *.log
+*.log.*
 *.tmp
 cookies.txt
 
 # ============ Runtime & Configuration ============
 vhd-config.json
-vhdmonter_config.ini
+machine-log-spool.jsonl
+update_done.flag
+resource_version.tag
+staging/
+*.trust.json
 
 # ============ Certificates & Keys ============
 *.pfx
@@ -59,11 +65,26 @@ vhdmonter_config.ini
 *.pem
 
 # ============ Documentation Artifacts ============
+*.md
+!README.md
+!**/README.md
+docs/**/*.md
+!VHDSelectServer/*.md
 README.old.md
 SECURITY_AUDIT_*.md
 SECURITY_REMEDIATION_PLAN_*.md
 WORK_REPORT_*.md
 CLI_GUIDE.md
+*.pdf
+*.doc
+*.docx
+*.rtf
+*.odt
+*.xls
+*.xlsx
+*.csv
+*.ppt
+*.pptx
 
 # ============ OS Specific ============
 .AppleDouble

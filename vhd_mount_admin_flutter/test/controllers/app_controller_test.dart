@@ -173,6 +173,7 @@ void main() {
           keyId: 'key-01',
           keyType: 'RSA',
           registrationCertFingerprint: 'ABC123',
+          logRetentionActiveDaysOverride: null,
           lastSeen: '2026-04-03T08:00:00Z',
         ),
       ],
@@ -205,7 +206,7 @@ void main() {
     expect(controller.machines, isEmpty);
     expect(controller.certificates, isEmpty);
     expect(controller.auditEntries, isEmpty);
-    expect(controller.errorMessage, contains('server offline'));
+    expect(controller.errorMessage, contains('操作失败'));
   });
 
   test('bootstrap keeps probing server when local config loading fails', () async {

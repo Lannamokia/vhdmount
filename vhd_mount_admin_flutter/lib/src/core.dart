@@ -7,7 +7,36 @@ String describeError(Object error) {
   if (error is ClientConfigStoreException) {
     return error.message;
   }
-  return error.toString();
+  if (error is TimeoutException) {
+    return '连接服务端超时，请稍后重试。';
+  }
+  if (error is SocketException) {
+    final host = error.address?.host ?? '';
+    if (host == 'localhost' || host == '127.0.0.1' || host == '::1') {
+      return '无法连接到本机服务端。Android 模拟器请改用 10.0.2.2，真机请填写服务端的局域网 IP 或域名。';
+    }
+    return '无法连接到服务端，请检查服务器地址、端口和服务状态。';
+  }
+  if (error is HandshakeException || error is TlsException) {
+    return '无法建立安全连接，请检查 HTTPS 地址或服务端证书配置。';
+  }
+  if (error is HttpException) {
+    return '服务端响应异常，请稍后重试。';
+  }
+  if (error is FormatException) {
+    return '服务端返回了无法识别的数据，请确认客户端与服务端版本匹配。';
+  }
+
+  final message = error.toString();
+  if (message.contains('Connection refused') ||
+      message.contains('Failed host lookup') ||
+      message.contains('SocketException')) {
+    return '无法连接到服务端，请检查服务器地址、端口和网络连接。';
+  }
+  if (message.contains('HandshakeException') || message.contains('CERTIFICATE')) {
+    return '无法建立安全连接，请检查 HTTPS 地址或服务端证书配置。';
+  }
+  return '操作失败，请稍后重试。';
 }
 
 String generateSessionSecret([int length = 48]) {
@@ -69,6 +98,26 @@ void _syncWindowsSecureInput(bool enabled) {
       // 平台侧不可用时保持 Flutter 默认行为，不阻塞输入。
     }
   }());
+}
+
+String serverAddressInputHint() {
+  if (Platform.isAndroid) {
+    return '例如 http://10.0.2.2:8080 或 http://192.168.1.10:8080';
+  }
+  if (Platform.isIOS) {
+    return '例如 http://localhost:8080 或 http://192.168.1.10:8080';
+  }
+  return '例如 http://localhost:8080';
+}
+
+String serverAddressConnectionTip() {
+  if (Platform.isAndroid) {
+    return '提示：Android 模拟器访问开发机服务通常使用 http://10.0.2.2:8080；真机请填写服务端的局域网 IP 或域名。';
+  }
+  if (Platform.isIOS) {
+    return '提示：iOS 模拟器通常可直接访问开发机上的 http://localhost:8080；真机请填写服务端的局域网 IP 或域名。';
+  }
+  return '提示：如果你在本机联调，默认地址通常是 http://localhost:8080。';
 }
 
 class AppPalette {
@@ -431,20 +480,31 @@ class _AuthHeroPanel extends StatelessWidget {
 
     return LayoutBuilder(
       builder: (context, constraints) {
+        final mobile = constraints.maxWidth < 720;
         final narrow = constraints.maxWidth < 430;
         final ultraNarrow = constraints.maxWidth < 320;
         final short =
             constraints.maxHeight.isFinite && constraints.maxHeight < 620;
+        final compactHero = mobile || short;
         final panelPadding = ultraNarrow
-            ? 18.0
-            : narrow
-            ? 22.0
-            : 30.0;
+          ? 16.0
+          : narrow
+          ? 18.0
+          : mobile
+          ? 22.0
+          : 30.0;
         final titleFontSize = ultraNarrow
-            ? 28.0
-            : narrow
-            ? 32.0
-            : 38.0;
+          ? 23.0
+          : narrow
+          ? 26.0
+          : mobile
+          ? 31.0
+          : 38.0;
+        final iconSize = ultraNarrow
+          ? 42.0
+          : compactHero
+          ? 48.0
+          : 56.0;
 
         return AppPanel(
           padding: EdgeInsets.all(panelPadding),
@@ -486,9 +546,9 @@ class _AuthHeroPanel extends StatelessWidget {
                     AccentIconBadge(
                       icon: heroIcon,
                       color: AppPalette.coral,
-                      size: ultraNarrow ? 48 : 56,
+                      size: iconSize,
                     ),
-                    const SizedBox(height: 16),
+                    SizedBox(height: compactHero ? 12 : 16),
                     Text(
                       title,
                       style: theme.textTheme.displaySmall?.copyWith(
@@ -503,9 +563,9 @@ class _AuthHeroPanel extends StatelessWidget {
                     AccentIconBadge(
                       icon: heroIcon,
                       color: AppPalette.coral,
-                      size: 56,
+                      size: iconSize,
                     ),
-                    const SizedBox(width: 16),
+                    SizedBox(width: compactHero ? 12 : 16),
                     Expanded(
                       child: Text(
                         title,
@@ -517,18 +577,24 @@ class _AuthHeroPanel extends StatelessWidget {
                   ],
                 ),
               if (hasSubtitle) ...<Widget>[
-                SizedBox(height: short ? 10 : 14),
+                SizedBox(height: compactHero ? 10 : 14),
                 Text(
                   subtitle,
-                  style: theme.textTheme.bodyLarge?.copyWith(
+                  style: (compactHero
+                          ? theme.textTheme.bodyMedium
+                          : theme.textTheme.bodyLarge)
+                      ?.copyWith(
                     color: AppPalette.muted,
-                    height: 1.65,
+                    height: compactHero ? 1.55 : 1.65,
                   ),
                 ),
               ],
               if (spotlight != null) ...<Widget>[
-                SizedBox(height: short ? 16 : 24),
-                spotlight!,
+                SizedBox(height: compactHero ? 14 : 24),
+                if (mobile)
+                  SizedBox(height: 104, child: spotlight!)
+                else
+                  spotlight!,
               ],
             ],
           ),
@@ -646,14 +712,25 @@ class OverviewStatCard extends StatelessWidget {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final dense = constraints.maxHeight < 140 || constraints.maxWidth < 236;
-        final panelPadding = dense ? 14.0 : 18.0;
-        final iconSize = dense ? 44.0 : 52.0;
-        final contentGap = dense ? 10.0 : 14.0;
-        final lineGap = dense ? 2.0 : 4.0;
+        final compactCard =
+        constraints.maxHeight < 108 || constraints.maxWidth < 180;
+        final dense =
+            compactCard ||
+            constraints.maxHeight < 140 ||
+            constraints.maxWidth < 236;
+        final panelPadding = compactCard
+        ? 10.0
+            : (dense ? 14.0 : 18.0);
+        final iconSize = compactCard
+        ? 36.0
+            : (dense ? 44.0 : 52.0);
+        final contentGap = compactCard
+        ? 6.0
+            : (dense ? 10.0 : 14.0);
+        final lineGap = compactCard ? 0.0 : (dense ? 2.0 : 4.0);
 
         return AppPanel(
-          borderRadius: 26,
+        borderRadius: compactCard ? 20 : 26,
           padding: EdgeInsets.all(panelPadding),
           gradient: LinearGradient(
             begin: Alignment.topLeft,
@@ -676,9 +753,15 @@ class OverviewStatCard extends StatelessWidget {
                       label,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.labelLarge?.copyWith(
-                        color: AppPalette.muted,
-                      ),
+                      style: (compactCard
+                              ? theme.textTheme.bodySmall
+                              : theme.textTheme.labelLarge)
+                          ?.copyWith(
+                            color: AppPalette.muted,
+                            fontWeight: compactCard
+                                ? FontWeight.w600
+                                : FontWeight.w500,
+                          ),
                     ),
                     SizedBox(height: lineGap),
                     Text(
@@ -686,12 +769,15 @@ class OverviewStatCard extends StatelessWidget {
                       maxLines: dense ? 1 : 2,
                       overflow: TextOverflow.ellipsis,
                       style:
-                          (dense
+                          (compactCard
+                                  ? theme.textTheme.titleMedium
+                                  : dense
                                   ? theme.textTheme.titleMedium
                                   : theme.textTheme.titleLarge)
                               ?.copyWith(
                                 color: AppPalette.ink,
                                 fontWeight: FontWeight.w700,
+                                height: compactCard ? 1.1 : null,
                               ),
                     ),
                     if (caption != null) ...<Widget>[
@@ -722,17 +808,44 @@ class OverviewStatsGrid extends StatelessWidget {
     super.key,
     required this.cards,
     this.singleRow = false,
+    this.forceTwoColumnGrid = false,
   });
 
   final List<Widget> cards;
   final bool singleRow;
+  final bool forceTwoColumnGrid;
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        const spacing = 14.0;
+        final spacing = forceTwoColumnGrid ? 10.0 : 14.0;
         final availableWidth = constraints.maxWidth;
+
+        if (forceTwoColumnGrid) {
+          final columns = min(2, max(1, cards.length));
+          final cardWidth = (availableWidth - spacing * (columns - 1)) / columns;
+          final cardHeight = min(104.0, max(88.0, cardWidth * 0.54));
+          final rows = (cards.length / columns).ceil();
+          final totalHeight = rows * cardHeight + (rows - 1) * spacing;
+
+          return SizedBox(
+            height: totalHeight,
+            child: GridView.builder(
+              physics: const NeverScrollableScrollPhysics(),
+              padding: EdgeInsets.zero,
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: columns,
+                mainAxisSpacing: spacing,
+                crossAxisSpacing: spacing,
+                childAspectRatio: cardWidth / cardHeight,
+              ),
+              itemCount: cards.length,
+              itemBuilder: (context, index) =>
+                  SizedBox.expand(child: cards[index]),
+            ),
+          );
+        }
 
         if (singleRow) {
           final visibleCards = min<double>(
@@ -751,7 +864,7 @@ class OverviewStatsGrid extends StatelessWidget {
               scrollDirection: Axis.horizontal,
               padding: EdgeInsets.zero,
               itemCount: cards.length,
-              separatorBuilder: (_, _) => const SizedBox(width: spacing),
+              separatorBuilder: (_, _) => SizedBox(width: spacing),
               itemBuilder: (context, index) =>
                   SizedBox(width: cardWidth, child: cards[index]),
             ),

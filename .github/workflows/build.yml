@@ -4,6 +4,7 @@ on:
     branches:
       - main
       - dev
+      - maimoller_control_test
     tags:
       - "*"
   workflow_dispatch:
@@ -17,17 +18,18 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
       - name: Restore
         run: |
           dotnet restore ./VHDMounter.csproj
+          dotnet restore ./VHDMounter.csproj -p:EnableHidMenuFeatures=true
           dotnet restore ./Updater/Updater.csproj
           dotnet restore ./VHDMountAdminTools/VHDMountAdminTools.csproj
         shell: pwsh
-      - name: Publish VHDMounter
-        run: dotnet publish ./VHDMounter.csproj -c Release -r win-x64
+      - name: Publish VHDMounter Base
+        run: dotnet publish ./VHDMounter.csproj -c Release -r win-x64 -p:EnableHidMenuFeatures=false -o ./artifacts/publish/VHDMounter
+        shell: pwsh
+      - name: Publish VHDMounter Maimoller
+        run: dotnet publish ./VHDMounter.csproj -c Release -r win-x64 -p:EnableHidMenuFeatures=true -o ./artifacts/publish/VHDMounter_Maimoller
         shell: pwsh
       - name: Publish Updater
         run: dotnet publish ./Updater/Updater.csproj -c Release -r win-x64
@@ -35,27 +37,24 @@ jobs:
       - name: Publish VHDMountAdminTools
         run: dotnet publish ./VHDMountAdminTools/VHDMountAdminTools.csproj -c Release -r win-x64
         shell: pwsh
-      - name: Restore Flutter dependencies
-        run: flutter pub get
-        shell: pwsh
-        working-directory: ./vhd_mount_admin_flutter
-      - name: Build Flutter admin client
-        run: flutter build windows --release
-        shell: pwsh
-        working-directory: ./vhd_mount_admin_flutter
       - name: Zip artifacts
         run: |
           New-Item -ItemType Directory -Force -Path ./artifacts | Out-Null
-          Compress-Archive -Path ./bin/Release/net8.0-windows/win-x64/publish -DestinationPath ./artifacts/VHDMounter-win-x64.zip -Force
+          Compress-Archive -Path ./artifacts/publish/VHDMounter/* -DestinationPath ./artifacts/VHDMounter-win-x64.zip -Force
+          Compress-Archive -Path ./artifacts/publish/VHDMounter_Maimoller/* -DestinationPath ./artifacts/VHDMounter_Maimoller-win-x64.zip -Force
           Compress-Archive -Path ./Updater/bin/Release/net8.0-windows/win-x64/publish -DestinationPath ./artifacts/Updater-win-x64.zip -Force
           Compress-Archive -Path ./VHDMountAdminTools/bin/Release/net8.0-windows/win-x64/publish -DestinationPath ./artifacts/VHDMountAdminTools-win-x64.zip -Force
-          Compress-Archive -Path ./vhd_mount_admin_flutter/build/windows/x64/runner/Release/* -DestinationPath ./artifacts/VHDMountAdminFlutter-win-x64.zip -Force
         shell: pwsh
       - name: Upload VHDMounter artifact
         uses: actions/upload-artifact@v4
         with:
           name: VHDMounter-win-x64
           path: artifacts/VHDMounter-win-x64.zip
+      - name: Upload VHDMounter Maimoller artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VHDMounter_Maimoller-win-x64
+          path: artifacts/VHDMounter_Maimoller-win-x64.zip
       - name: Upload Updater artifact
         uses: actions/upload-artifact@v4
         with:
@@ -66,11 +65,6 @@ jobs:
         with:
           name: VHDMountAdminTools-win-x64
           path: artifacts/VHDMountAdminTools-win-x64.zip
-      - name: Upload VHDMountAdminFlutter artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: VHDMountAdminFlutter-win-x64
-          path: artifacts/VHDMountAdminFlutter-win-x64.zip
       - name: Generate checksums
         run: |
           $out = "./artifacts/CHECKSUMS.sha256"
@@ -86,9 +80,9 @@ jobs:
         with:
           files: |
             artifacts/VHDMounter-win-x64.zip
+            artifacts/VHDMounter_Maimoller-win-x64.zip
             artifacts/Updater-win-x64.zip
             artifacts/VHDMountAdminTools-win-x64.zip
-            artifacts/VHDMountAdminFlutter-win-x64.zip
             artifacts/CHECKSUMS.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

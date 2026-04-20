@@ -1,0 +1,332 @@
+<Window x:Class="VHDMounter.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="VHD Mounter"
+        WindowState="Maximized"
+        WindowStyle="None"
+        Topmost="True"
+        Background="White"
+        KeyDown="Window_KeyDown">
+
+    <Window.Resources>
+        <Style x:Key="OverlayCardStyle" TargetType="Border">
+            <Setter Property="Background" Value="#FFF4E3BF"/>
+            <Setter Property="BorderBrush" Value="#FFB7791F"/>
+            <Setter Property="BorderThickness" Value="2"/>
+            <Setter Property="CornerRadius" Value="18"/>
+            <Setter Property="Padding" Value="18"/>
+            <Setter Property="Margin" Value="0,0,0,14"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                    <Setter Property="Background" Value="#FFDCEAFE"/>
+                    <Setter Property="BorderBrush" Value="#FF1D4ED8"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="NetworkFieldCardStyle" TargetType="Border">
+            <Setter Property="Background" Value="#FFFEF7ED"/>
+            <Setter Property="BorderBrush" Value="#FFD97706"/>
+            <Setter Property="BorderThickness" Value="2"/>
+            <Setter Property="CornerRadius" Value="18"/>
+            <Setter Property="Padding" Value="20"/>
+            <Setter Property="Margin" Value="0,0,0,14"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsActive}" Value="True">
+                    <Setter Property="Background" Value="#FFDBEAFE"/>
+                    <Setter Property="BorderBrush" Value="#FF2563EB"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="NetworkSegmentBorderStyle" TargetType="Border">
+            <Setter Property="Background" Value="#FFFFFFFF"/>
+            <Setter Property="BorderBrush" Value="#FFD1D5DB"/>
+            <Setter Property="BorderThickness" Value="2"/>
+            <Setter Property="CornerRadius" Value="12"/>
+            <Setter Property="Padding" Value="14,10"/>
+            <Setter Property="Margin" Value="0"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsFieldActive}" Value="True">
+                    <Setter Property="Background" Value="#FFE0F2FE"/>
+                    <Setter Property="BorderBrush" Value="#FF0EA5E9"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsActive}" Value="True">
+                    <Setter Property="Background" Value="#FFFDE68A"/>
+                    <Setter Property="BorderBrush" Value="#FFB45309"/>
+                    <Setter Property="BorderThickness" Value="3"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+    
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="7*"/>
+            <RowDefinition Height="9*"/>
+        </Grid.RowDefinitions>
+
+        <!--
+            文档里的主视觉内容集中在底部 1080x1080 容器内。
+            这里用 43.75% / 56.25% 的相对分区模拟该区域，并将状态组居中到容器圆心。
+        -->
+        <Grid Grid.Row="1" x:Name="CircularDisplayRegionHost">
+            <Grid Width="{Binding ActualHeight, ElementName=CircularDisplayRegionHost}"
+                  Height="{Binding ActualHeight, ElementName=CircularDisplayRegionHost}"
+                  HorizontalAlignment="Center"
+                  VerticalAlignment="Center">
+                <StackPanel HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            MaxWidth="720">
+                    <!-- 状态显示 -->
+                    <TextBlock x:Name="StatusText"
+                               Text="正在初始化..."
+                               FontSize="24"
+                               FontWeight="Bold"
+                               TextAlignment="Center"
+                               HorizontalAlignment="Center"
+                               Margin="0,0,0,24"
+                               Foreground="Black"/>
+
+                    <!-- VHD选择器 -->
+                    <StackPanel x:Name="VHDSelector" Visibility="Collapsed">
+                        <TextBlock Text="发现多个VHD文件，请选择一个:"
+                                   FontSize="18"
+                                   TextAlignment="Center"
+                                   HorizontalAlignment="Center"
+                                   Margin="0,0,0,20"
+                                   Foreground="Black"/>
+
+                        <ListBox x:Name="VHDListBox"
+                                 Width="600"
+                                 Height="300"
+                                 FontSize="14"
+                                 SelectionMode="Single"
+                                 Background="#F0F0F0"
+                                 BorderBrush="#CCCCCC"
+                                 BorderThickness="1">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" Padding="10,5" Foreground="Black"/>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+
+                        <TextBlock Text="使用上下键选择，回车确认"
+                                   FontSize="14"
+                                   TextAlignment="Center"
+                                   HorizontalAlignment="Center"
+                                   Margin="0,10,0,0"
+                                   Foreground="Gray"/>
+                    </StackPanel>
+
+                    <!-- 进度指示器（仅在本地更新阶段显示） -->
+                    <ProgressBar x:Name="ProgressBar"
+                                 Width="400"
+                                 Height="20"
+                                 Margin="0,24,0,0"
+                                 IsIndeterminate="False"
+                                 Minimum="0"
+                                 Maximum="100"
+                                 Visibility="Collapsed"/>
+                </StackPanel>
+            </Grid>
+        </Grid>
+
+        <Grid x:Name="ServiceMenuOverlay"
+              Grid.RowSpan="2"
+              Visibility="Collapsed"
+              Background="#AA111827"
+              Panel.ZIndex="10">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="7*"/>
+                <RowDefinition Height="9*"/>
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="1"
+                  HorizontalAlignment="Center"
+                  VerticalAlignment="Center">
+                <Border Width="860"
+                        MaxWidth="{Binding ActualWidth, ElementName=CircularDisplayRegionHost}"
+                        Padding="36"
+                        Background="#FFF9F6EE"
+                        BorderBrush="#FF111827"
+                        BorderThickness="3"
+                        CornerRadius="30">
+                    <DockPanel LastChildFill="True">
+                        <TextBlock x:Name="OverlayFooterText"
+                                   DockPanel.Dock="Bottom"
+                                   Margin="0,24,0,0"
+                                   FontSize="18"
+                                   FontWeight="SemiBold"
+                                   Foreground="#FF4B5563"
+                                   TextAlignment="Center"
+                                   TextWrapping="Wrap"/>
+
+                        <StackPanel DockPanel.Dock="Top"
+                                    Margin="0,0,0,24">
+                            <TextBlock x:Name="OverlayTitleText"
+                                       FontSize="34"
+                                       FontWeight="Bold"
+                                       Foreground="#FF111827"
+                                       TextAlignment="Center"/>
+                            <TextBlock x:Name="OverlaySubtitleText"
+                                       Margin="0,12,0,0"
+                                       FontSize="20"
+                                       Foreground="#FF374151"
+                                       TextAlignment="Center"
+                                       TextWrapping="Wrap"/>
+                            <TextBlock x:Name="OverlayPageIndicatorText"
+                                       Margin="0,8,0,0"
+                                       FontSize="18"
+                                       FontWeight="SemiBold"
+                                       Foreground="#FF92400E"
+                                       TextAlignment="Center"/>
+                        </StackPanel>
+
+                        <ScrollViewer x:Name="OverlayListScrollViewer"
+                                      VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled">
+                            <ItemsControl x:Name="OverlayItemsControl">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Style="{StaticResource OverlayCardStyle}">
+                                            <StackPanel>
+                                                <DockPanel LastChildFill="True">
+                                                    <TextBlock Text="{Binding Value}"
+                                                               DockPanel.Dock="Right"
+                                                               Margin="16,0,0,0"
+                                                               FontSize="22"
+                                                               FontWeight="Bold"
+                                                               Foreground="#FF111827"
+                                                               TextAlignment="Right"/>
+                                                    <TextBlock Text="{Binding Title}"
+                                                               FontSize="24"
+                                                               FontWeight="Bold"
+                                                               Foreground="#FF111827"
+                                                               TextWrapping="Wrap"/>
+                                                </DockPanel>
+
+                                                <TextBlock Text="{Binding Detail}"
+                                                           Margin="0,10,0,0"
+                                                           FontSize="18"
+                                                           Foreground="#FF4B5563"
+                                                           TextWrapping="Wrap"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+
+                        <ScrollViewer x:Name="NetworkEditorPanel"
+                                      Visibility="Collapsed"
+                                      VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel>
+                                <TextBlock x:Name="NetworkEditorAdapterText"
+                                           FontSize="20"
+                                           FontWeight="SemiBold"
+                                           Foreground="#FF92400E"
+                                           TextAlignment="Center"
+                                           TextWrapping="Wrap"/>
+                                <TextBlock x:Name="NetworkEditorHintText"
+                                           Margin="0,10,0,20"
+                                           FontSize="18"
+                                           Foreground="#FF4B5563"
+                                           TextAlignment="Center"
+                                           TextWrapping="Wrap"/>
+
+                                <ItemsControl x:Name="NetworkEditorFieldsItemsControl">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Style="{StaticResource NetworkFieldCardStyle}">
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding Label}"
+                                                               FontSize="22"
+                                                               FontWeight="Bold"
+                                                               Foreground="#FF111827"/>
+
+                                                    <ItemsControl ItemsSource="{Binding Segments}"
+                                                                  Margin="0,14,0,0">
+                                                        <ItemsControl.ItemsPanel>
+                                                            <ItemsPanelTemplate>
+                                                                <StackPanel Orientation="Horizontal"/>
+                                                            </ItemsPanelTemplate>
+                                                        </ItemsControl.ItemsPanel>
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <StackPanel Orientation="Horizontal"
+                                                                            VerticalAlignment="Center">
+                                                                    <Border Style="{StaticResource NetworkSegmentBorderStyle}">
+                                                                        <TextBlock Text="{Binding Text}"
+                                                                                   FontSize="24"
+                                                                                   FontWeight="Bold"
+                                                                                   Foreground="#FF111827"
+                                                                                   TextAlignment="Center"
+                                                                                   MinWidth="70"/>
+                                                                    </Border>
+                                                                    <TextBlock Text="{Binding SeparatorText}"
+                                                                               Margin="10,0,10,0"
+                                                                               FontSize="26"
+                                                                               FontWeight="Bold"
+                                                                               Foreground="#FF4B5563"
+                                                                               VerticalAlignment="Center"/>
+                                                                </StackPanel>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </ScrollViewer>
+
+                        <StackPanel x:Name="AudioSettingsPanel"
+                                    Visibility="Collapsed"
+                                    HorizontalAlignment="Stretch"
+                                    VerticalAlignment="Center">
+                            <TextBlock Text="默认输出设备"
+                                       FontSize="18"
+                                       Foreground="#FF6B7280"
+                                       TextAlignment="Center"/>
+                            <TextBlock x:Name="AudioDeviceNameText"
+                                       Margin="0,10,0,24"
+                                       FontSize="24"
+                                       FontWeight="Bold"
+                                       Foreground="#FF111827"
+                                       TextAlignment="Center"
+                                       TextWrapping="Wrap"/>
+
+                            <TextBlock Text="当前音量"
+                                       FontSize="20"
+                                       Foreground="#FF6B7280"
+                                       TextAlignment="Center"/>
+                            <TextBlock x:Name="AudioVolumeValueText"
+                                       Margin="0,8,0,24"
+                                       FontSize="56"
+                                       FontWeight="Bold"
+                                       Foreground="#FF111827"
+                                       TextAlignment="Center"/>
+
+                            <ProgressBar x:Name="AudioVolumeProgressBar"
+                                         Height="28"
+                                         Minimum="0"
+                                         Maximum="100"
+                                         Margin="40,0,40,20"
+                                         Value="0"/>
+
+                            <TextBlock x:Name="AudioStatusText"
+                                       FontSize="18"
+                                       Foreground="#FF4B5563"
+                                       TextAlignment="Center"
+                                       TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </DockPanel>
+                </Border>
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>

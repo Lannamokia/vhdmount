@@ -88,14 +88,13 @@
 ### 平台与工具升级
 
 - **.NET 版本升级至 8.0**
-  - VHDMounter、Updater、VHDDebugger 从 net6.0 升级至 net8.0
+  - VHDMounter、Updater 从 net6.0 升级至 net8.0
   - RID 规范化：win10-x64 → win-x64（更广泛的兼容性）
-  - 新增 Directory.Build.props，统一 solution 级别的构建属性
 
 - **管理工具替换与扩展**
   - VHDMountAdminTools 全面取代已废弃的 UpdatePackagerGUI
   - Flutter 管理客户端完整集成，支持 TOTP 验证码扫码添加功能
-  - vhdmount.sln 新增，统一管理所有 .NET 子项目（VHDMounter、Updater、VHDDebugger、VHDMountAdminTools）
+  - vhdmount.sln 新增，统一管理所有 .NET 子项目（VHDMounter、Updater、VHDMountAdminTools）
 
 - **CI/CD 流程对齐**
   - GitHub Actions 工作流（build.yml）同步更新，.NET 版本、RID 与产物路径全面同步
@@ -146,6 +145,18 @@
 
 ```
 vhdmount/
+├── docs/
+│   └── plans/
+│       └── machine-log-reporting-plan.md
+├── scripts/
+│   └── build.bat                # 本地构建脚本（生成自包含单文件并复制到 single 目录）
+├── src/
+│   └── VHDMounter/
+│       ├── Program.cs           # 单实例入口
+│       ├── VHDManager.cs        # 客户端核心逻辑
+│       ├── MainWindow.xaml      # 主窗口界面
+│       ├── MainWindow.xaml.cs   # 主窗口逻辑
+│       └── vhdmonter_config.ini # 客户端配置模板
 ├── VHDSelectServer/              # 管理服务
 │   ├── server.js                 # 主服务与路由
 │   ├── database.js               # PostgreSQL 持久化
@@ -159,11 +170,7 @@ vhdmount/
 │   └── MainWindow.xaml.cs        # 打包与注册证书逻辑
 ├── vhd_mount_admin_flutter/      # Flutter 管理客户端（Windows）
 ├── VHDMounter.csproj             # .NET 8 WPF 客户端
-├── VHDManager.cs                 # 客户端核心逻辑
-├── Program.cs                    # 单实例入口
-├── vhdmonter_config.ini          # 客户端配置
-├── build.bat                     # 本地构建脚本（生成自包含单文件并复制到 single 目录）
-├── single/                       # 打包输出（VHDMounter.exe、Updater.exe、VHDMountAdminTools.exe）
+├── single/                       # 打包输出（VHDMounter.exe、VHDMounter_Maimoller.exe、Updater.exe、VHDMountAdminTools.exe）
 └── .github/workflows/build.yml   # CI 构建与发布
 ```
 
@@ -213,6 +220,9 @@ npm start
 # 从 Release 下载并右键“以管理员身份运行”
 VHDMounter.exe
 
+# Maimoller 增强版主程序
+VHDMounter_Maimoller.exe
+
 # 或从源码发布
 dotnet publish VHDMounter.csproj \
   --configuration Release \
@@ -223,6 +233,21 @@ dotnet publish VHDMounter.csproj \
   -p:IncludeNativeLibrariesForSelfExtract=true \
   -p:EnableCompressionInSingleFile=true \
   -p:PublishTrimmed=false
+
+# 发布 Maimoller 增强版
+dotnet publish VHDMounter.csproj \
+  --configuration Release \
+  --runtime win-x64 \
+  --self-contained true \
+  --output ./publish/win-x64-maimoller \
+  -p:EnableHidMenuFeatures=true \
+  -p:PublishSingleFile=true \
+  -p:IncludeNativeLibrariesForSelfExtract=true \
+  -p:EnableCompressionInSingleFile=true \
+  -p:PublishTrimmed=false
+
+# 或直接运行本地脚本，一次生成两个版本到 single/
+scripts\build.bat
 ```
 
 新的管理入口：
@@ -252,7 +277,7 @@ flutter run -d windows
 
 ## 配置说明
 
-### 客户端（`vhdmonter_config.ini`）
+### 客户端（`src/VHDMounter/vhdmonter_config.ini` 模板）
 
 ```ini
 [Settings]
@@ -354,11 +379,19 @@ RegistrationCertificatePassword=ChangeThisPfxPassword
 ## 构建与发布（CI）
 
 - 工作流：`.github/workflows/build.yml`
-  - 触发：`push`、`pull_request`、`release`、`workflow_dispatch`。
+  - 触发：`main`、`dev`、`maimoller_control_test` 三个分支的 `push`，任意标签的 `push`，以及 `workflow_dispatch`。
   - 步骤：恢复依赖 → 构建/测试 → 发布 Windows x64 自包含单文件 → 上传构建产物。
-  - `release` 事件：打包 ZIP、生成 `CHECKSUMS.md`（SHA256），上传为 Release 资产。
+  - 标签推送时：打包 ZIP、生成 `CHECKSUMS.sha256`，并上传为 Release 资产。
   - 使用 `softprops/action-gh-release@v2` 上传资产，认证采用 `GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}`。
-  - 产物名称与位置：`VHDMounter-win-x64-{version}`，位于 `publish/win-x64/`。
+  - 产物以 workflow artifact 形式上传；标签构建额外附加到 GitHub Release。
+
+- 工作流：`.github/workflows/flutter-admin-client.yml`
+  - 触发：`main`、`dev`、`maimoller_control_test` 三个分支与任意标签的 `push`，以及 `workflow_dispatch`；其中仅在 `vhd_mount_admin_flutter/**` 或 workflow 文件自身变更时触发。
+  - 步骤：分别构建 Windows ZIP、Android APK、iOS unsigned IPA；标签推送时汇总产物并上传到 GitHub Release。
+
+- 工作流：`.github/workflows/docker-image.yml`
+  - 触发：目标为 `main`、`dev`、`maimoller_control_test` 的 `push`、`pull_request`（仅限 `VHDSelectServer/**` 或 workflow 文件自身变更）、`release.published`、`workflow_dispatch`。
+  - 步骤：普通代码变更时构建 Docker 镜像并上传 tgz artifact；正式 Release 发布时推送 DockerHub。
 
 建议在工作流顶部声明：
 
@@ -369,7 +402,7 @@ permissions:
 
 ### 本地构建脚本
 
-- 运行 `build.bat` 执行编译与发布，完成后生成自包含单文件并复制到 `single` 目录：
+- 运行 `scripts\build.bat` 执行编译与发布，完成后生成自包含单文件并复制到 `single` 目录：
   - `single\VHDMounter.exe`
   - `single\Updater.exe`
   - `single\VHDMountAdminTools.exe`

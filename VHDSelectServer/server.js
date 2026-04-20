@@ -4,21 +4,36 @@ const crypto = require('crypto');
 const express = require('express');
 const fs = require('fs');
 const helmet = require('helmet');
+const http = require('http');
 const path = require('path');
 const rateLimit = require('express-rate-limit');
 const session = require('express-session');
 
 const { AuditLog } = require('./auditLog');
 const { ensureWritableDirectory, writeJsonAtomic } = require('./configStoreUtils');
-const { createDatabase } = require('./database');
+const { assertMachineLogTimeZone, createDatabase } = require('./database');
+const {
+    attachMachineLogWebSocketServer,
+    buildMachineLogTextExport,
+    createMachineLogBootstrap,
+    startMachineLogInspectionScheduler,
+    stopMachineLogInspectionScheduler,
+} = require('./machineLogServer');
 const { RegistrationAuthError, verifySignedRegistrationRequest } = require('./registrationAuth');
 const { SecurityStore } = require('./securityStore');
 const {
     ValidationError,
+    assertCursor,
     assertKeyId,
+    assertLogComponent,
+    assertLogEventKey,
+    assertLogLevel,
     assertMachineId,
     assertOptionalReason,
+    assertOptionalIsoDate,
+    assertOptionalPositiveInteger,
     assertRsaPublicKeyPem,
+    assertSessionId,
     assertString,
     assertVhdKeyword,
 } = require('./validators');
@@ -105,6 +120,19 @@ function parsePositiveInteger(value, fallbackValue, maxValue = 500) {
     return Math.min(parsed, maxValue);
 }
 
+function parseBoundedInteger(value, fieldName, minValue, maxValue, fallbackValue) {
+    if (value == null || String(value).trim() === '') {
+        return fallbackValue;
+    }
+
+    const parsed = Number.parseInt(String(value).trim(), 10);
+    if (!Number.isFinite(parsed) || parsed < minValue || parsed > maxValue) {
+        throw new ValidationError(`${fieldName} 必须在 ${minValue}-${maxValue} 之间`);
+    }
+
+    return parsed;
+}
+
 function normalizeFingerprint(value) {
     return String(value || '').replace(/:/g, '').trim().toUpperCase();
 }
@@ -184,6 +212,13 @@ async function createApp(options = {}) {
         databaseError: null,
         initialized: false,
         logger,
+        machineLogBootstrapCache: new Map(),
+        machineLogConnections: new Map(),
+        machineLogDailyBytes: new Map(),
+        machineLogInspectionRunning: false,
+        machineLogInspectionTimer: null,
+        machineLogRequestNonceCache: new Map(),
+        machineLogUploadWindows: new Map(),
         otpStepUpWindowMs,
         registrationNonceCache: new Map(),
         securityConfig: null,
@@ -355,7 +390,6 @@ async function createApp(options = {}) {
         res.status(503).json({
             success: false,
             error: '数据库当前不可用',
-            details: runtime.databaseError ? runtime.databaseError.message : '数据库尚未连接',
         });
     }
 
@@ -401,21 +435,35 @@ async function createApp(options = {}) {
         }
     }
 
+    function buildMachineLogQueryFilters(req) {
+        return {
+            machineId: req.query.machineId ? assertMachineId(req.query.machineId) : undefined,
+            sessionId: req.query.sessionId ? assertSessionId(req.query.sessionId) : undefined,
+            level: req.query.level ? assertLogLevel(req.query.level) : undefined,
+            component: req.query.component ? assertLogComponent(req.query.component) : undefined,
+            eventKey: req.query.eventKey ? assertLogEventKey(String(req.query.eventKey).trim().toUpperCase()) : undefined,
+            query: req.query.q ? assertString(req.query.q, 'q', 1, 256) : undefined,
+            from: req.query.from ? assertOptionalIsoDate(req.query.from, 'from') : undefined,
+            to: req.query.to ? assertOptionalIsoDate(req.query.to, 'to') : undefined,
+            cursor: req.query.cursor ? assertCursor(req.query.cursor) : undefined,
+            limit: parsePositiveInteger(req.query.limit, 100, 500),
+        };
+    }
+
     app.get('/api/init/status', (req, res) => {
         const pendingInitialization = securityStore.getPendingInitialization();
+        const isAuthenticated = !!req.session?.isAuthenticated;
         res.json({
             success: true,
             initialized: runtime.initialized,
             pendingInitialization: !!pendingInitialization,
-            pendingInitializationCreatedAt: pendingInitialization?.createdAt || null,
-            pendingOtpIssuer: pendingInitialization?.issuer || null,
-            pendingOtpAccountName: pendingInitialization?.accountName || null,
             databaseReady: !!runtime.database,
-            databaseError: runtime.databaseError ? runtime.databaseError.message : null,
-            defaultVhdKeyword: serviceSettingsStore.getDefaultVhdKeyword(),
-            trustedRegistrationCertificateCount: runtime.initialized
-                ? (runtime.securityConfig?.trustedRegistrationCertificates || []).length
-                : 0,
+            ...(isAuthenticated ? {
+                defaultVhdKeyword: serviceSettingsStore.getDefaultVhdKeyword(),
+                trustedRegistrationCertificateCount: runtime.initialized
+                    ? (runtime.securityConfig?.trustedRegistrationCertificates || []).length
+                    : 0,
+            } : {}),
         });
     });
 
@@ -469,6 +517,7 @@ async function createApp(options = {}) {
                 ? assertVhdKeyword(req.body.defaultVhdKeyword)
                 : serviceSettingsStore.getDefaultVhdKeyword();
             serviceSettingsStore.setDefaultVhdKeyword(defaultVhdKeyword);
+            startMachineLogInspectionScheduler(runtime, logger);
 
             runtime.writeAudit(req, {
                 type: 'init.complete',
@@ -749,6 +798,128 @@ async function createApp(options = {}) {
     app.post('/api/settings/default-vhd', requireAuth, updateDefaultVhdHandler);
     app.post('/api/set-vhd', requireAuth, updateDefaultVhdHandler);
 
+    app.get('/api/settings/log-retention', requireAuth, requireDatabase, asyncHandler(async (req, res) => {
+        const settings = await runtime.database.getMachineLogRuntimeSettings();
+        res.json({
+            success: true,
+            defaultRetentionActiveDays: settings.defaultRetentionActiveDays,
+            dailyInspectionHour: settings.dailyInspectionHour,
+            dailyInspectionMinute: settings.dailyInspectionMinute,
+            timezone: settings.timezone,
+            lastInspectionAt: settings.lastInspectionAt,
+        });
+    }));
+
+    app.post('/api/settings/log-retention', requireAuth, requireDatabase, asyncHandler(async (req, res) => {
+        const defaultRetentionActiveDays = assertOptionalPositiveInteger(
+            req.body?.defaultRetentionActiveDays,
+            'defaultRetentionActiveDays',
+            3650,
+        );
+        const dailyInspectionHour = parseBoundedInteger(
+            req.body?.dailyInspectionHour,
+            'dailyInspectionHour',
+            0,
+            23,
+            3,
+        );
+        const dailyInspectionMinute = parseBoundedInteger(
+            req.body?.dailyInspectionMinute,
+            'dailyInspectionMinute',
+            0,
+            59,
+            0,
+        );
+        const timezone = req.body?.timezone
+            ? assertMachineLogTimeZone(assertString(req.body.timezone, 'timezone', 1, 128), 'timezone')
+            : 'UTC';
+
+        const settings = await runtime.database.updateMachineLogRuntimeSettings({
+            ...(defaultRetentionActiveDays == null ? {} : { defaultRetentionActiveDays }),
+            dailyInspectionHour,
+            dailyInspectionMinute,
+            timezone,
+        }, 'admin');
+
+        runtime.writeAudit(req, {
+            type: 'settings.machine-log-retention.update',
+            actor: 'admin',
+            result: 'success',
+            defaultRetentionActiveDays: settings.defaultRetentionActiveDays,
+            dailyInspectionHour: settings.dailyInspectionHour,
+            dailyInspectionMinute: settings.dailyInspectionMinute,
+            timezone: settings.timezone,
+        });
+
+        startMachineLogInspectionScheduler(runtime, logger);
+
+        res.json({
+            success: true,
+            defaultRetentionActiveDays: settings.defaultRetentionActiveDays,
+            dailyInspectionHour: settings.dailyInspectionHour,
+            dailyInspectionMinute: settings.dailyInspectionMinute,
+            timezone: settings.timezone,
+            lastInspectionAt: settings.lastInspectionAt,
+        });
+    }));
+
+    app.get('/api/machine-log-sessions', requireAuth, requireDatabase, asyncHandler(async (req, res) => {
+        const machineId = req.query.machineId ? assertMachineId(req.query.machineId) : undefined;
+        const from = req.query.from ? assertOptionalIsoDate(req.query.from, 'from') : undefined;
+        const to = req.query.to ? assertOptionalIsoDate(req.query.to, 'to') : undefined;
+        const limit = parsePositiveInteger(req.query.limit, 50, 200);
+        const sessions = await runtime.database.getMachineLogSessions({ machineId, from, to, limit });
+        res.json({
+            success: true,
+            sessions,
+            count: sessions.length,
+        });
+    }));
+
+    app.get('/api/machine-logs', requireAuth, requireDatabase, asyncHandler(async (req, res) => {
+        const filters = buildMachineLogQueryFilters(req);
+        const page = await runtime.database.getMachineLogs(filters);
+        res.json({
+            success: true,
+            entries: page.entries,
+            nextCursor: page.nextCursor,
+            hasMore: page.hasMore,
+            count: page.entries.length,
+        });
+    }));
+
+    app.get('/api/machine-logs/export', requireAuth, requireOtpStepUp, requireDatabase, asyncHandler(async (req, res) => {
+        const filters = buildMachineLogQueryFilters(req);
+        const format = req.query.format ? assertString(req.query.format, 'format', 1, 16).toLowerCase() : 'text';
+        if (!['text', 'json'].includes(format)) {
+            throw createJsonError(400, 'format 仅支持 text 或 json');
+        }
+
+        const page = await runtime.database.exportMachineLogs({
+            ...filters,
+            limit: parsePositiveInteger(req.query.limit, 5000, 10000),
+        });
+
+        runtime.writeAudit(req, {
+            type: 'machine.log.export',
+            actor: 'admin',
+            result: 'success',
+            machineId: filters.machineId,
+            sessionId: filters.sessionId,
+            format,
+            count: page.entries.length,
+        });
+
+        if (format === 'json') {
+            res.setHeader('Content-Type', 'application/json; charset=utf-8');
+            res.send(JSON.stringify({ entries: page.entries }, null, 2));
+            return;
+        }
+
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.send(buildMachineLogTextExport(page.entries));
+    }));
+
     app.get('/api/boot-image-select', requireInitialized, requireDatabase, asyncHandler(async (req, res) => {
         const machineId = assertMachineId(req.query.machineId);
         const defaultVhdKeyword = serviceSettingsStore.getDefaultVhdKeyword();
@@ -876,6 +1047,35 @@ async function createApp(options = {}) {
         res.json({
             success: true,
             machine,
+        });
+    }));
+
+    app.post('/api/machines/:machineId/log-retention', requireAuth, requireDatabase, asyncHandler(async (req, res) => {
+        const machineId = assertMachineId(req.params.machineId);
+        const retentionActiveDaysOverride = req.body?.retentionActiveDaysOverride == null
+            ? null
+            : assertOptionalPositiveInteger(req.body.retentionActiveDaysOverride, 'retentionActiveDaysOverride', 3650);
+
+        const machine = await runtime.database.updateMachineLogRetentionOverride(
+            machineId,
+            retentionActiveDaysOverride,
+        );
+        if (!machine) {
+            throw createJsonError(404, '机台不存在');
+        }
+
+        runtime.writeAudit(req, {
+            type: 'machine.log-retention.update',
+            actor: 'admin',
+            result: 'success',
+            machineId,
+            retentionActiveDaysOverride,
+        });
+
+        res.json({
+            success: true,
+            machine,
+            retentionActiveDaysOverride: machine.log_retention_active_days_override,
         });
     }));
 
@@ -1113,6 +1313,9 @@ async function createApp(options = {}) {
             throw createJsonError(404, '机台未配置 EVHD 密码');
         }
 
+        const bootstrap = createMachineLogBootstrap(machineId, machine.pubkey_pem, encryptWithPublicKeyRSA);
+        runtime.machineLogBootstrapCache.set(bootstrap.bootstrapId, bootstrap);
+
         const ciphertext = encryptWithPublicKeyRSA(machine.pubkey_pem, evhdPassword);
         runtime.writeAudit(req, {
             type: 'machine.evhd-envelope.read',
@@ -1130,6 +1333,9 @@ async function createApp(options = {}) {
             keyId: machine.key_id,
             keyType: machine.key_type,
             ciphertext,
+            logChannelBootstrapId: bootstrap.bootstrapId,
+            logChannelBootstrapCiphertext: bootstrap.bootstrapCiphertext,
+            logChannelBootstrapExpiresAt: bootstrap.expiresAt,
         });
     }));
 
@@ -1243,29 +1449,22 @@ async function createApp(options = {}) {
         });
     }));
 
-    function buildStatusPayload(status) {
+    function buildPublicStatusPayload(status) {
         return {
             success: true,
             status,
-            version: APP_VERSION,
             initialized: runtime.initialized,
+            pendingInitialization: !runtime.initialized && !!securityStore.getPendingInitialization(),
             databaseReady: !!runtime.database,
-            databaseError: runtime.databaseError ? runtime.databaseError.message : null,
-            defaultVhdKeyword: serviceSettingsStore.getDefaultVhdKeyword(),
-            trustedRegistrationCertificateCount: runtime.initialized
-                ? (runtime.securityConfig?.trustedRegistrationCertificates || []).length
-                : 0,
-            uptime: process.uptime(),
-            timestamp: new Date().toISOString(),
         };
     }
 
     app.get('/api/health', (req, res) => {
-        res.json(buildStatusPayload('ok'));
+        res.json(buildPublicStatusPayload('ok'));
     });
 
     app.get('/api/status', (req, res) => {
-        res.json(buildStatusPayload('running'));
+        res.json(buildPublicStatusPayload('running'));
     });
 
     app.get('/', (req, res) => {
@@ -1319,10 +1518,17 @@ async function startServer(options = {}) {
     const { app, runtime } = await createApp(options);
     const port = Number(options.port || DEFAULT_PORT);
 
-    const server = await new Promise((resolve, reject) => {
-        const instance = app.listen(port, () => resolve(instance));
-        instance.on('error', reject);
+    const server = http.createServer(app);
+    attachMachineLogWebSocketServer({ server, runtime, logger });
+
+    await new Promise((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(port, () => resolve());
     });
+
+    if (runtime.initialized && runtime.database) {
+        startMachineLogInspectionScheduler(runtime, logger);
+    }
 
     logger.log('='.repeat(60));
     logger.log('VHD Select Server 已启动');
@@ -1333,6 +1539,8 @@ async function startServer(options = {}) {
 
     async function closeServer(signal) {
         logger.log(`${signal} received, shutting down...`);
+
+        stopMachineLogInspectionScheduler(runtime);
 
         await new Promise((resolve) => {
             server.close(() => resolve());

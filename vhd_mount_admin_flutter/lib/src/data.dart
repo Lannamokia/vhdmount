@@ -559,6 +559,7 @@ class MachineRecord {
     required this.keyId,
     required this.keyType,
     required this.registrationCertFingerprint,
+    required this.logRetentionActiveDaysOverride,
     required this.lastSeen,
   });
 
@@ -571,6 +572,7 @@ class MachineRecord {
   final String? keyId;
   final String? keyType;
   final String? registrationCertFingerprint;
+  final int? logRetentionActiveDaysOverride;
   final String? lastSeen;
 
   factory MachineRecord.fromJson(Map<String, dynamic> json) {
@@ -585,6 +587,8 @@ class MachineRecord {
       keyType: json['key_type'] as String?,
       registrationCertFingerprint:
           json['registration_cert_fingerprint'] as String?,
+      logRetentionActiveDaysOverride:
+          (json['log_retention_active_days_override'] as num?)?.toInt(),
       lastSeen: json['last_seen'] as String?,
     );
   }
@@ -700,6 +704,238 @@ class AuditEntry {
   }
 }
 
+class LogRetentionSettings {
+  const LogRetentionSettings({
+    required this.defaultRetentionActiveDays,
+    required this.dailyInspectionHour,
+    required this.dailyInspectionMinute,
+    required this.timezone,
+    required this.lastInspectionAt,
+  });
+
+  final int defaultRetentionActiveDays;
+  final int dailyInspectionHour;
+  final int dailyInspectionMinute;
+  final String timezone;
+  final String? lastInspectionAt;
+
+  factory LogRetentionSettings.fromJson(Map<String, dynamic> json) {
+    return LogRetentionSettings(
+      defaultRetentionActiveDays:
+          (json['defaultRetentionActiveDays'] as num?)?.toInt() ?? 7,
+      dailyInspectionHour:
+          (json['dailyInspectionHour'] as num?)?.toInt() ?? 3,
+      dailyInspectionMinute:
+          (json['dailyInspectionMinute'] as num?)?.toInt() ?? 0,
+      timezone: (json['timezone'] as String?) ?? 'UTC',
+      lastInspectionAt: json['lastInspectionAt'] as String?,
+    );
+  }
+
+  String get inspectionScheduleLabel =>
+      '${dailyInspectionHour.toString().padLeft(2, '0')}:${dailyInspectionMinute.toString().padLeft(2, '0')}';
+
+  String get localizedLastInspectionAt {
+    final value = lastInspectionAt;
+    if (value == null || value.isEmpty) {
+      return '尚未执行';
+    }
+    return formatAuditTimestamp(value);
+  }
+}
+
+class MachineLogSession {
+  const MachineLogSession({
+    required this.machineId,
+    required this.sessionId,
+    required this.appVersion,
+    required this.osVersion,
+    required this.startedAt,
+    required this.lastUploadAt,
+    required this.lastEventAt,
+    required this.totalCount,
+    required this.warnCount,
+    required this.errorCount,
+    required this.lastLevel,
+    required this.lastComponent,
+  });
+
+  final String machineId;
+  final String sessionId;
+  final String? appVersion;
+  final String? osVersion;
+  final String? startedAt;
+  final String? lastUploadAt;
+  final String? lastEventAt;
+  final int totalCount;
+  final int warnCount;
+  final int errorCount;
+  final String? lastLevel;
+  final String? lastComponent;
+
+  factory MachineLogSession.fromJson(Map<String, dynamic> json) {
+    return MachineLogSession(
+      machineId: (json['machine_id'] as String?) ?? '',
+      sessionId: (json['session_id'] as String?) ?? '',
+      appVersion: json['app_version'] as String?,
+      osVersion: json['os_version'] as String?,
+      startedAt: json['started_at'] as String?,
+      lastUploadAt: json['last_upload_at'] as String?,
+      lastEventAt: json['last_event_at'] as String?,
+      totalCount: (json['total_count'] as num?)?.toInt() ?? 0,
+      warnCount: (json['warn_count'] as num?)?.toInt() ?? 0,
+      errorCount: (json['error_count'] as num?)?.toInt() ?? 0,
+      lastLevel: json['last_level'] as String?,
+      lastComponent: json['last_component'] as String?,
+    );
+  }
+
+  String get localizedStartedAt =>
+      startedAt == null || startedAt!.isEmpty
+      ? '未知时间'
+      : formatAuditTimestamp(startedAt!);
+
+  String get localizedLastEventAt =>
+      lastEventAt == null || lastEventAt!.isEmpty
+      ? '未知时间'
+      : formatAuditTimestamp(lastEventAt!);
+}
+
+class MachineLogEntry {
+  const MachineLogEntry({
+    required this.id,
+    required this.machineId,
+    required this.sessionId,
+    required this.seq,
+    required this.occurredAt,
+    required this.logDay,
+    required this.receivedAt,
+    required this.level,
+    required this.component,
+    required this.eventKey,
+    required this.message,
+    required this.rawText,
+    required this.metadata,
+    required this.uploadRequestId,
+  });
+
+  final int id;
+  final String machineId;
+  final String sessionId;
+  final int seq;
+  final String occurredAt;
+  final String? logDay;
+  final String? receivedAt;
+  final String level;
+  final String component;
+  final String eventKey;
+  final String message;
+  final String rawText;
+  final Map<String, dynamic> metadata;
+  final String? uploadRequestId;
+
+  factory MachineLogEntry.fromJson(Map<String, dynamic> json) {
+    final rawMetadata = json['metadata_json'] ?? json['metadata'];
+    return MachineLogEntry(
+      id: (json['id'] as num?)?.toInt() ?? 0,
+      machineId: (json['machine_id'] as String?) ?? '',
+      sessionId: (json['session_id'] as String?) ?? '',
+      seq: (json['seq'] as num?)?.toInt() ?? 0,
+      occurredAt: (json['occurred_at'] as String?) ?? '',
+      logDay: json['log_day'] as String?,
+      receivedAt: json['received_at'] as String?,
+      level: (json['level'] as String?) ?? 'info',
+      component: (json['component'] as String?) ?? 'Program',
+      eventKey:
+          (json['event_key'] as String?) ??
+          (json['eventKey'] as String?) ??
+          'TRACE_LINE',
+      message: (json['message'] as String?) ?? '',
+      rawText:
+          (json['raw_text'] as String?) ??
+          (json['rawText'] as String?) ??
+          '',
+      metadata: rawMetadata is Map<String, dynamic>
+          ? rawMetadata
+          : rawMetadata is Map
+          ? Map<String, dynamic>.from(rawMetadata)
+          : <String, dynamic>{},
+      uploadRequestId: json['upload_request_id'] as String?,
+    );
+  }
+
+  String get localizedOccurredAt =>
+      occurredAt.isEmpty ? '未知时间' : formatAuditTimestamp(occurredAt);
+}
+
+class MachineLogPage {
+  const MachineLogPage({
+    required this.entries,
+    required this.nextCursor,
+    required this.hasMore,
+  });
+
+  final List<MachineLogEntry> entries;
+  final String? nextCursor;
+  final bool hasMore;
+
+  factory MachineLogPage.fromJson(Map<String, dynamic> json) {
+    return MachineLogPage(
+      entries: (json['entries'] as List<dynamic>? ?? <dynamic>[])
+          .whereType<Map<String, dynamic>>()
+          .map(MachineLogEntry.fromJson)
+          .toList(),
+      nextCursor: json['nextCursor'] as String?,
+      hasMore: json['hasMore'] == true,
+    );
+  }
+}
+
+class MachineLogFilter {
+  const MachineLogFilter({
+    this.machineId,
+    this.sessionId,
+    this.level,
+    this.component,
+    this.eventKey,
+    this.query,
+    this.from,
+    this.to,
+    this.cursor,
+    this.limit = 100,
+  });
+
+  final String? machineId;
+  final String? sessionId;
+  final String? level;
+  final String? component;
+  final String? eventKey;
+  final String? query;
+  final String? from;
+  final String? to;
+  final String? cursor;
+  final int limit;
+
+  Map<String, String> toQueryParameters() {
+    return <String, String>{
+      if (machineId != null && machineId!.trim().isNotEmpty)
+        'machineId': machineId!.trim(),
+      if (sessionId != null && sessionId!.trim().isNotEmpty)
+        'sessionId': sessionId!.trim(),
+      if (level != null && level!.trim().isNotEmpty) 'level': level!.trim(),
+      if (component != null && component!.trim().isNotEmpty)
+        'component': component!.trim(),
+      if (eventKey != null && eventKey!.trim().isNotEmpty)
+        'eventKey': eventKey!.trim().toUpperCase(),
+      if (query != null && query!.trim().isNotEmpty) 'q': query!.trim(),
+      if (from != null && from!.trim().isNotEmpty) 'from': from!.trim(),
+      if (to != null && to!.trim().isNotEmpty) 'to': to!.trim(),
+      if (cursor != null && cursor!.trim().isNotEmpty) 'cursor': cursor!.trim(),
+      'limit': limit.toString(),
+    };
+  }
+}
+
 List<String> buildAuditMachineOptions(
   Iterable<MachineRecord> machines,
   Iterable<AuditEntry> entries,
@@ -789,6 +1025,34 @@ abstract class AdminApi {
 
   Future<List<AuditEntry>> getAuditEntries({String? machineId});
 
+  Future<LogRetentionSettings> getLogRetentionSettings();
+
+  Future<LogRetentionSettings> updateLogRetentionSettings({
+    required int defaultRetentionActiveDays,
+    required int dailyInspectionHour,
+    required int dailyInspectionMinute,
+    required String timezone,
+  });
+
+  Future<void> setMachineLogRetentionOverride(
+    String machineId,
+    int? retentionActiveDaysOverride,
+  );
+
+  Future<List<MachineLogSession>> getMachineLogSessions({
+    String? machineId,
+    String? from,
+    String? to,
+    int limit = 50,
+  });
+
+  Future<MachineLogPage> getMachineLogs(MachineLogFilter filter);
+
+  Future<String> exportMachineLogs(
+    MachineLogFilter filter, {
+    String format = 'text',
+  });
+
   Future<void> updateDefaultVhd(String vhdKeyword);
 
   Future<void> changePassword(String currentPassword, String newPassword);
@@ -855,6 +1119,14 @@ class HttpAdminApi implements AdminApi {
     return _withTimeout(_requestJsonInternal(method, path, body: body));
   }
 
+  Future<String> _requestText(
+    String method,
+    String path, {
+    Object? body,
+  }) async {
+    return _withTimeout(_requestTextInternal(method, path, body: body));
+  }
+
   Future<Map<String, dynamic>> _requestJsonInternal(
     String method,
     String path, {
@@ -882,6 +1154,51 @@ class HttpAdminApi implements AdminApi {
         return decoded;
       }
       return <String, dynamic>{'data': decoded};
+    }
+
+    Map<String, dynamic> errorJson = <String, dynamic>{};
+    if (text.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(text);
+        if (decoded is Map<String, dynamic>) {
+          errorJson = decoded;
+        }
+      } catch (_) {
+        errorJson = <String, dynamic>{'error': text};
+      }
+    }
+
+    throw AdminApiException(
+      (errorJson['error'] as String?) ??
+          (errorJson['message'] as String?) ??
+          '请求失败: ${response.statusCode}',
+      statusCode: response.statusCode,
+      requireAuth: errorJson['requireAuth'] == true,
+      requireOtp: errorJson['requireOtp'] == true,
+      initializeRequired: errorJson['initializeRequired'] == true,
+    );
+  }
+
+  Future<String> _requestTextInternal(
+    String method,
+    String path, {
+    Object? body,
+  }) async {
+    final request = await _client.openUrl(method, _resolve(path));
+    request.headers.set(HttpHeaders.acceptHeader, '*/*');
+    _applyCookies(request);
+
+    if (body != null) {
+      request.headers.contentType = ContentType.json;
+      request.write(jsonEncode(body));
+    }
+
+    final response = await request.close();
+    _storeCookies(response);
+    final text = await response.transform(utf8.decoder).join();
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return text;
     }
 
     Map<String, dynamic> errorJson = <String, dynamic>{};
@@ -1167,6 +1484,91 @@ class HttpAdminApi implements AdminApi {
         .whereType<Map<String, dynamic>>()
         .map(AuditEntry.fromJson)
         .toList();
+  }
+
+  @override
+  Future<LogRetentionSettings> getLogRetentionSettings() async {
+    final json = await _requestJson('GET', '/api/settings/log-retention');
+    return LogRetentionSettings.fromJson(json);
+  }
+
+  @override
+  Future<LogRetentionSettings> updateLogRetentionSettings({
+    required int defaultRetentionActiveDays,
+    required int dailyInspectionHour,
+    required int dailyInspectionMinute,
+    required String timezone,
+  }) async {
+    final json = await _requestJson(
+      'POST',
+      '/api/settings/log-retention',
+      body: <String, dynamic>{
+        'defaultRetentionActiveDays': defaultRetentionActiveDays,
+        'dailyInspectionHour': dailyInspectionHour,
+        'dailyInspectionMinute': dailyInspectionMinute,
+        'timezone': timezone,
+      },
+    );
+    return LogRetentionSettings.fromJson(json);
+  }
+
+  @override
+  Future<void> setMachineLogRetentionOverride(
+    String machineId,
+    int? retentionActiveDaysOverride,
+  ) async {
+    await _requestJson(
+      'POST',
+      '/api/machines/${encodePathSegment(machineId)}/log-retention',
+      body: <String, dynamic>{
+        'retentionActiveDaysOverride': retentionActiveDaysOverride,
+      },
+    );
+  }
+
+  @override
+  Future<List<MachineLogSession>> getMachineLogSessions({
+    String? machineId,
+    String? from,
+    String? to,
+    int limit = 50,
+  }) async {
+    final queryParameters = <String, String>{'limit': limit.toString()};
+    if (machineId != null && machineId.trim().isNotEmpty) {
+      queryParameters['machineId'] = machineId.trim();
+    }
+    if (from != null && from.trim().isNotEmpty) {
+      queryParameters['from'] = from.trim();
+    }
+    if (to != null && to.trim().isNotEmpty) {
+      queryParameters['to'] = to.trim();
+    }
+
+    final json = await _requestJson(
+      'GET',
+      '/api/machine-log-sessions?${Uri(queryParameters: queryParameters).query}',
+    );
+    return (json['sessions'] as List<dynamic>? ?? <dynamic>[])
+        .whereType<Map<String, dynamic>>()
+        .map(MachineLogSession.fromJson)
+        .toList();
+  }
+
+  @override
+  Future<MachineLogPage> getMachineLogs(MachineLogFilter filter) async {
+    final query = Uri(queryParameters: filter.toQueryParameters()).query;
+    final json = await _requestJson('GET', '/api/machine-logs?$query');
+    return MachineLogPage.fromJson(json);
+  }
+
+  @override
+  Future<String> exportMachineLogs(
+    MachineLogFilter filter, {
+    String format = 'text',
+  }) async {
+    final queryParameters = filter.toQueryParameters()..['format'] = format;
+    final query = Uri(queryParameters: queryParameters).query;
+    return _requestText('GET', '/api/machine-logs/export?$query');
   }
 
   @override

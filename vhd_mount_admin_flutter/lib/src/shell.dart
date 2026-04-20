@@ -280,12 +280,20 @@ class _AdminRootState extends State<AdminRoot> {
               });
               if (index == 0) {
                 await controller.loadMachines();
-              } else if (index == 1 && controller.otpVerified) {
+              } else if (index == 1) {
+                await controller.loadMachineLogSessions(
+                  machineId: controller.machineLogSelectedMachineId,
+                  from: controller.machineLogFrom,
+                  to: controller.machineLogTo,
+                );
+              } else if (index == 2 && controller.otpVerified) {
                 await controller.loadCertificates();
-              } else if (index == 2) {
+              } else if (index == 3) {
                 await controller.loadAudit(
                   machineId: controller.auditFilterMachineId,
                 );
+              } else if (index == 4) {
+                await controller.loadLogRetentionSettings();
               }
             },
           );
@@ -389,7 +397,7 @@ class ServerAddressField extends StatelessWidget {
       controller: controller,
       decoration: InputDecoration(
         labelText: '服务器地址',
-        hintText: '例如 http://localhost:8080',
+        hintText: serverAddressInputHint(),
         prefixIcon: const Icon(Icons.link_rounded),
         helperText: rememberedBaseUrls.isEmpty ? null : '可从右侧历史中选择已登录过的服务端地址',
         suffixIcon: rememberedBaseUrls.isEmpty
@@ -449,9 +457,9 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
   @override
   Widget build(BuildContext context) {
     return AuthShell(
-      eyebrow: 'Flutter 桌面入口',
+      eyebrow: 'Flutter 管理入口',
       title: '连接你的 VHD 服务',
-      subtitle: '旧 Web 管理页已经下线，现在用更轻快的桌面控制台来完成初始化、登录与运维操作。',
+      subtitle: '旧 Web 管理页已经下线，现在用统一的 Flutter 管理客户端来完成初始化、登录与运维操作。',
       heroIcon: Icons.hub_rounded,
       spotlight: OverviewStatCard(
         label: '最近地址',
@@ -493,7 +501,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
           ),
           const SizedBox(height: 14),
           Text(
-            '提示：如果你在本机联调，默认地址通常是 http://localhost:8080。',
+            serverAddressConnectionTip(),
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ],
@@ -992,7 +1000,7 @@ class _LoginScreenState extends State<LoginScreen> {
             : AppPalette.sun,
         caption: serverStatus == null
             ? '先确认服务可达，再输入管理员密码。'
-            : '默认关键词 ${serverStatus.defaultVhdKeyword} · 可信证书 ${serverStatus.trustedRegistrationCertificateCount}',
+          : '服务已完成初始化，登录后再加载默认关键词和证书等管理详情。',
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

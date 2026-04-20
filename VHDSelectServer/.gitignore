@@ -7,9 +7,13 @@ package-lock.json
 
 # 运行时生成的配置文件
 vhd-config.json
+server-security.json
+server-initialized.lock
+server-pending-init.json
 
 # 日志文件
 *.log
+server-audit.log*
 logs/
 
 # 环境变量文件
