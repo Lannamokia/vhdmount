@@ -170,7 +170,7 @@ vhdmount/
 │   └── MainWindow.xaml.cs        # 打包与注册证书逻辑
 ├── vhd_mount_admin_flutter/      # Flutter 管理客户端（Windows）
 ├── VHDMounter.csproj             # .NET 8 WPF 客户端
-├── single/                       # 打包输出（VHDMounter.exe、Updater.exe、VHDMountAdminTools.exe）
+├── single/                       # 打包输出（VHDMounter.exe、VHDMounter_Maimoller.exe、Updater.exe、VHDMountAdminTools.exe）
 └── .github/workflows/build.yml   # CI 构建与发布
 ```
 
@@ -220,6 +220,9 @@ npm start
 # 从 Release 下载并右键“以管理员身份运行”
 VHDMounter.exe
 
+# Maimoller 增强版主程序
+VHDMounter_Maimoller.exe
+
 # 或从源码发布
 dotnet publish VHDMounter.csproj \
   --configuration Release \
@@ -230,6 +233,21 @@ dotnet publish VHDMounter.csproj \
   -p:IncludeNativeLibrariesForSelfExtract=true \
   -p:EnableCompressionInSingleFile=true \
   -p:PublishTrimmed=false
+
+# 发布 Maimoller 增强版
+dotnet publish VHDMounter.csproj \
+  --configuration Release \
+  --runtime win-x64 \
+  --self-contained true \
+  --output ./publish/win-x64-maimoller \
+  -p:EnableHidMenuFeatures=true \
+  -p:PublishSingleFile=true \
+  -p:IncludeNativeLibrariesForSelfExtract=true \
+  -p:EnableCompressionInSingleFile=true \
+  -p:PublishTrimmed=false
+
+# 或直接运行本地脚本，一次生成两个版本到 single/
+scripts\build.bat
 ```
 
 新的管理入口：

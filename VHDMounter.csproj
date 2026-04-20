@@ -30,6 +30,7 @@
 
   <ItemGroup Condition="'$(EnableHidMenuFeatures)' == 'true'">
     <PackageReference Include="HidSharp" Version="2.1.0" />
+    <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.3" />
     <PackageReference Include="Vortice.DXGI" Version="3.6.2" />
   </ItemGroup>
@@ -37,7 +38,9 @@
   <ItemGroup>
     <Compile Remove="Program.cs" />
     <Compile Remove="VHDManager.cs" />
+    <Compile Remove="VHDMounter.Tests\**\*.cs" />
     <Compile Remove="Updater\**\*.cs" />
+    <None Include="VHDMounter.Tests\**\*.cs" />
     <None Include="Updater\**\*.cs" />
   </ItemGroup>
 
@@ -58,10 +61,14 @@
   </ItemGroup>
 
   <ItemGroup Condition="'$(EnableHidMenuFeatures)' != 'true'">
+    <Compile Remove="src\VHDMounter\AudioEndpointService.cs" />
     <Compile Remove="src\VHDMounter\MainWindow.HidMenuFeatures.cs" />
+    <Compile Remove="src\VHDMounter\MainWindow.SystemSettingsFeatures.cs" />
     <Compile Remove="src\VHDMounter\MaimollerInputModels.cs" />
     <Compile Remove="src\VHDMounter\MaimollerInputService.cs" />
     <Compile Remove="src\VHDMounter\NativeMethods.cs" />
+    <Compile Remove="src\VHDMounter\NetworkConfigurationModels.cs" />
+    <Compile Remove="src\VHDMounter\NetworkConfigurationService.cs" />
     <Compile Remove="src\VHDMounter\SystemInfoModels.cs" />
     <Compile Remove="src\VHDMounter\SystemInfoService.cs" />
     <Compile Remove="src\VHDMounter\SystemMenuModels.cs" />

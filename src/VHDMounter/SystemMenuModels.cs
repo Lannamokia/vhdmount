@@ -9,6 +9,13 @@ namespace VHDMounter
         ConfirmRestart,
         ConfirmShutdown,
         SystemInfo,
+        SystemSettingsHome,
+        NetworkAdapterSelect,
+        NetworkModeSelect,
+        NetworkDhcpConfirm,
+        NetworkIpv4Edit,
+        NetworkDiscardConfirm,
+        AudioSettings,
     }
 
     internal enum ServiceMenuItemKind
@@ -16,6 +23,19 @@ namespace VHDMounter
         RestartSystem = 0,
         ShutdownSystem,
         SystemInfo,
+        SystemSettings,
+    }
+
+    internal enum SystemSettingsItemKind
+    {
+        NetworkSettings = 0,
+        AudioSettings,
+    }
+
+    internal enum NetworkModeOptionKind
+    {
+        Dhcp = 0,
+        StaticIpv4,
     }
 
     internal sealed class ServiceMenuItem
@@ -51,6 +71,38 @@ namespace VHDMounter
         public string Detail { get; }
 
         public bool IsSelected { get; }
+    }
+
+    internal sealed class SystemSettingsItem
+    {
+        public SystemSettingsItem(SystemSettingsItemKind kind, string title, string description)
+        {
+            Kind = kind;
+            Title = title ?? string.Empty;
+            Description = description ?? string.Empty;
+        }
+
+        public SystemSettingsItemKind Kind { get; }
+
+        public string Title { get; }
+
+        public string Description { get; }
+    }
+
+    internal sealed class NetworkModeOption
+    {
+        public NetworkModeOption(NetworkModeOptionKind kind, string title, string description)
+        {
+            Kind = kind;
+            Title = title ?? string.Empty;
+            Description = description ?? string.Empty;
+        }
+
+        public NetworkModeOptionKind Kind { get; }
+
+        public string Title { get; }
+
+        public string Description { get; }
     }
 
     internal sealed class SystemInfoPage

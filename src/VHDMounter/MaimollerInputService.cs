@@ -19,8 +19,10 @@ namespace VHDMounter
         private bool disposed;
         private bool isMenuOpen;
         private bool ignoreMenuOpenRequests;
+        private MaimollerInputRoutingMode inputMode;
 
         public event EventHandler<MaimollerActionEventArgs> ActionRaised;
+        public event EventHandler<MaimollerRawInputEventArgs> RawInputRaised;
 
         public bool IsMenuOpen
         {
@@ -54,6 +56,30 @@ namespace VHDMounter
                 lock (stateSync)
                 {
                     ignoreMenuOpenRequests = value;
+                }
+            }
+        }
+
+        public MaimollerInputRoutingMode InputMode
+        {
+            get
+            {
+                lock (stateSync)
+                {
+                    return inputMode;
+                }
+            }
+            set
+            {
+                lock (stateSync)
+                {
+                    if (inputMode == value)
+                    {
+                        return;
+                    }
+
+                    inputMode = value;
+                    ResetCoinState();
                 }
             }
         }
@@ -213,6 +239,26 @@ namespace VHDMounter
 
         private void ProcessSnapshot(MaimollerInputSnapshot snapshot)
         {
+            var currentInputMode = InputMode;
+            if (currentInputMode == MaimollerInputRoutingMode.NetworkIpv4Edit)
+            {
+                ProcessNetworkIpv4EditorSnapshot(snapshot);
+            }
+            else
+            {
+                ProcessNavigationSnapshot(snapshot);
+            }
+
+            previousSnapshot = snapshot;
+        }
+
+        internal void ProcessSnapshotForTesting(MaimollerInputSnapshot snapshot)
+        {
+            ProcessSnapshot(snapshot);
+        }
+
+        private void ProcessNavigationSnapshot(MaimollerInputSnapshot snapshot)
+        {
             var newPressMask = (byte)(snapshot.ButtonMask & ~previousSnapshot.ButtonMask);
             if ((newPressMask & (1 << 5)) != 0)
             {
@@ -235,15 +281,40 @@ namespace VHDMounter
             }
 
             HandleCoinHold(snapshot);
-            previousSnapshot = snapshot;
+        }
+
+        private void ProcessNetworkIpv4EditorSnapshot(MaimollerInputSnapshot snapshot)
+        {
+            // maimoller_hid.md: payload[5] bit 0-7 = Button 1-8, payload[6] bit1 = Service, bit2 = Test.
+            var newButtonPressMask = (byte)(snapshot.ButtonMask & ~previousSnapshot.ButtonMask);
+            for (var buttonNumber = 1; buttonNumber <= 8; buttonNumber++)
+            {
+                var bitMask = 1 << (buttonNumber - 1);
+                if ((newButtonPressMask & bitMask) != 0)
+                {
+                    RaiseDigit(buttonNumber, $"Button{buttonNumber}");
+                }
+            }
+
+            var newSystemPressMask = (byte)(snapshot.SystemMask & ~previousSnapshot.SystemMask);
+            if ((newSystemPressMask & (byte)MaimollerSystemButton.Test) != 0)
+            {
+                RaiseDigit(9, "Test");
+            }
+
+            if ((newSystemPressMask & (byte)MaimollerSystemButton.Service) != 0)
+            {
+                RaiseDigit(0, "Service");
+            }
+
+            HandleNetworkEditorCoin(snapshot);
         }
 
         private void HandleCoinHold(MaimollerInputSnapshot snapshot)
         {
             if (!snapshot.IsSystemPressed(MaimollerSystemButton.Coin))
             {
-                coinHoldStartTimestamp = null;
-                coinHoldConsumed = false;
+                ResetCoinState();
                 return;
             }
 
@@ -269,9 +340,42 @@ namespace VHDMounter
             RaiseAction(UiInputAction.OpenServiceMenu, "CoinHold15s");
         }
 
+        private void HandleNetworkEditorCoin(MaimollerInputSnapshot snapshot)
+        {
+            var isCoinPressed = snapshot.IsSystemPressed(MaimollerSystemButton.Coin);
+            if (!isCoinPressed)
+            {
+                if (coinHoldStartTimestamp.HasValue)
+                {
+                    var elapsedMilliseconds = (Stopwatch.GetTimestamp() - coinHoldStartTimestamp.Value) * 1000d / Stopwatch.Frequency;
+                    if (elapsedMilliseconds >= MaimollerConstants.NetworkEditorCoinHoldMilliseconds)
+                    {
+                        RaiseRawInput(MaimollerRawInputKind.CoinLongPressConfirm, "CoinHold1s");
+                    }
+                    else
+                    {
+                        RaiseRawInput(MaimollerRawInputKind.CoinShortPress, "CoinShort");
+                    }
+                }
+
+                ResetCoinState();
+                return;
+            }
+
+            if (!coinHoldStartTimestamp.HasValue)
+            {
+                coinHoldStartTimestamp = Stopwatch.GetTimestamp();
+            }
+        }
+
         private void ResetState()
         {
             previousSnapshot = MaimollerInputSnapshot.Empty;
+            ResetCoinState();
+        }
+
+        private void ResetCoinState()
+        {
             coinHoldStartTimestamp = null;
             coinHoldConsumed = false;
         }
@@ -286,6 +390,24 @@ namespace VHDMounter
             catch (Exception ex)
             {
                 Trace.WriteLine($"HID_ACTION_DISPATCH_FAILED: {ex}");
+            }
+        }
+
+        private void RaiseDigit(int digit, string source)
+        {
+            RaiseRawInput(MaimollerRawInputKind.Digit, source, digit);
+        }
+
+        private void RaiseRawInput(MaimollerRawInputKind kind, string source, int? digit = null)
+        {
+            Trace.WriteLine($"HID_RAW_ACTION: Kind={kind} Digit={(digit.HasValue ? digit.Value.ToString() : "-")} Source={source}");
+            try
+            {
+                RawInputRaised?.Invoke(this, new MaimollerRawInputEventArgs(kind, source, digit));
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"HID_RAW_DISPATCH_FAILED: {ex}");
             }
         }
 

@@ -16,6 +16,7 @@ namespace VHDMounter
             new ServiceMenuItem(ServiceMenuItemKind.RestartSystem, "重启系统", "卸载当前挂载后立即重启 Windows"),
             new ServiceMenuItem(ServiceMenuItemKind.ShutdownSystem, "关闭系统", "卸载当前挂载后立即关闭 Windows"),
             new ServiceMenuItem(ServiceMenuItemKind.SystemInfo, "系统信息", "查看 CPU、内存、独显与磁盘占用情况"),
+            new ServiceMenuItem(ServiceMenuItemKind.SystemSettings, "系统设置调整", "进入网络设置和音频设置"),
         };
 
         private readonly WindowActivationService windowActivationService = new WindowActivationService();
@@ -37,9 +38,11 @@ namespace VHDMounter
 
             systemInfoService = new SystemInfoService();
             systemInfoService.SnapshotUpdated += OnSystemInfoSnapshotUpdated;
+            InitializeSystemSettingsFeatures();
 
             maimollerInputService = new MaimollerInputService();
             maimollerInputService.ActionRaised += OnMaimollerActionRaised;
+            maimollerInputService.RawInputRaised += OnMaimollerRawInputRaised;
             maimollerInputService.Start();
 
             SyncFeatureInputState();
@@ -51,6 +54,7 @@ namespace VHDMounter
             if (maimollerInputService != null)
             {
                 maimollerInputService.ActionRaised -= OnMaimollerActionRaised;
+                maimollerInputService.RawInputRaised -= OnMaimollerRawInputRaised;
                 maimollerInputService.Dispose();
                 maimollerInputService = null;
             }
@@ -61,6 +65,8 @@ namespace VHDMounter
                 systemInfoService.Dispose();
                 systemInfoService = null;
             }
+
+            DisposeSystemSettingsFeatures();
         }
 
         private void SetWindowHiddenForGame(bool hidden)
@@ -103,17 +109,17 @@ namespace VHDMounter
                 return true;
             }
 
+            if (await HandleSpecializedOverlayInputAsync(action))
+            {
+                return true;
+            }
+
             switch (currentOverlayState)
             {
                 case OverlayState.ServiceMenuHome:
-                    if (action == UiInputAction.Up)
+                    HandleLinearSelection(action, serviceMenuItems.Count, ref selectedMenuIndex);
+                    if (action == UiInputAction.Up || action == UiInputAction.Down)
                     {
-                        selectedMenuIndex = Math.Max(0, selectedMenuIndex - 1);
-                        RenderOverlay();
-                    }
-                    else if (action == UiInputAction.Down)
-                    {
-                        selectedMenuIndex = Math.Min(serviceMenuItems.Count - 1, selectedMenuIndex + 1);
                         RenderOverlay();
                     }
                     else if (action == UiInputAction.Confirm)
@@ -235,6 +241,11 @@ namespace VHDMounter
                     }
                     RenderOverlay();
                     break;
+                case ServiceMenuItemKind.SystemSettings:
+                    selectedSystemSettingsIndex = 0;
+                    currentOverlayState = OverlayState.SystemSettingsHome;
+                    RenderOverlay();
+                    break;
             }
         }
 
@@ -299,6 +310,11 @@ namespace VHDMounter
             Dispatcher.InvokeAsync(async () => await HandleInputActionAsync(e.Action));
         }
 
+        private void OnMaimollerRawInputRaised(object sender, MaimollerRawInputEventArgs e)
+        {
+            Dispatcher.InvokeAsync(async () => await HandleOverlayRawInputAsync(e));
+        }
+
         private void OnSystemInfoSnapshotUpdated(SystemInfoSnapshot snapshot)
         {
             latestSystemInfoSnapshot = snapshot ?? SystemInfoSnapshot.Empty;
@@ -319,6 +335,9 @@ namespace VHDMounter
 
             maimollerInputService.IsMenuOpen = isServiceMenuOpen;
             maimollerInputService.IgnoreMenuOpenRequests = isPowerActionPending || currentStage == UiStage.Error;
+            maimollerInputService.InputMode = isServiceMenuOpen && currentOverlayState == OverlayState.NetworkIpv4Edit
+                ? MaimollerInputRoutingMode.NetworkIpv4Edit
+                : MaimollerInputRoutingMode.Navigation;
         }
 
         private void RenderOverlay()
@@ -327,23 +346,32 @@ namespace VHDMounter
             {
                 overlayLines.Clear();
                 ServiceMenuOverlay.Visibility = System.Windows.Visibility.Collapsed;
+                SyncFeatureInputState();
                 return;
             }
 
             ServiceMenuOverlay.Visibility = System.Windows.Visibility.Visible;
             overlayLines.Clear();
+            ShowOverlayListMode();
 
             switch (currentOverlayState)
             {
                 case OverlayState.ServiceMenuHome:
                     OverlayTitleText.Text = "系统菜单";
                     OverlaySubtitleText.Text = "使用 6 / 3 切换，4 确认，5 返回关闭菜单。";
-                    OverlayPageIndicatorText.Text = string.Empty;
-                    OverlayFooterText.Text = "主窗口和后台监控阶段都可以通过 Coin 长按 15 秒重新拉起。";
-                    for (var index = 0; index < serviceMenuItems.Count; index++)
+                    var menuPageIndex = selectedMenuIndex / 2;
+                    var totalMenuPages = (int)Math.Ceiling(serviceMenuItems.Count / 2d);
+                    OverlayPageIndicatorText.Text = $"第 {menuPageIndex + 1} / {totalMenuPages} 页";
+                    OverlayFooterText.Text = menuPageIndex == 0
+                        ? "当前页 2 项，按 3 可进入下一页。"
+                        : "按 6 可返回上一页，按 4 进入当前功能。";
+                    var visibleStartIndex = menuPageIndex * 2;
+                    var visibleCount = Math.Min(2, serviceMenuItems.Count - visibleStartIndex);
+                    for (var offset = 0; offset < visibleCount; offset++)
                     {
-                        var item = serviceMenuItems[index];
-                        overlayLines.Add(new OverlayDisplayLine(item.Title, index == selectedMenuIndex ? "当前选中" : string.Empty, item.Description, index == selectedMenuIndex));
+                        var actualIndex = visibleStartIndex + offset;
+                        var item = serviceMenuItems[actualIndex];
+                        overlayLines.Add(new OverlayDisplayLine(item.Title, actualIndex == selectedMenuIndex ? "当前选中" : string.Empty, item.Description, actualIndex == selectedMenuIndex));
                     }
                     break;
                 case OverlayState.ConfirmRestart:
@@ -363,7 +391,30 @@ namespace VHDMounter
                 case OverlayState.SystemInfo:
                     RenderSystemInfoOverlay();
                     break;
+                case OverlayState.SystemSettingsHome:
+                    RenderSystemSettingsOverlay();
+                    break;
+                case OverlayState.NetworkAdapterSelect:
+                    RenderNetworkAdapterSelectOverlay();
+                    break;
+                case OverlayState.NetworkModeSelect:
+                    RenderNetworkModeSelectOverlay();
+                    break;
+                case OverlayState.NetworkDhcpConfirm:
+                    RenderNetworkDhcpConfirmOverlay();
+                    break;
+                case OverlayState.NetworkIpv4Edit:
+                    RenderNetworkIpv4EditorOverlay();
+                    break;
+                case OverlayState.NetworkDiscardConfirm:
+                    RenderNetworkDiscardConfirmOverlay();
+                    break;
+                case OverlayState.AudioSettings:
+                    RenderAudioSettingsOverlay();
+                    break;
             }
+
+            SyncFeatureInputState();
         }
 
         private void RenderSystemInfoOverlay()

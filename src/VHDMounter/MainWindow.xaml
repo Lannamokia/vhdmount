@@ -23,6 +23,41 @@
                 </DataTrigger>
             </Style.Triggers>
         </Style>
+
+        <Style x:Key="NetworkFieldCardStyle" TargetType="Border">
+            <Setter Property="Background" Value="#FFFEF7ED"/>
+            <Setter Property="BorderBrush" Value="#FFD97706"/>
+            <Setter Property="BorderThickness" Value="2"/>
+            <Setter Property="CornerRadius" Value="18"/>
+            <Setter Property="Padding" Value="20"/>
+            <Setter Property="Margin" Value="0,0,0,14"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsActive}" Value="True">
+                    <Setter Property="Background" Value="#FFDBEAFE"/>
+                    <Setter Property="BorderBrush" Value="#FF2563EB"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="NetworkSegmentBorderStyle" TargetType="Border">
+            <Setter Property="Background" Value="#FFFFFFFF"/>
+            <Setter Property="BorderBrush" Value="#FFD1D5DB"/>
+            <Setter Property="BorderThickness" Value="2"/>
+            <Setter Property="CornerRadius" Value="12"/>
+            <Setter Property="Padding" Value="14,10"/>
+            <Setter Property="Margin" Value="0"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsFieldActive}" Value="True">
+                    <Setter Property="Background" Value="#FFE0F2FE"/>
+                    <Setter Property="BorderBrush" Value="#FF0EA5E9"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsActive}" Value="True">
+                    <Setter Property="Background" Value="#FFFDE68A"/>
+                    <Setter Property="BorderBrush" Value="#FFB45309"/>
+                    <Setter Property="BorderThickness" Value="3"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
     </Window.Resources>
     
     <Grid>
@@ -149,7 +184,8 @@
                                        TextAlignment="Center"/>
                         </StackPanel>
 
-                        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                        <ScrollViewer x:Name="OverlayListScrollViewer"
+                                      VerticalScrollBarVisibility="Auto"
                                       HorizontalScrollBarVisibility="Disabled">
                             <ItemsControl x:Name="OverlayItemsControl">
                                 <ItemsControl.ItemTemplate>
@@ -182,6 +218,112 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
                         </ScrollViewer>
+
+                        <ScrollViewer x:Name="NetworkEditorPanel"
+                                      Visibility="Collapsed"
+                                      VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel>
+                                <TextBlock x:Name="NetworkEditorAdapterText"
+                                           FontSize="20"
+                                           FontWeight="SemiBold"
+                                           Foreground="#FF92400E"
+                                           TextAlignment="Center"
+                                           TextWrapping="Wrap"/>
+                                <TextBlock x:Name="NetworkEditorHintText"
+                                           Margin="0,10,0,20"
+                                           FontSize="18"
+                                           Foreground="#FF4B5563"
+                                           TextAlignment="Center"
+                                           TextWrapping="Wrap"/>
+
+                                <ItemsControl x:Name="NetworkEditorFieldsItemsControl">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Style="{StaticResource NetworkFieldCardStyle}">
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding Label}"
+                                                               FontSize="22"
+                                                               FontWeight="Bold"
+                                                               Foreground="#FF111827"/>
+
+                                                    <ItemsControl ItemsSource="{Binding Segments}"
+                                                                  Margin="0,14,0,0">
+                                                        <ItemsControl.ItemsPanel>
+                                                            <ItemsPanelTemplate>
+                                                                <StackPanel Orientation="Horizontal"/>
+                                                            </ItemsPanelTemplate>
+                                                        </ItemsControl.ItemsPanel>
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <StackPanel Orientation="Horizontal"
+                                                                            VerticalAlignment="Center">
+                                                                    <Border Style="{StaticResource NetworkSegmentBorderStyle}">
+                                                                        <TextBlock Text="{Binding Text}"
+                                                                                   FontSize="24"
+                                                                                   FontWeight="Bold"
+                                                                                   Foreground="#FF111827"
+                                                                                   TextAlignment="Center"
+                                                                                   MinWidth="70"/>
+                                                                    </Border>
+                                                                    <TextBlock Text="{Binding SeparatorText}"
+                                                                               Margin="10,0,10,0"
+                                                                               FontSize="26"
+                                                                               FontWeight="Bold"
+                                                                               Foreground="#FF4B5563"
+                                                                               VerticalAlignment="Center"/>
+                                                                </StackPanel>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </ScrollViewer>
+
+                        <StackPanel x:Name="AudioSettingsPanel"
+                                    Visibility="Collapsed"
+                                    HorizontalAlignment="Stretch"
+                                    VerticalAlignment="Center">
+                            <TextBlock Text="默认输出设备"
+                                       FontSize="18"
+                                       Foreground="#FF6B7280"
+                                       TextAlignment="Center"/>
+                            <TextBlock x:Name="AudioDeviceNameText"
+                                       Margin="0,10,0,24"
+                                       FontSize="24"
+                                       FontWeight="Bold"
+                                       Foreground="#FF111827"
+                                       TextAlignment="Center"
+                                       TextWrapping="Wrap"/>
+
+                            <TextBlock Text="当前音量"
+                                       FontSize="20"
+                                       Foreground="#FF6B7280"
+                                       TextAlignment="Center"/>
+                            <TextBlock x:Name="AudioVolumeValueText"
+                                       Margin="0,8,0,24"
+                                       FontSize="56"
+                                       FontWeight="Bold"
+                                       Foreground="#FF111827"
+                                       TextAlignment="Center"/>
+
+                            <ProgressBar x:Name="AudioVolumeProgressBar"
+                                         Height="28"
+                                         Minimum="0"
+                                         Maximum="100"
+                                         Margin="40,0,40,20"
+                                         Value="0"/>
+
+                            <TextBlock x:Name="AudioStatusText"
+                                       FontSize="18"
+                                       Foreground="#FF4B5563"
+                                       TextAlignment="Center"
+                                       TextWrapping="Wrap"/>
+                        </StackPanel>
                     </DockPanel>
                 </Border>
             </Grid>

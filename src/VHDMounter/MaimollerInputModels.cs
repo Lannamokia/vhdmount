@@ -26,6 +26,7 @@ namespace VHDMounter
         public const byte ReportId = 0x01;
         public const int PayloadLength = 7;
         public const int CoinHoldSeconds = 15;
+        public const int NetworkEditorCoinHoldMilliseconds = 1000;
 
         public static bool IsCandidateDevicePath(string devicePath)
         {
@@ -75,5 +76,35 @@ namespace VHDMounter
         public UiInputAction Action { get; }
 
         public string Source { get; }
+    }
+
+    internal enum MaimollerInputRoutingMode
+    {
+        Navigation = 0,
+        NetworkIpv4Edit,
+    }
+
+    internal enum MaimollerRawInputKind
+    {
+        None = 0,
+        Digit,
+        CoinShortPress,
+        CoinLongPressConfirm,
+    }
+
+    internal sealed class MaimollerRawInputEventArgs : EventArgs
+    {
+        public MaimollerRawInputEventArgs(MaimollerRawInputKind kind, string source, int? digit = null)
+        {
+            Kind = kind;
+            Source = source ?? string.Empty;
+            Digit = digit;
+        }
+
+        public MaimollerRawInputKind Kind { get; }
+
+        public string Source { get; }
+
+        public int? Digit { get; }
     }
 }
