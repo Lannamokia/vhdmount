@@ -10,6 +10,7 @@ obj/
 publish/
 single/
 NuGet.Config
+artifacts/
 
 # ============ Node.js / VHDSelectServer ============
 node_modules/
@@ -51,7 +52,6 @@ cookies.txt
 
 # ============ Runtime & Configuration ============
 vhd-config.json
-vhdmonter_config.ini
 machine-log-spool.jsonl
 update_done.flag
 resource_version.tag
