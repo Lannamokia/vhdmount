@@ -1,191 +1,81 @@
 # VHD Mounter & VHDSelectServer
 
-当前版本：`v1.6.0-preview`
+这是当前仓库状态对应的说明文档。仓库包含 Windows 机台客户端、Node.js 管理服务、离线签名与打包工具、挂载调试工具，以及新的 Flutter 管理客户端。
 
-**一套完整的街机游戏 VHD 管理与远程控制解决方案**：包含 Windows 客户端（VHD Mounter）与配套 Web 服务（VHDSelectServer）。支持集中化配置、机台保护、EVHD 密码管理以及自动构建发布。
-
-## 1.6.0 新增功能
-
-### 安全加固与权限制升
-
-- **EVHD 密码安全传递**
-  - 密码传递方式改为 stdin（ProcessStartInfo.RedirectStandardInput），避免密码出现在命令行参数中
-  - 仅在进程启动立即写入后关闭流，大幅降低敏感信息泄露风险
-
-- **服务端跨域与会话安全**
-  - 新增 Origin 白名单校验，带 Origin 请求头的请求必须命中 allowedOrigins 列表
-  - 会话 Cookie 设置 SameSite=Strict、Secure 随协议自动开启（防 CSRF 与跨域盗用）
-  - OTP 二次验证有效期调整为 60 秒，查询 EVHD 明文前必须完成验证
-
-- **敏感信息日志清理**
-  - 新增敏感字段过滤与日志脱敏功能，避免密码、密钥出现在日志文件中
-  - Updater 子进程输出透传与错误捕获增强，改善故障诊断
-
-### 服务端功能与模块化增强
-
-- **新增核心模块**
-  - `auditLog.js`：操作审计日志记录（机台创建、删除、配置变更、管理员操作）
-  - `registrationAuth.js`：机台注册证书鉴权逻辑（验证签名、提取证书信息）
-  - `securityStore.js`：管理员密码哈希、Session Secret、TOTP 密钥的安全存储（运行时动态生成，不再硬编码）
-  - `validators.js`：统一输入校验（machineId 格式、关键字长度、密码复杂度）
-
-- **机台公钥注册限流**
-  - 防止频繁注册请求导致的服务压力，新增速率限制与阈值校验
-  - 注册公钥时同步记录证书指纹与主体信息
-
-- **OTP 状态逻辑完善**
-  - 确保在缺失 otpVerified 时自动使用 otpVerifiedUntil，以验证时间戳判定有效期
-  - 相应的单元测试与集成测试覆盖
-
-### 数据库层全面重构
-
-- **配置规范化与多数据库支持**
-  - 移除顶层硬编码的 dbConfig，新增 normalizeDbConfig() 函数对参数进行非空与合法性校验
-  - SSL 配置改为 rejectUnauthorized: true（强制校验证书）
-  - 新增 withClient() 辅助方法，消除重复的 connect/release 样板代码
-
-- **幂等初始化与字段扩展**
-  - initialize() 改为幂等初始化：CREATE TABLE IF NOT EXISTS + ADD COLUMN IF NOT EXISTS
-  - machines 表新增 `registration_cert_fingerprint`（VARCHAR 128） 与 `registration_cert_subject`（TEXT）字段，记录注册证书信息
-  - 新增索引优化：idx_machines_machine_id、idx_machines_protected、idx_machines_last_seen、idx_machines_cert_fingerprint
-  - 新增 update_updated_at_column 触发器，自动维护 updated_at 字段
-
-- **敏感字段保护**
-  - 所有 RETURNING 子句改为显式列列表，evhd_password 明文不再出现在查询结果中
-  - 改为返回 evhd_password_configured 布尔值，与明文查询逻辑分离
-
-### 加密 VHD 工具优化
-
-- **可执行文件路径解析与挂载点规范化**
-  - 新增可执行文件路径解析功能，优化进程查找逻辑
-  - 挂载点规范化至绝对路径格式，避免路径解析歧义
-
-- **文件替换与删除支持**
-  - 扩展文件替换逻辑，支持文件删除标志（文件清单中标记为 deleted）
-  - 优化本地目标目录查找，支持通配符与灵活的路径匹配
-
-- **VHD 文件处理优化**
-  - 优化 VHD 与 EVHD 文件的扫描与过滤逻辑
-  - 进程输出流处理重构，日志记录性能提升
-  - 标准错误捕获与日志化改善，增强调试能力
-
-### 容器与部署改进
-
-- **Docker 数据持久化**
-  - PostgreSQL 数据目录改为 `pgdata` 子目录模式（/var/lib/postgresql/data/pgdata），兼容 bind mount 与 named volume
-  - 脚本自动规范化路径，处理旧版兼容默认值
-  - 新增权限检查与警告机制，防止挂载权限问题导致数据损坏
-
-- **健康检查与自修复**
-  - 新增 /api/health 端点，返回 { success, status, version, uptime, timestamp }
-  - Docker HEALTHCHECK 指令增强（interval=30s、timeout=10s、start-period=60s）
-  - 容器启动脚本增强，新增 repair_public_schema_ownership() 自动修复 PostgreSQL 对象权限
-
-- **Compose 配置标准化**
-  - docker-compose.yml 与 docker-compose.external-db.yml 均新增 build: { context: . }
-  - 健康检查端点与环境变量明确设置，不再依赖外部镜像
-
-### 平台与工具升级
-
-- **.NET 版本升级至 8.0**
-  - VHDMounter、Updater 从 net6.0 升级至 net8.0
-  - RID 规范化：win10-x64 → win-x64（更广泛的兼容性）
-
-- **管理工具替换与扩展**
-  - VHDMountAdminTools 全面取代已废弃的 UpdatePackagerGUI
-  - Flutter 管理客户端完整集成，支持 TOTP 验证码扫码添加功能
-  - vhdmount.sln 新增，统一管理所有 .NET 子项目（VHDMounter、Updater、VHDMountAdminTools）
-
-- **CI/CD 流程对齐**
-  - GitHub Actions 工作流（build.yml）同步更新，.NET 版本、RID 与产物路径全面同步
-  - 构建目标明确化，完整支持自包含单文件发布
-
-### 文档与清理
-
-- **文档补充**
-  - 新增 CLI_GUIDE.md，说明命令行工具使用方式
-  - VHDSelectServer/DOCKER_TROUBLESHOOTING.md：PostgreSQL bind mount 权限问题根因分析与解决方案
-  - 更新主 README 关于 Docker 配置、API 与安全模型的说明
-
-- **仓库清理**
-  - 删除已废弃的 UpdatePackagerGUI、VHDSelectServer/public（旧版静态管理页）
-  - 删除过时的 CLI 指南与批处理脚本（run_as_admin.bat、setup_task.bat）
-  - 优化 .gitignore，补齐 .NET、Node.js、Flutter、Docker、证书密钥等忽略规则
+旧版可操作 Web 管理前端已经移除；VHDSelectServer 根路径 `/` 现在只提供轻量的客户端下载与连接提示页，不再提供可操作的浏览器管理界面。
 
 ## 组件概览
 
-- VHD Mounter（Windows 客户端）
-  - 扫描并挂载 VHD 到 `M:`，自动选择启动目录（`SDHD → bin`，其他 → `package`）。
-  - 进程保活与异常重启（`sinmai`、`chusanapp`、`mu3`）。
-  - 远程 VHD 关键词获取与机台保护状态查询。
-  - 可选 USB 文件优先替换，带总进度与当前文件进度显示。
-  - 自更新前置判断：`update_done.flag` 版本 ≥ 清单 `version` 则跳过自更新，直接继续启动。
+- VHDMounter
+  - 基于 .NET 8 WPF 的 Windows 客户端，默认发布为 win-x64 自包含单文件。
+  - 扫描本地与可移动介质中的 VHD，按配置可向服务端请求目标关键词，并把目标卷绑定到 `M:\`。
+  - 依据 VHD 文件名选择启动目录：包含 `SDHD` 时优先查找 `bin`，其他情况查找 `package`。
+  - 首次启动使用 `start.bat`；异常重启时优先使用 `start_game.bat`，否则回退到 `start.bat`。
+  - 监控目标进程关键字 `sinmai`、`chusanapp`、`mu3`。
+  - 可选机台日志上报链路：本地写入 `machine-log-spool.jsonl`，再通过 WebSocket 上传到服务端。
 
-- VHDSelectServer（管理服务）
-  - 锁文件初始化、REST API、审计日志、Session + OTP 二次验证。
-  - 机台管理（VHD 关键词、EVHD 密码、保护状态、注册审批）。
-  - 预配置证书签名注册、Docker 单容器内置 PostgreSQL 或外部数据库模式。
+- VHDMounter_Maimoller
+  - 由 `EnableHidMenuFeatures=true` 构建出的增强变体。
+  - 在基础版之上额外编译 Maimoller HID、系统菜单、系统设置和系统信息采集相关模块。
 
-- Updater（辅助更新器）
-  - 完成主程序文件替换；支持管理员自我提升（runas）。
-  - 替换失败时延迟到重启生效；成功时在主程序目录拉起 `VHDMounter.exe`。
-  - 写入 `update_done.flag = manifest.version`；按阈值规则记录并决策更新（local>min 拒绝、等于跳过、小于更新；无 flag 视为小于）。
-  - 文件日志 `updater.log`，10MB 循环覆盖；仅记录不自动拷贝到设备。
+- VHDSelectServer
+  - 基于 Node.js/Express 的管理服务。
+  - 提供初始化流程、管理员登录、OTP step-up、机台管理、可信注册证书管理、审计日志和机台日志查询/导出。
+  - 支持 Docker 内置 PostgreSQL 或外部 PostgreSQL。
+  - 数据库结构通过 `schema_version` + `migrations/` 统一迁移。
 
-- VHDMountAdminTools（离线管理工具）
-  - 生成 `manifest.json` 与 `manifest.sig`（RSA‑PSS/SHA‑256 签名）。
-  - 生成更新签名密钥对、`trusted_keys.pem` 和预配置注册证书包（`.pfx/.pem/.trust.json`）。
-  - 路径规则：`app-update` 使用相对路径；`vhd-data` 使用文件名。
-  - 清单包含 `createdAt/expiresAt`（默认有效期 3 天），默认 `minVersion=1.5.0`（向后兼容考虑，可根据需要调整）。
+- Updater
+  - 负责应用离线更新包、替换主程序文件并重新拉起主程序。
+  - 会优先尝试重新启动 `VHDMounter_Maimoller.exe`，找不到时再回退到 `VHDMounter.exe`。
 
-- vhd_mount_admin_flutter（Flutter 管理端）
-  - 负责服务初始化、管理员登录、OTP 验证、机台管理、证书管理和审计查看。
+- VHDMountAdminTools
+  - 离线生成更新签名密钥、`trusted_keys.pem`、`manifest.json`、`manifest.sig`。
+  - 生成预配置注册证书包：`.pfx`、`.pem`、`.trust.json` 和可直接粘贴到客户端配置中的 `.client-config.ini` 片段。
+  - 默认生成的更新清单有效期为 3 天，默认 `minVersion` 为 `1.5.0`。
 
-## 项目结构
+- EVHDMountTester
+  - 调试用命令行工具，验证 `encrypted-vhd-mount.exe` 挂载 EVHD 到指定挂载点，并可继续验证解密后 VHD 绑定到目标盘符（默认 `M:\`）。
 
-```
+- vhd_mount_admin_flutter
+  - 新的管理客户端，负责初始化、登录、OTP 验证、机台管理、证书管理、审计查看和安全设置。
+  - 当前工程已包含 Windows、Android 和 iOS 平台骨架；iOS 构建仍需 macOS + Xcode。
+
+## 仓库结构
+
+```text
 vhdmount/
-├── docs/
-│   └── plans/
-│       └── machine-log-reporting-plan.md
+├── .github/workflows/           # CI 工作流
+├── docs/                        # 规划与实现报告
 ├── scripts/
-│   └── build.bat                # 本地构建脚本（生成自包含单文件并复制到 single 目录）
+│   └── build.bat                # 本地发布脚本
 ├── src/
-│   └── VHDMounter/
-│       ├── Program.cs           # 单实例入口
-│       ├── VHDManager.cs        # 客户端核心逻辑
-│       ├── MainWindow.xaml      # 主窗口界面
-│       ├── MainWindow.xaml.cs   # 主窗口逻辑
-│       └── vhdmonter_config.ini # 客户端配置模板
-├── VHDSelectServer/              # 管理服务
-│   ├── server.js                 # 主服务与路由
-│   ├── database.js               # PostgreSQL 持久化
-│   ├── Dockerfile                # 镜像构建（含内置 DB）
-│   ├── docker-entrypoint.sh      # 容器入口与 DB 初始化
-│   └── init-db.sql               # 表结构初始化
-├── Updater/                      # 辅助更新器（自我提升、替换与重启主程序）
-│   └── Program.cs
-├── VHDMountAdminTools/           # 离线管理工具（WPF）
-│   ├── MainWindow.xaml           # 打包、签名与注册证书界面
-│   └── MainWindow.xaml.cs        # 打包与注册证书逻辑
-├── vhd_mount_admin_flutter/      # Flutter 管理客户端（Windows）
-├── VHDMounter.csproj             # .NET 8 WPF 客户端
-├── single/                       # 打包输出（VHDMounter.exe、VHDMounter_Maimoller.exe、Updater.exe、VHDMountAdminTools.exe）
-└── .github/workflows/build.yml   # CI 构建与发布
+│   └── VHDMounter/              # 主客户端源码与默认配置模板
+├── Updater/                     # 更新器
+├── VHDMountAdminTools/          # 离线管理工具
+├── EVHDMountTester/             # EVHD/VHD 挂载调试工具
+├── VHDMounter.Tests/            # xUnit 测试
+├── VHDSelectServer/             # 管理服务、Docker 与迁移脚本
+├── vhd_mount_admin_flutter/     # Flutter 管理客户端
+├── artifacts/local-publish/     # 本地脚本发布输出
+├── single/                      # 便于拷贝的本地整合输出
+├── VHDMounter.csproj            # 主客户端工程
+└── vhdmount.sln                 # .NET 解决方案
 ```
+
+## 环境要求
+
+- Windows 10/11，客户端运行需要管理员权限。
+- 从源码构建 .NET 项目需要 .NET 8 SDK。
+- 直接运行 VHDSelectServer 需要 Node.js 18+。
+- 使用容器部署服务端需要 Docker 20.10+ 和 Compose 2+。
+- 外部数据库模式需要 PostgreSQL 15+。
+- 开发 Flutter 管理端需要 Flutter stable；工程当前要求满足 `pubspec.yaml` 中的 Dart SDK 约束（`^3.11.4`）。
 
 ## 快速开始
 
-### 环境要求
+### 1. 启动 VHDSelectServer
 
-- Windows 10 1809+ 或 Windows 11（管理员运行）。
-- .NET 8.0 Runtime（客户端）。
-- Node.js 18+ 或 Docker 20.10+（服务端）。
-- Flutter 3.41+（新的 Windows 管理客户端）。
-
-### 启动服务端
-
-Docker（推荐）：
+Docker 部署（推荐）：
 
 ```powershell
 cd VHDSelectServer
@@ -193,7 +83,19 @@ docker compose up --build -d
 docker compose logs -f
 ```
 
-如果需要把内置 PostgreSQL 数据持久化到宿主机目录，请映射父目录到 `/var/lib/postgresql/data`，并保持实际数据目录为 `pgdata` 子目录。例如：
+仓库自带的 `docker-compose.yml` 默认把宿主机 `8082` 映射到容器内 `8080`，因此本机访问地址默认是 `http://127.0.0.1:8082`。
+
+如果需要把服务配置持久化到宿主机，请映射父目录到 `/app/config`，让实际可写配置落在子目录 `/app/config/data`：
+
+```yaml
+volumes:
+  - ./config:/app/config
+environment:
+  - CONFIG_ROOT_DIR=/app/config
+  - CONFIG_PATH=/app/config/data
+```
+
+如果需要把内置 PostgreSQL 数据持久化到宿主机，请映射父目录到 `/var/lib/postgresql/data`，不要直接把宿主机目录当作 cluster 根目录使用：
 
 ```yaml
 volumes:
@@ -202,107 +104,234 @@ environment:
   - POSTGRES_DATA_DIR=/var/lib/postgresql/data/pgdata
 ```
 
-原因：Docker Desktop/部分 bind mount 文件系统不会正确保留挂载根目录上的 Linux 所有权和 `0700` 权限；PostgreSQL 对真实 cluster 目录有严格权限要求。当前镜像已默认使用 `pgdata` 子目录来兼容 named volume 与大多数 bind mount 场景。
-
-本地开发：
+本地直接运行：
 
 ```powershell
 cd VHDSelectServer
 npm install
+npm run migrate
 npm start
 ```
 
-首次启动后请先调用 `/api/init/status`、`/api/init/prepare`、`/api/init/complete` 完成初始化；不再存在默认管理员密码。
+直接运行时默认监听 `http://127.0.0.1:8080`。
 
-### 启动客户端
+首次部署后的初始化流程：
+
+1. 调用 `GET /api/init/status` 确认是否已初始化。
+2. 调用 `POST /api/init/prepare` 获取 OTP 绑定信息。
+3. 调用 `POST /api/init/complete` 提交管理员密码、Session Secret、数据库配置、允许的 Origin 和可信注册证书。
+
+推荐使用仓库内的 Flutter 管理客户端完成初始化，而不是手工拼接请求。
+
+### 2. 启动 Windows 客户端与离线工具
+
+从源码本地构建：
 
 ```powershell
-# 从 Release 下载并右键“以管理员身份运行”
-VHDMounter.exe
-
-# Maimoller 增强版主程序
-VHDMounter_Maimoller.exe
-
-# 或从源码发布
-dotnet publish VHDMounter.csproj \
-  --configuration Release \
-  --runtime win-x64 \
-  --self-contained true \
-  --output ./publish/win-x64 \
-  -p:PublishSingleFile=true \
-  -p:IncludeNativeLibrariesForSelfExtract=true \
-  -p:EnableCompressionInSingleFile=true \
-  -p:PublishTrimmed=false
-
-# 发布 Maimoller 增强版
-dotnet publish VHDMounter.csproj \
-  --configuration Release \
-  --runtime win-x64 \
-  --self-contained true \
-  --output ./publish/win-x64-maimoller \
-  -p:EnableHidMenuFeatures=true \
-  -p:PublishSingleFile=true \
-  -p:IncludeNativeLibrariesForSelfExtract=true \
-  -p:EnableCompressionInSingleFile=true \
-  -p:PublishTrimmed=false
-
-# 或直接运行本地脚本，一次生成两个版本到 single/
 scripts\build.bat
 ```
 
-新的管理入口：
+该脚本会：
+
+- 发布基础版 `VHDMounter.exe`
+- 发布增强版 `VHDMounter_Maimoller.exe`
+- 发布 `Updater.exe`
+- 发布 `VHDMountAdminTools.exe`
+- 把以上产物与 `vhdmonter_config.ini` 复制到 `single/`
+- 同时保留完整发布目录到 `artifacts/local-publish/`
+
+生成后的主程序应以管理员身份运行：
+
+```powershell
+single\VHDMounter.exe
+single\VHDMounter_Maimoller.exe
+```
+
+### 3. 启动 Flutter 管理客户端
 
 ```powershell
 cd vhd_mount_admin_flutter
+flutter pub get
 flutter run -d windows
 ```
 
-### VHDMounter离线更新与自更新
+附加说明：
 
-1. 使用 VHDMountAdminTools：
-   - 选择 payload 目录（更新内容），类型 `app-update` 或 `vhd-data`。
-   - 设置 `minVersion`（默认已设为 `1.5.0`）与 `version`。
-   - 生成 `manifest.json` 与 `manifest.sig`（RSA‑PSS/SHA‑256）。
-2. 分发：
-   - 将 `manifest.json`、`manifest.sig` 与实际更新文件一起置于 `NX_INS` 驱动器根目录。
-   - 确保主程序目录存在可信公钥列表 `trusted_keys.pem`。
-3. 运行：
-   - 主程序验签通过且清单未过期（≤3 天）后，判断 `update_done.flag` 与清单版本：
-     - `flag >= manifest.version`：跳过自更新，直接启动；
-     - 否则复制清单与文件到 `staging` 并拉起 Updater。
-   - Updater 完成替换，写入 `update_done.flag = manifest.version`，若未延迟则以管理员在主程序目录拉起 `VHDMounter.exe`。
-4. 注意：
-   - 过期清单（>3 天）直接拒绝更新；
-   - 存在 `update_done.flag` 时按 `localVersion` 与 `minVersion` 阈值判定（local>min 拒绝、等于跳过、小于更新）；无 flag 视为小于直接更新。
+- Android 可使用 `flutter run -d android`。
+- iOS 工程骨架已在仓库内，但运行和打包仍需 macOS + Xcode。
+- Android 模拟器访问本机服务时通常使用 `http://10.0.2.2:端口`；如果服务端按仓库默认 Compose 运行，端口就是 `8082`。
 
-## 配置说明
+## 客户端配置模板
 
-### 客户端（`src/VHDMounter/vhdmonter_config.ini` 模板）
+默认模板位于 `src/VHDMounter/vhdmonter_config.ini`：
 
 ```ini
 [Settings]
-EnableRemoteSelection=true
-BootImageSelectUrl=http://localhost:8080/api/boot-image-select
-EvhdEnvelopeUrl=http://localhost:8080/api/evhd-envelope
+ServerBaseUrl=http://127.0.0.1:8080
+EnableRemoteSelection=false
+RegistrationCertificatePath=
+RegistrationCertificatePassword=
 MachineId=MACHINE_001
-EnableProtectionCheck=true
-ProtectionCheckUrl=http://localhost:8080/api/protect
+EnableProtectionCheck=false
 ProtectionCheckInterval=500
-RegistrationCertificatePath=certs\machine-registration.pfx
-RegistrationCertificatePassword=ChangeThisPfxPassword
+EnableLogUpload=false
+MachineLogUploadIntervalMs=3000
+MachineLogUploadBatchSize=200
+MachineLogUploadMaxSpoolBytes=52428800
 ```
 
-- `EnableRemoteSelection`：启用远程 VHD 选择；关闭时仅本地扫描。
-- `BootImageSelectUrl`：远程获取 VHD 关键词的地址，客户端会附带 `machineId` 查询参数。
-- `EvhdEnvelopeUrl`：EVHD 密码封装信封获取地址（客户端用 TPM 私钥解密）。
-- `MachineId`：机台唯一标识，所有远程 API 需要该参数。
-- `EnableProtectionCheck`：定时查询机台保护状态，保护开启时可阻止危险操作。
-- `ProtectionCheckUrl`：保护状态查询地址（GET，需要 `machineId`）。
-- `ProtectionCheckInterval`：保护状态查询间隔（毫秒）。
-- `RegistrationCertificatePath`：预配置注册证书 `.pfx` 路径，用于签名公钥注册请求。
-- `RegistrationCertificatePassword`：注册证书密码。
+说明：
 
-密钥流转：客户端在本机 TPM 中生成/保存 RSA 密钥对，并使用预配置注册证书对 `POST /api/machines/:machineId/keys` 请求签名；管理员审批通过后，客户端从 `GET /api/evhd-envelope` 获取密文并用 TPM 私钥（RSA‑OAEP‑SHA1）解密得到 EVHD 密码。
+- 构建与发布时复制到输出目录的权威模板来自 `src/VHDMounter/vhdmonter_config.ini`。
+- 当前推荐配置项是 `ServerBaseUrl`。客户端会基于它自动派生以下固定端点：
+  - `/api/boot-image-select`
+  - `/api/evhd-envelope`
+  - `/api/protect`
+  - `/ws/machine-log`
+- 为兼容旧部署，客户端仍能从历史配置项 `BootImageSelectUrl`、`EvhdEnvelopeUrl`、`ProtectionCheckUrl`、`MachineLogServerIp` / `MachineLogServerPort` 反推出服务端基地址，但新的模板不再写这些旧字段。
+- 如果你使用仓库自带的 `docker-compose.yml` 默认端口映射，请把 `ServerBaseUrl` 改成 `http://127.0.0.1:8082`，或者自行修改 Compose 端口。
+- `EnableLogUpload=true` 时，客户端会在应用目录生成 `machine-log-spool.jsonl` 和 `machine-log-client.log`。
+
+## 客户端当前运行行为
+
+- 目标 VHD 挂载后会绑定到 `M:\`。
+- 如果系统先给候选卷分配了其他盘符，客户端会先清理已有盘符，再把卷重新绑定到 `M:\`。
+- 目标启动目录按 VHD 文件名决定：`SDHD` 对应 `bin`，其余默认查找 `package`。
+- 初次启动使用 `start.bat`；当检测到目标进程退出时，重启顺序为：`start_game.bat` 优先，`start.bat` 兜底。
+- 运行日志写入应用目录下的 `vhdmounter.log`，达到 10 MiB 后循环覆盖。
+- 若存在卷标为 `NXLOG` 的可移动设备，客户端会把最新日志复制到该设备根目录。
+
+## 离线更新链路
+
+- `VHDMountAdminTools` 用于生成更新签名密钥、`trusted_keys.pem`、更新清单和注册证书包。
+- 主程序启动时会检查卷标为 `NX_INS` 的可移动设备，寻找 `manifest.json` / `manifest.sig`（支持根目录或 `updates/` 子目录）。
+- 验签通过后，更新文件会被复制到本地 `staging/` 目录，再拉起 `Updater.exe`。
+- `Updater` 完成替换后会写入 `update_done.flag`，并重新拉起当前可用的主程序变体。
+
+## 服务端当前状态
+
+- 旧 Web 管理界面已删除，服务根路径 `/` 仅返回下载/连接提示页。
+- `GET /api/status` 与 `GET /api/health` 现在只返回最小状态信息：`success`、`status`、`initialized`、`pendingInitialization`、`databaseReady`。
+- `GET /api/init/status` 在匿名访问时只返回最小初始化状态；更详细的管理信息只在已登录会话下返回。
+- 管理接口采用 Session 登录，敏感操作额外要求 OTP step-up。
+- OTP 绑定支持两步式轮换：
+  - `POST /api/auth/otp/rotate/prepare`
+  - `POST /api/auth/otp/rotate/complete`
+- 机台日志链路已落地：服务端支持实时接收、分页查询和导出机台日志，并可配置日志保留策略。
+- 数据库结构通过 `migrations/001_*.sql`、`002_*.sql` 之类的版本文件管理；应用启动和 `npm run migrate` 走同一套迁移逻辑。
+
+## 关键接口
+
+公开接口：
+
+- `GET /api/status`
+- `GET /api/health`
+- `GET /api/init/status`
+- `GET /api/boot-image-select?machineId=...`
+- `GET /api/protect?machineId=...`
+- `GET /api/evhd-envelope?machineId=...`
+
+初始化与认证：
+
+- `POST /api/init/prepare`
+- `POST /api/init/complete`
+- `POST /api/auth/login`
+- `GET /api/auth/check`
+- `POST /api/auth/logout`
+- `POST /api/auth/change-password`
+- `POST /api/auth/otp/verify`
+- `GET /api/auth/otp/status`
+- `POST /api/auth/otp/rotate/prepare`
+- `POST /api/auth/otp/rotate/complete`
+
+设置与机台日志：
+
+- `GET /api/settings/default-vhd`
+- `POST /api/settings/default-vhd`
+- `POST /api/set-vhd`（兼容旧入口，行为同上）
+- `GET /api/settings/log-retention`
+- `POST /api/settings/log-retention`
+- `GET /api/machine-log-sessions`
+- `GET /api/machine-logs`
+- `GET /api/machine-logs/export`
+
+机台、证书与审计：
+
+- `GET /api/machines`
+- `POST /api/machines`
+- `DELETE /api/machines/:machineId`
+- `POST /api/machines/:machineId/vhd`
+- `POST /api/machines/:machineId/evhd-password`
+- `POST /api/machines/:machineId/keys`
+- `POST /api/machines/:machineId/approve`
+- `POST /api/machines/:machineId/revoke`
+- `GET /api/security/trusted-certificates`
+- `POST /api/security/trusted-certificates`
+- `DELETE /api/security/trusted-certificates/:fingerprint`
+- `GET /api/audit`
+- `GET /api/evhd-password/plain?machineId=...&reason=...`
+
+说明：证书管理、明文查询、日志导出等高敏感接口要求已登录会话，且部分接口必须先完成 OTP step-up。
+
+## 服务端环境变量
+
+应用与配置目录：
+
+- `PORT`：服务端口，默认 `8080`
+- `NODE_ENV`：运行模式
+- `CONFIG_ROOT_DIR`：配置根目录
+- `CONFIG_PATH`：实际安全配置目录，默认通常设为 `CONFIG_ROOT_DIR` 下的 `data` 子目录
+- `MACHINE_REGISTRATION_RATE_LIMIT_MAX`：机台公钥注册接口在 10 分钟窗口内的单机限流阈值，默认 `20`
+- `AUDIT_LOG_MAX_BYTES`：单个审计日志文件最大字节数，默认 5 MiB
+- `AUDIT_LOG_MAX_FILES`：审计日志最大保留文件数，默认 5
+
+数据库：
+
+- `USE_EMBEDDED_DB`
+- `DB_HOST`
+- `DB_PORT`
+- `DB_NAME`
+- `DB_USER`
+- `DB_PASSWORD`
+- `DB_MAX_CONNECTIONS`
+- `DB_IDLE_TIMEOUT`
+- `DB_CONNECTION_TIMEOUT`
+- `DB_SSL`
+- `POSTGRES_DATA_DIR`
+
+## 构建、测试与 CI
+
+本地验证命令：
+
+```powershell
+dotnet test VHDMounter.Tests\VHDMounter.Tests.csproj
+
+cd VHDSelectServer
+npm test
+
+cd ..\vhd_mount_admin_flutter
+flutter analyze
+flutter test
+```
+
+GitHub Actions：
+
+- `.github/workflows/build.yml`
+  - 在 `main`、`dev`、`maimoller_control_test` 分支和所有标签上构建。
+  - 产出四个 ZIP：`VHDMounter`、`VHDMounter_Maimoller`、`Updater`、`VHDMountAdminTools`。
+  - 标签构建时附带 `CHECKSUMS.sha256` 并上传到 GitHub Release。
+
+- `.github/workflows/flutter-admin-client.yml`
+  - 在 Flutter 目录或工作流文件变更时触发。
+  - 构建 Windows ZIP、Android release APK、iOS unsigned IPA。
+  - 标签构建时汇总产物并上传到 GitHub Release。
+  - Android release 签名通过 `ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` 注入；未配置时会回退到 debug signing 以保证构建可继续完成。
+
+- `.github/workflows/docker-image.yml`
+  - 在 `VHDSelectServer/**` 相关变更的 push / pull_request 时构建 Docker 镜像并上传 `.tgz` artifact。
+  - 在 GitHub Release 发布事件上构建版本镜像并推送到 DockerHub，同时上传镜像归档 artifact。
+
+## 重要说明
 
 ### 重要说明（EVHD 组件）
 
@@ -310,122 +339,8 @@ RegistrationCertificatePassword=ChangeThisPfxPassword
 - 普通用户无需配置或使用 EVHD，请直接将 VHD 文件放入设备（本地或 USB），客户端会自动扫描并挂载使用。
 - 本开源仓库不包含 EVHD 挂载相关软件的源代码；如需使用，请联系项目维护方完成合作伙伴认证流程。
 
-### 服务端环境变量
-
-- `PORT`：服务端口（默认 `8080`）。
-- `USE_EMBEDDED_DB`：`true` 启用容器内置 PostgreSQL；`false` 使用外部数据库。
-- `DB_HOST`、`DB_PORT`、`DB_NAME`、`DB_USER`、`DB_PASSWORD`：连接外部数据库时使用。
-- `POSTGRES_DATA_DIR`：内置 PostgreSQL 的真实数据目录，默认 `/var/lib/postgresql/data/pgdata`。
-- `CONFIG_ROOT_DIR`、`CONFIG_PATH`：服务配置目录映射（1.6.0 新增），用于持久化管理员配置到宿主机。
-
-## 管理入口
-
-- Flutter 管理端：`vhd_mount_admin_flutter`
-  - 初始化向导（管理员密码、Session Secret、数据库、可信证书）。
-  - 管理员登录与 OTP 二次验证。
-  - 机台新增、删除、保护开关、审批、VHD/EVHD 配置、注册重置、明文读取。
-  - 可信注册证书管理与审计查看。
-
-- VHDMountAdminTools：
-  - 离线生成更新签名密钥与注册证书包。
-  - 生成 `manifest.json` / `manifest.sig`。
-
-## API 速览
-
-- `GET /api/status`：服务器状态与版本。
-- `GET /api/health`：容器健康检查端点。
-- 初始化：`GET /api/init/status`、`POST /api/init/prepare`、`POST /api/init/complete`。
-- 认证：`POST /api/auth/login`、`GET /api/auth/check`、`POST /api/auth/logout`、`POST /api/auth/change-password`、`POST /api/auth/otp/verify`、`GET /api/auth/otp/status`。
-- `GET /api/boot-image-select?machineId=...`：获取该机台当前 VHD 关键词；若机台不存在会自动创建记录。
-- `POST /api/set-vhd`（需登录）：设置默认 VHD 关键词。
-- `GET /api/protect?machineId=...`：查询机台保护状态；机台不存在返回 404。
-- `POST /api/protect`（需登录）：更新机台保护状态。
-- 机台：`GET /api/machines`（需登录）、`POST /api/machines`（需登录，新增机台）、`DELETE /api/machines/:machineId`（需登录，删除机台）、`POST /api/machines/:machineId/vhd`（需登录）、`POST /api/machines/:machineId/evhd-password`（需登录）、`POST /api/machines/:machineId/keys`（注册公钥，需预配置证书签名）、`POST /api/machines/:machineId/approve`（审批）、`POST /api/machines/:machineId/revoke`（重置注册）。
-- 证书与审计：`GET /api/security/trusted-certificates`、`POST /api/security/trusted-certificates`、`DELETE /api/security/trusted-certificates/:fingerprint`、`GET /api/audit`。
-- EVHD 密码：`GET /api/evhd-envelope?machineId=...`（RSA 封装信封，公开）、`GET /api/evhd-password/plain?machineId=...&reason=...`（明文查询，需登录 + OTP，仅管理用途）。
-
-## 使用流程（客户端）
-
-- 启动后读取配置；若启用远程，则请求 `BootImageSelectUrl` 获取目标 VHD 关键词。
-- 扫描本地与 USB 的 VHD 文件，匹配目标关键词；必要时执行 USB → 本地替换（仅此阶段显示总进度与当前文件进度）。
-- 挂载选定 VHD 到 `M:`，搜索启动目录并执行 `start.bat`；随后监控游戏进程并在异常退出时自动重启（脚本选择策略：如同目录同时存在 `start_game.bat` 与 `start.bat`，优先使用 `start_game.bat`；若仅存在其一则使用该脚本；若两者均不存在则持续等待脚本或进程出现）。
-
-快捷键：`↑/↓` 切换、`Enter` 确认、`Del` 连续三次触发安全退出（2 秒窗口）。
-
-## UI 流程与状态
-
-- 预启动延时：启动后进行 10 秒预备倒计时。
-- 准备游戏文件：远程获取关键词与文件扫描。
-- 应用本地更新：USB → 本地拷贝，显示进度条（仅此阶段）。
-- 准备启动：获取 EVHD 密钥、准备 `start.bat` 环境。
-- 更新并启动：执行 `start.bat` 与相关更新；检测到游戏进程后额外等待 5 秒以确保窗口稳定，再切前台到游戏并最小化/隐藏主窗口，避免桌面暴露。
-- 异常恢复：游戏崩溃时前台显示恢复状态并尝试重启；重启脚本选择遵循“`start_game.bat` 优先，`start.bat` 兜底”的策略（两者缺失则持续等待）；重启后同样等待 5 秒稳定再切回游戏并收起主窗口。
-- 错误提示：发生致命错误时显示“运行发生错误，请联系管理员调阅日志”持续 5 分钟，随后执行系统关机。
-
-## 退出与防暴露策略
-
-- 无关闭按钮；退出通过键盘 `Del` 连续三次（2 秒内）触发安全退出：卸载 VHD、停止 EVHD 加密挂载、退出程序。
-- 正常启动与异常恢复均在游戏进程稳定 5 秒后才切前台并收起主窗口，避免桌面环境暴露。
-
-## 日志策略
-
-- 位置：应用目录 `vhdmounter.log`。
-- 循环覆盖：超过 10MB 自动截断至 0 并从头继续写入，保留最新日志。
-- 设备拷贝：运行时每 5 秒检测卷标为 `NXLOG` 的可移动设备；若存在且日志更新，则复制到设备根目录 `NXLOG:\vhdmounter.log`。每个设备独立记录上次复制时间，避免重复覆盖。
-- Updater 日志：应用目录 `updater.log`，10MB 循环覆盖；仅记录，不自动拷贝到设备。
-
-备注：日志仅采用文件记录，UI 展示简洁的阶段性提示。
-
-## 构建与发布（CI）
-
-- 工作流：`.github/workflows/build.yml`
-  - 触发：`main`、`dev`、`maimoller_control_test` 三个分支的 `push`，任意标签的 `push`，以及 `workflow_dispatch`。
-  - 步骤：恢复依赖 → 构建/测试 → 发布 Windows x64 自包含单文件 → 上传构建产物。
-  - 标签推送时：打包 ZIP、生成 `CHECKSUMS.sha256`，并上传为 Release 资产。
-  - 使用 `softprops/action-gh-release@v2` 上传资产，认证采用 `GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}`。
-  - 产物以 workflow artifact 形式上传；标签构建额外附加到 GitHub Release。
-
-- 工作流：`.github/workflows/flutter-admin-client.yml`
-  - 触发：`main`、`dev`、`maimoller_control_test` 三个分支与任意标签的 `push`，以及 `workflow_dispatch`；其中仅在 `vhd_mount_admin_flutter/**` 或 workflow 文件自身变更时触发。
-  - 步骤：分别构建 Windows ZIP、Android APK、iOS unsigned IPA；标签推送时汇总产物并上传到 GitHub Release。
-
-- 工作流：`.github/workflows/docker-image.yml`
-  - 触发：目标为 `main`、`dev`、`maimoller_control_test` 的 `push`、`pull_request`（仅限 `VHDSelectServer/**` 或 workflow 文件自身变更）、`release.published`、`workflow_dispatch`。
-  - 步骤：普通代码变更时构建 Docker 镜像并上传 tgz artifact；正式 Release 发布时推送 DockerHub。
-
-建议在工作流顶部声明：
-
-```yaml
-permissions:
-  contents: write
-```
-
-### 本地构建脚本
-
-- 运行 `scripts\build.bat` 执行编译与发布，完成后生成自包含单文件并复制到 `single` 目录：
-  - `single\VHDMounter.exe`
-  - `single\Updater.exe`
-  - `single\VHDMountAdminTools.exe`
-
-## 故障排除
-
-- 无法挂载或访问盘符：以管理员身份运行；检查安全软件拦截；确认目标盘符未占用。
-- 远程 EVHD 密钥下发失败：确保已在 TPM 生成密钥对并成功注册公钥；确认管理员已审批且未吊销；检查服务器 HTTPS 与时间同步。
-- RSA 解密报错（例如 `CryptographicException: NTE_INVALID_PARAMETER`）：客户端与服务端需统一使用 `RSA‑OAEP‑SHA1`；确保服务端已重启使算法变更生效；删除并重新注册设备公钥以重新生成密文。
-- TPM 状态核查：在提升的 PowerShell 中执行 `Get-Tpm`，确认 `TpmPresent/Ready=True`；使用 `certutil -csp "Microsoft Platform Crypto Provider" -key` 检查是否存在设备密钥容器（例如 `VHDMounterKey_{machineId}`）。
-- 服务端无法连接数据库：
-  - 内置 DB：确认数据卷权限与初始化日志；
-  - 外部 DB：检查 `DB_HOST/PORT/USER/PASSWORD/NAME` 与网络。
-- 远程 VHD 关键词获取失败：服务端会返回内存中的 `currentVhdKeyword`；客户端回退到本地扫描模式。
-
-## 安全说明
-
-- 登录与会话：所有管理接口通过初始化向导生成的管理员口令与 Session Secret 保护，不再存在默认管理员密码。生产环境务必启用 HTTPS，并将会话 cookie 运行在受信网络环境中。
-- EVHD 密文（RSA 信封）：客户端在本机 TPM 生成 RSA 密钥对，并使用预配置注册证书对注册请求签名；服务端通过 `GET /api/evhd-envelope` 使用设备公钥以 `RSA‑OAEP‑SHA1` 加密 EVHD 密码，客户端用 TPM 私钥解密。
-- 明文查询（仅管理用途）：`GET /api/evhd-password/plain?machineId=...&reason=...` 需要登录并先完成 OTP 二次验证，仅用于管理/排障。
-- 审批与重置：管理员审批通过后设备才能获取密文。执行“重置注册状态”会删除已注册的公钥并将审批状态重置为未审批，以阻止后续密文下发。
-- 最近在线审计：服务端在设备调用 `boot-image-select`、`evhd-envelope` 或注册公钥时写入 `last_seen` 时间，仅用于审计与可观测性，不影响权限判定。
-- 数据与日志：服务端仅保存设备公钥与 EVHD 密码（明文）于数据库。请配置数据库访问控制与备份策略；避免在日志中输出敏感数据（例如明文密码、私钥）。
+- 客户端模板中的 `ServerBaseUrl` 默认值是直跑服务的 `http://127.0.0.1:8080`，不是仓库默认 Docker Compose 的宿主机端口。
+- 打包后的 .NET 程序默认是 win-x64 自包含单文件，部署时通常不需要额外安装 .NET Runtime。
 
 ## 许可
 
