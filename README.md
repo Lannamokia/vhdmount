@@ -361,11 +361,19 @@ RegistrationCertificatePassword=ChangeThisPfxPassword
 ## 构建与发布（CI）
 
 - 工作流：`.github/workflows/build.yml`
-  - 触发：`push`、`pull_request`、`release`、`workflow_dispatch`。
+  - 触发：`main`、`dev`、`maimoller_control_test` 三个分支的 `push`，任意标签的 `push`，以及 `workflow_dispatch`。
   - 步骤：恢复依赖 → 构建/测试 → 发布 Windows x64 自包含单文件 → 上传构建产物。
-  - `release` 事件：打包 ZIP、生成 `CHECKSUMS.md`（SHA256），上传为 Release 资产。
+  - 标签推送时：打包 ZIP、生成 `CHECKSUMS.sha256`，并上传为 Release 资产。
   - 使用 `softprops/action-gh-release@v2` 上传资产，认证采用 `GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}`。
-  - 产物名称与位置：`VHDMounter-win-x64-{version}`，位于 `publish/win-x64/`。
+  - 产物以 workflow artifact 形式上传；标签构建额外附加到 GitHub Release。
+
+- 工作流：`.github/workflows/flutter-admin-client.yml`
+  - 触发：`main`、`dev`、`maimoller_control_test` 三个分支与任意标签的 `push`，以及 `workflow_dispatch`；其中仅在 `vhd_mount_admin_flutter/**` 或 workflow 文件自身变更时触发。
+  - 步骤：分别构建 Windows ZIP、Android APK、iOS unsigned IPA；标签推送时汇总产物并上传到 GitHub Release。
+
+- 工作流：`.github/workflows/docker-image.yml`
+  - 触发：目标为 `main`、`dev`、`maimoller_control_test` 的 `push`、`pull_request`（仅限 `VHDSelectServer/**` 或 workflow 文件自身变更）、`release.published`、`workflow_dispatch`。
+  - 步骤：普通代码变更时构建 Docker 镜像并上传 tgz artifact；正式 Release 发布时推送 DockerHub。
 
 建议在工作流顶部声明：
 

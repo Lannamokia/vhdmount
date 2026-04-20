@@ -34,7 +34,6 @@ namespace VHDMounter
         private readonly string keyId;
         private readonly string appVersion;
         private readonly string osVersion;
-        private readonly string timeZone;
 
         private Task backgroundTask;
         private CancellationTokenSource lifetimeCts;
@@ -55,7 +54,6 @@ namespace VHDMounter
             keyId = $"VHDMounterKey_{machineId}";
             appVersion = typeof(Program).Assembly.GetName().Version?.ToString() ?? "unknown";
             osVersion = Environment.OSVersion.VersionString;
-            timeZone = TimeZoneInfo.Local.Id;
         }
 
         public void Start(CancellationToken cancellationToken)
@@ -296,7 +294,6 @@ namespace VHDMounter
                             sessionId,
                             appVersion,
                             osVersion,
-                            timezone = timeZone,
                             entries = batch,
                         }).ConfigureAwait(false);
                         await WaitForAcknowledgementAsync(
@@ -385,7 +382,7 @@ namespace VHDMounter
 
             using var serverHelloDoc = JsonDocument.Parse(await ReceiveTextMessageAsync(clientWebSocket, cancellationToken).ConfigureAwait(false));
             var serverHello = ParseServerHello(serverHelloDoc.RootElement, bootstrap.BootstrapId);
-            var sharedSecret = clientEcdh.DeriveKeyMaterial(ImportRemotePublicKey(serverHello.ServerEcdhPublicKey));
+            var sharedSecret = clientEcdh.DeriveRawSecretAgreement(ImportRemotePublicKey(serverHello.ServerEcdhPublicKey));
             var derivedKeys = DeriveSessionKeys(sharedSecret, bootstrap.BootstrapSecret, clientNonce, serverHello.Nonce);
             var transcriptHash = HashTranscript(
                 MachineLogProtocolVersion,

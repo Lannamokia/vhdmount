@@ -49,7 +49,6 @@ services:
       - POSTGRES_PASSWORD=vhd_select_password
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
     ports:
       - "5432:5432"
     restart: unless-stopped

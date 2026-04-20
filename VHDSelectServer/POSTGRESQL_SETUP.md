@@ -82,6 +82,8 @@ scoop install postgresql
    \i setup_postgresql.sql
    ```
 
+`setup_postgresql.sql` 会先创建数据库，再通过 `init-db.sql` 顺序执行当前所有 schema_version migrations。
+
 ## 🔍 验证安装
 
 ### 检查PostgreSQL服务
@@ -123,8 +125,11 @@ scoop install postgresql
 
 2. **重启VHDSelectServer**
    ```bash
+   npm run migrate
    node server.js
    ```
+
+说明：服务启动时也会自动尝试执行同一套 schema migrations；单独运行 `npm run migrate` 可以在升级前先完成数据库结构变更。
 
 3. **检查连接状态**
    - 查看控制台输出，应该显示"数据库连接成功"

@@ -29,8 +29,6 @@ COPY . .
 # 创建必要的目录
 RUN mkdir -p /app/config/data /var/lib/postgresql/data/pgdata /app/scripts
 
-# 复制数据库初始化脚本
-COPY init-db.sql /app/scripts/
 COPY docker-entrypoint.sh /app/scripts/
 RUN chmod +x /app/scripts/docker-entrypoint.sh
  # 修正Windows换行导致的解释器路径问题

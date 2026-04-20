@@ -70,6 +70,7 @@ namespace VHDMounter
         private bool hasLocalEvhdFiles;
         private DateTimeOffset? nextPublicKeyRegistrationAttemptUtc;
         private string pendingPublicKeyRegistrationBackoffMessage;
+        private string activeMountedVhdPath;
 
         // 加密EVHD挂载进程（需保持常驻直到主程序退出）
         private Process evhdMountProcess;
@@ -94,7 +95,7 @@ namespace VHDMounter
                 isProtectionCheckEnabled = config.TryGetValue("EnableProtectionCheck", out var enableCheck) && 
                                          bool.TryParse(enableCheck, out var enabled) && enabled;
                 
-                protectionCheckUrl = config.TryGetValue("ProtectionCheckUrl", out var url) ? url : "http://localhost:8080/api/protect";
+                protectionCheckUrl = ServiceEndpointResolver.ResolveProtectionCheckUrl(config);
                 
                 protectionCheckInterval = config.TryGetValue("ProtectionCheckInterval", out var interval) && 
                                         int.TryParse(interval, out var intervalMs) ? intervalMs : 500;
@@ -1098,12 +1099,8 @@ namespace VHDMounter
                     StatusChanged?.Invoke("远程VHD选择功能已禁用");
                     return null;
                 }
-                
-                if (!config.TryGetValue("BootImageSelectUrl", out var url) || string.IsNullOrWhiteSpace(url))
-                {
-                    StatusChanged?.Invoke("未配置BootImageSelectUrl");
-                    return null;
-                }
+
+                var url = ServiceEndpointResolver.ResolveBootImageSelectUrl(config);
                 
                 // 添加Machine ID参数
                 var requestUrl = $"{url}?machineId={Uri.EscapeDataString(machineId)}";
@@ -1144,24 +1141,7 @@ namespace VHDMounter
             try
             {
                 var config = ReadConfig();
-                string url = null;
-                if (config.TryGetValue("EvhdEnvelopeUrl", out var envelopeUrl) && !string.IsNullOrWhiteSpace(envelopeUrl))
-                {
-                    url = envelopeUrl;
-                }
-                else if (config.TryGetValue("EvhdPasswordUrl", out var legacyUrl) && !string.IsNullOrWhiteSpace(legacyUrl))
-                {
-                    url = legacyUrl.Replace("evhd-password", "evhd-envelope");
-                }
-                else if (config.TryGetValue("BootImageSelectUrl", out var bootUrl) && !string.IsNullOrWhiteSpace(bootUrl))
-                {
-                    url = bootUrl.Replace("boot-image-select", "evhd-envelope");
-                }
-                else
-                {
-                    StatusChanged?.Invoke("未配置EvhdEnvelopeUrl/EvhdPasswordUrl或BootImageSelectUrl");
-                    return null;
-                }
+                var url = ServiceEndpointResolver.ResolveEvhdEnvelopeUrl(config);
 
                 var requestUrl = $"{url}?machineId={Uri.EscapeDataString(machineId)}";
                 StatusChanged?.Invoke($"正在从远程获取EVHD封装信封: {requestUrl}");
@@ -1263,24 +1243,7 @@ namespace VHDMounter
             try
             {
                 var config = ReadConfig();
-                string url = null;
-                if (config.TryGetValue("EvhdEnvelopeUrl", out var envelopeUrl) && !string.IsNullOrWhiteSpace(envelopeUrl))
-                {
-                    url = envelopeUrl;
-                }
-                else if (config.TryGetValue("EvhdPasswordUrl", out var legacyUrl) && !string.IsNullOrWhiteSpace(legacyUrl))
-                {
-                    url = legacyUrl.Replace("evhd-password", "evhd-envelope");
-                }
-                else if (config.TryGetValue("BootImageSelectUrl", out var bootUrl) && !string.IsNullOrWhiteSpace(bootUrl))
-                {
-                    url = bootUrl.Replace("boot-image-select", "evhd-envelope");
-                }
-                else
-                {
-                    StatusChanged?.Invoke("未配置EvhdEnvelopeUrl/EvhdPasswordUrl或BootImageSelectUrl");
-                    return null;
-                }
+                var url = ServiceEndpointResolver.ResolveEvhdEnvelopeUrl(config);
 
                 // 准备TPM RSA密钥（不主动注册，仅在400未注册公钥时注册）
                 var rsa = EnsureOrCreateTpmRsa(machineId);
@@ -2080,6 +2043,239 @@ namespace VHDMounter
             return $"EVHD挂载进程提前退出，退出码 {exitCode}";
         }
 
+        private sealed class DiskPartCommandResult
+        {
+            public bool TimedOut { get; init; }
+            public int ExitCode { get; init; }
+            public string StandardOutput { get; init; } = string.Empty;
+            public string StandardError { get; init; } = string.Empty;
+        }
+
+        private static string BuildProcessFailureDetail(string prefix, int exitCode, string stderr, string stdout)
+        {
+            var errorText = string.IsNullOrWhiteSpace(stderr) ? null : SanitizeSensitiveText(stderr.Trim());
+            var outputText = string.IsNullOrWhiteSpace(stdout) ? null : SanitizeSensitiveText(stdout.Trim());
+
+            if (!string.IsNullOrEmpty(errorText))
+            {
+                return $"{prefix}（退出码 {exitCode}）: {errorText}";
+            }
+
+            if (!string.IsNullOrEmpty(outputText))
+            {
+                return $"{prefix}（退出码 {exitCode}）: {outputText}";
+            }
+
+            return $"{prefix}（退出码 {exitCode}）";
+        }
+
+        private static bool OutputContainsAny(string stderr, string stdout, params string[] needles)
+        {
+            var combined = string.Concat(stderr ?? string.Empty, "\n", stdout ?? string.Empty);
+            return needles.Any(needle => combined.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+        private static bool DiskPartOutputIndicatesAlreadyAttached(string stderr, string stdout)
+        {
+            return OutputContainsAny(
+                stderr,
+                stdout,
+                "already attached",
+                "already connected",
+                "已经连接",
+                "已连接");
+        }
+
+        private static bool DiskPartOutputIndicatesNotAttached(string stderr, string stdout)
+        {
+            return OutputContainsAny(
+                stderr,
+                stdout,
+                "not attached",
+                "not currently attached",
+                "already detached",
+                "is already detached",
+                "isn't attached",
+                "尚未连接",
+                "未连接",
+                "未附加",
+                "已经分离",
+                "已分离",
+                "虚拟磁盘已经分离");
+        }
+
+        private static bool DiskPartOutputIndicatesIoError(string stderr, string stdout)
+        {
+            return OutputContainsAny(
+                stderr,
+                stdout,
+                "i/o device error",
+                "i/o error",
+                "error 1117",
+                "i/o 设备错误",
+                "由于i/o设备错误",
+                "由于 i/o 设备错误");
+        }
+
+        private bool IsEncryptedEvhdMountProcessRunning()
+        {
+            try
+            {
+                return evhdMountProcess != null && !evhdMountProcess.HasExited;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static async Task<DiskPartCommandResult> RunDiskPartScriptAsync(string script, string operation, int timeoutMs)
+        {
+            var tempScript = Path.GetTempFileName();
+            await File.WriteAllTextAsync(tempScript, script, new UTF8Encoding(false));
+
+            try
+            {
+                using var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "diskpart",
+                        Arguments = $"/s \"{tempScript}\"",
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
+                    }
+                };
+
+                Trace.WriteLine($"DISKPART_{operation}: Begin TimeoutMs={timeoutMs}");
+                process.Start();
+
+                var waitTask = process.WaitForExitAsync();
+                var timeoutTask = Task.Delay(timeoutMs);
+                var completed = await Task.WhenAny(waitTask, timeoutTask);
+                if (completed == timeoutTask)
+                {
+                    try { process.Kill(entireProcessTree: true); } catch { }
+                    Trace.WriteLine($"DISKPART_{operation}: TimedOutAfterMs={timeoutMs}");
+                    return new DiskPartCommandResult
+                    {
+                        TimedOut = true,
+                        ExitCode = process.HasExited ? process.ExitCode : -1
+                    };
+                }
+
+                var stdout = await process.StandardOutput.ReadToEndAsync();
+                var stderr = await process.StandardError.ReadToEndAsync();
+
+                Trace.WriteLine($"DISKPART_{operation}: ExitCode={process.ExitCode}");
+                if (!string.IsNullOrWhiteSpace(stdout))
+                {
+                    Trace.WriteLine($"DISKPART_{operation}_STDOUT:\n{SanitizeSensitiveText(stdout.TrimEnd())}");
+                }
+                if (!string.IsNullOrWhiteSpace(stderr))
+                {
+                    Trace.WriteLine($"DISKPART_{operation}_STDERR:\n{SanitizeSensitiveText(stderr.TrimEnd())}");
+                }
+
+                return new DiskPartCommandResult
+                {
+                    ExitCode = process.ExitCode,
+                    StandardOutput = stdout,
+                    StandardError = stderr
+                };
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(tempScript))
+                    {
+                        File.Delete(tempScript);
+                    }
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        private static bool TryProbeReadableFile(string path, out long length, out string failureReason)
+        {
+            try
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                length = stream.Length;
+                if (length <= 0)
+                {
+                    failureReason = "文件长度为 0";
+                    return false;
+                }
+
+                failureReason = string.Empty;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                length = -1;
+                failureReason = ex.Message;
+                return false;
+            }
+        }
+
+        private static async Task<bool> WaitForVhdFileReadyAsync(string vhdPath, int timeoutMs, int stableSamplesRequired = 2)
+        {
+            var sw = Stopwatch.StartNew();
+            long? lastLength = null;
+            var stableSamples = 0;
+            string lastState = null;
+
+            while (sw.ElapsedMilliseconds < timeoutMs)
+            {
+                if (TryProbeReadableFile(vhdPath, out var length, out var failureReason))
+                {
+                    if (lastLength.HasValue && lastLength.Value == length)
+                    {
+                        stableSamples++;
+                    }
+                    else
+                    {
+                        lastLength = length;
+                        stableSamples = 1;
+                    }
+
+                    var currentState = $"Length={length}, StableSamples={stableSamples}/{stableSamplesRequired}";
+                    if (!string.Equals(lastState, currentState, StringComparison.Ordinal))
+                    {
+                        Trace.WriteLine($"VHD_READY_PROBE: Path={SanitizeSensitiveText(vhdPath)}, {currentState}");
+                        lastState = currentState;
+                    }
+
+                    if (stableSamples >= stableSamplesRequired)
+                    {
+                        return true;
+                    }
+                }
+                else
+                {
+                    lastLength = null;
+                    stableSamples = 0;
+                    var currentState = $"ProbeFailed={SanitizeSensitiveText(failureReason)}";
+                    if (!string.Equals(lastState, currentState, StringComparison.Ordinal))
+                    {
+                        Trace.WriteLine($"VHD_READY_PROBE: Path={SanitizeSensitiveText(vhdPath)}, {currentState}");
+                        lastState = currentState;
+                    }
+                }
+
+                await Task.Delay(500);
+            }
+
+            Trace.WriteLine($"VHD_READY_TIMEOUT: Path={SanitizeSensitiveText(vhdPath)}, LastState={SanitizeSensitiveText(lastState ?? string.Empty)}");
+            return false;
+        }
+
         // 挂载EVHD到N盘，并从其中提取解密后的VHD再挂载
         public async Task<bool> MountEVHDAndAttachDecryptedVHD(string evhdPath)
         {
@@ -2389,9 +2585,24 @@ namespace VHDMounter
                     return false;
                 }
 
+                activeMountedVhdPath = vhdPath;
+
+                if (!await WaitForVhdFileReadyAsync(vhdPath, 10000))
+                {
+                    await ShowStatusAndWait($"挂载失败: 解密后的VHD文件未在预期时间内就绪 ({Path.GetFileName(vhdPath)})");
+                    return false;
+                }
+
                 // 先清理盘符并分离可能已挂载的VHD，避免冲突
-                await UnmountDrive();
-                await UnmountVHD();
+                if (!await UnmountDrive())
+                {
+                    return false;
+                }
+
+                if (!await UnmountVHD(vhdPath))
+                {
+                    return false;
+                }
                 // 仅记录系统当前真实存在的卷，后续通过卷 GUID 差集识别新挂载的数据卷。
                 var volumesBefore = CaptureCurrentVolumes();
 
@@ -2400,54 +2611,34 @@ namespace VHDMounter
                 var attachScript = $@"select vdisk file=""{vhdPath}""
 attach vdisk
 exit";
-                
-                var tempScript = Path.GetTempFileName();
-                await File.WriteAllTextAsync(tempScript, attachScript);
-                
-                var process = new Process
-                {
-                    StartInfo = new ProcessStartInfo
-                    {
-                        FileName = "diskpart",
-                        Arguments = $"/s \"{tempScript}\"",
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true
-                    }
-                };
-                
-                process.Start();
 
-                // 设定挂载超时（60秒），防止卡死
-                var waitTask = process.WaitForExitAsync();
-                var timeoutTask = Task.Delay(60000);
-                var completed = await Task.WhenAny(waitTask, timeoutTask);
-                
-                if (completed == timeoutTask)
+                Trace.WriteLine($"VHD_ATTACH_BEGIN: Path={SanitizeSensitiveText(vhdPath)}");
+                var attachResult = await RunDiskPartScriptAsync(attachScript, "ATTACH_VHD", 60000);
+                if (attachResult.TimedOut)
                 {
-                    try { process.Kill(); } catch { }
                     await ShowStatusAndWait("VHD挂载超时（超过60秒），已中止diskpart进程");
-                    if (File.Exists(tempScript))
-                        File.Delete(tempScript);
                     return false;
                 }
 
-                string attachOutput = await process.StandardOutput.ReadToEndAsync();
-                string attachError = await process.StandardError.ReadToEndAsync();
-                
-                if (File.Exists(tempScript))
-                    File.Delete(tempScript);
-                
-                if (process.ExitCode != 0)
+                var alreadyAttached = DiskPartOutputIndicatesAlreadyAttached(attachResult.StandardError, attachResult.StandardOutput);
+
+                if (attachResult.ExitCode != 0)
                 {
-                    await ShowStatusAndWait($"VHD挂载失败: {attachError.Trim()}");
-                    Debug.WriteLine($"VHD挂载输出: {attachOutput}");
-                    Debug.WriteLine($"VHD挂载错误: {attachError}");
-                    return false;
+                    if (!alreadyAttached)
+                    {
+                        await ShowStatusAndWait(BuildProcessFailureDetail("VHD挂载失败", attachResult.ExitCode, attachResult.StandardError, attachResult.StandardOutput));
+                        return false;
+                    }
+
+                    if (await TryRebootForStaleDetachedVhdStateAsync("检测到VHD已连接且加密容器程序已停止", attachResult.ExitCode, attachResult.StandardError, attachResult.StandardOutput))
+                    {
+                        return false;
+                    }
+
+                    await ShowStatusAndWait("检测到VHD已处于连接状态，继续识别现有数据卷...");
                 }
 
-                var assignedOk = await AssignDriveLetterWithoutDiskpart(vhdPath, volumesBefore);
+                var assignedOk = await AssignDriveLetterWithoutDiskpart(vhdPath, volumesBefore, includeExistingVolumesFallback: alreadyAttached);
                 if (!assignedOk)
                 {
                     await ShowStatusAndWait("盘符 M 分配失败");
@@ -2857,6 +3048,16 @@ exit";
             }
         }
 
+        private static bool IsLikelyGameDataVolume(MountedVolumeInfo volume)
+        {
+            return volume != null && (
+                volume.HasPackageFolder ||
+                volume.HasBinFolder ||
+                volume.HasStartBat ||
+                volume.HasStartGameBat ||
+                volume.AccessPaths.Any(path => string.Equals(NormalizeDriveRootPath(path), TARGET_DRIVE_ROOT, StringComparison.OrdinalIgnoreCase)));
+        }
+
         private static List<string> ParseMultiStringBuffer(char[] buffer)
         {
             var result = new List<string>();
@@ -2998,6 +3199,85 @@ exit";
             }
 
             return new List<MountedVolumeInfo>();
+        }
+
+        private List<MountedVolumeInfo> FindExistingMountedVolumeCandidates(string expectedFolderName)
+        {
+            var allVolumes = CaptureCurrentVolumes().Values.ToList();
+            var contentCandidates = allVolumes
+                .Where(IsLikelyGameDataVolume)
+                .ToList();
+
+            var virtualCandidates = new List<MountedVolumeInfo>();
+            foreach (var candidate in contentCandidates)
+            {
+                var diskNumbers = GetVolumeDiskNumbers(candidate.VolumeGuidPath);
+                var belongsToVirtualDisk = diskNumbers.Count > 0 && BelongsToVirtualDisk(diskNumbers);
+                Trace.WriteLine(
+                    $"EXISTING_VOLUME_CANDIDATE: Volume={candidate.VolumeGuidPath}, DiskNumbers={string.Join(",", diskNumbers)}, BelongsToVirtualDisk={belongsToVirtualDisk}, Paths={FormatAccessPaths(candidate.AccessPaths)}, Sample={FormatSampleEntries(candidate.SampleEntries)}");
+
+                if (belongsToVirtualDisk)
+                {
+                    virtualCandidates.Add(candidate);
+                }
+            }
+
+            var effectiveCandidates = virtualCandidates.Count > 0 ? virtualCandidates : contentCandidates;
+            return effectiveCandidates
+                .OrderByDescending(volume => ScoreMountedVolume(volume, expectedFolderName))
+                .ThenBy(volume => volume.VolumeGuidPath, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        private bool HasResidualMountedGameVolume()
+        {
+            try
+            {
+                var currentTarget = TryGetMountedVolumeGuidForMountPoint(TARGET_DRIVE_ROOT);
+                if (!string.IsNullOrWhiteSpace(currentTarget))
+                {
+                    Trace.WriteLine($"STALE_VHD_CHECK: TargetDriveStillMounted Volume={currentTarget}");
+                    return true;
+                }
+
+                var candidates = CaptureCurrentVolumes().Values.Where(IsLikelyGameDataVolume).ToList();
+                foreach (var candidate in candidates)
+                {
+                    var diskNumbers = GetVolumeDiskNumbers(candidate.VolumeGuidPath);
+                    var belongsToVirtualDisk = diskNumbers.Count > 0 && BelongsToVirtualDisk(diskNumbers);
+                    Trace.WriteLine($"STALE_VHD_CHECK: Volume={candidate.VolumeGuidPath}, DiskNumbers={string.Join(",", diskNumbers)}, BelongsToVirtualDisk={belongsToVirtualDisk}, Paths={FormatAccessPaths(candidate.AccessPaths)}, Sample={FormatSampleEntries(candidate.SampleEntries)}");
+                    if (belongsToVirtualDisk)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"STALE_VHD_CHECK_EXCEPTION: {ex}");
+                return false;
+            }
+        }
+
+        private async Task<bool> TryRebootForStaleDetachedVhdStateAsync(string reason, int exitCode, string stderr, string stdout)
+        {
+            if (IsEncryptedEvhdMountProcessRunning())
+            {
+                return false;
+            }
+
+            if (!HasResidualMountedGameVolume())
+            {
+                return false;
+            }
+
+            var detail = BuildProcessFailureDetail(reason, exitCode, stderr, stdout);
+            Trace.WriteLine($"STALE_VHD_REBOOT: {detail}");
+            await ShowStatusAndWait("检测到加密容器挂载程序已停止，但VHD残留在系统挂载状态。将重启设备清理残留挂载。");
+            TryRebootSystem();
+            return true;
         }
 
         private async Task<bool> TryAssignTargetDriveLetterAsync(MountedVolumeInfo volume)
@@ -3976,7 +4256,7 @@ exit";
         }
 
         // 无需 CIM/WMI：基于卷 GUID 差集识别新卷，再用 SetVolumeMountPoint 绑定 M:\。
-        private async Task<bool> AssignDriveLetterWithoutDiskpart(string vhdPath, Dictionary<string, MountedVolumeInfo> volumesBefore)
+        private async Task<bool> AssignDriveLetterWithoutDiskpart(string vhdPath, Dictionary<string, MountedVolumeInfo> volumesBefore, bool includeExistingVolumesFallback = false)
         {
             try
             {
@@ -3991,8 +4271,19 @@ exit";
                 var candidates = await WaitForMountedVolumeCandidatesAsync(volumesBefore, expectedFolderName, 30000);
                 if (candidates.Count == 0)
                 {
-                    await ShowStatusAndWait("未识别到新挂载的数据卷");
-                    return false;
+                    if (!includeExistingVolumesFallback)
+                    {
+                        await ShowStatusAndWait("未识别到新挂载的数据卷");
+                        return false;
+                    }
+
+                    await ShowStatusAndWait("未检测到新增卷，尝试从现有卷中识别已连接的数据卷...");
+                    candidates = FindExistingMountedVolumeCandidates(expectedFolderName);
+                    if (candidates.Count == 0)
+                    {
+                        await ShowStatusAndWait("未识别到可复用的已连接数据卷");
+                        return false;
+                    }
                 }
 
                 foreach (var candidate in candidates)
@@ -4172,68 +4463,67 @@ exit";
             return s;
         }
 
-        public async Task<bool> UnmountVHD()
+        public async Task<bool> UnmountVHD(string vhdPath = null)
         {
             await ShowStatusAndWait("正在解除VHD挂载...");
             
             try
             {
-                // 直接分离VHD文件，不移除驱动器字母
-                var diskpartScript = "select vdisk file=*\ndetach vdisk\nexit";
-                var tempScript = Path.GetTempFileName();
-                await File.WriteAllTextAsync(tempScript, diskpartScript);
-                
-                await ShowStatusAndWait("正在执行VHD解除挂载脚本...");
-                
-                var process = new Process
+                var pathToDetach = string.IsNullOrWhiteSpace(vhdPath) ? activeMountedVhdPath : vhdPath;
+                if (string.IsNullOrWhiteSpace(pathToDetach))
                 {
-                    StartInfo = new ProcessStartInfo
+                    if (await TryRebootForStaleDetachedVhdStateAsync("未记录当前VHD路径且无法完成分离", -1, string.Empty, string.Empty))
                     {
-                        FileName = "diskpart",
-                        Arguments = $"/s \"{tempScript}\"",
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true
+                        return false;
                     }
-                };
-                
-                process.Start();
-                
-                // 添加超时机制，防止解除挂载时卡住
-                var waitTask = process.WaitForExitAsync();
-                var timeoutTask = Task.Delay(30000); // 30秒超时
-                var completed = await Task.WhenAny(waitTask, timeoutTask);
-                
-                if (completed == timeoutTask)
+
+                    StatusChanged?.Invoke("未记录当前VHD路径，跳过VHD分离");
+                    return true;
+                }
+
+                var diskpartScript = $@"select vdisk file=""{pathToDetach}""
+detach vdisk
+exit";
+                await ShowStatusAndWait("正在执行VHD解除挂载脚本...");
+                Trace.WriteLine($"VHD_DETACH_BEGIN: Path={SanitizeSensitiveText(pathToDetach)}");
+
+                var detachResult = await RunDiskPartScriptAsync(diskpartScript, "DETACH_VHD", 30000);
+                if (detachResult.TimedOut)
                 {
-                    try { process.Kill(); } catch { }
                     StatusChanged?.Invoke("解除VHD挂载超时（超过30秒），已中止diskpart进程");
-                    if (File.Exists(tempScript))
-                        File.Delete(tempScript);
+                    if (await TryRebootForStaleDetachedVhdStateAsync("解除VHD挂载超时", detachResult.ExitCode, detachResult.StandardError, detachResult.StandardOutput))
+                    {
+                        return false;
+                    }
                     return false;
                 }
-                
-                // 获取进程输出用于调试
-                string output = "";
-                string error = "";
-                try
+
+                if (detachResult.ExitCode != 0)
                 {
-                    output = await process.StandardOutput.ReadToEndAsync();
-                    error = await process.StandardError.ReadToEndAsync();
+                    if (DiskPartOutputIndicatesNotAttached(detachResult.StandardError, detachResult.StandardOutput))
+                    {
+                        StatusChanged?.Invoke("目标VHD当前未连接，无需分离");
+                    }
+                    else
+                    {
+                        if (DiskPartOutputIndicatesIoError(detachResult.StandardError, detachResult.StandardOutput))
+                        {
+                            if (await TryRebootForStaleDetachedVhdStateAsync("解除VHD挂载时发生I/O错误", detachResult.ExitCode, detachResult.StandardError, detachResult.StandardOutput))
+                            {
+                                return false;
+                            }
+                        }
+
+                        StatusChanged?.Invoke(BuildProcessFailureDetail("解除VHD挂载警告", detachResult.ExitCode, detachResult.StandardError, detachResult.StandardOutput));
+                        return false;
+                    }
                 }
-                catch { }
-                
-                if (File.Exists(tempScript))
-                    File.Delete(tempScript);
-                
-                if (process.ExitCode != 0 && !string.IsNullOrWhiteSpace(error))
+
+                if (string.Equals(activeMountedVhdPath, pathToDetach, StringComparison.OrdinalIgnoreCase))
                 {
-                    StatusChanged?.Invoke($"解除VHD挂载警告: {error.Trim()}");
-                    Debug.WriteLine($"UnmountVHD输出: {output}");
-                    Debug.WriteLine($"UnmountVHD错误: {error}");
+                    activeMountedVhdPath = null;
                 }
-                
+
                 StatusChanged?.Invoke("VHD解除挂载完成");
                 return true;
             }

@@ -1,14 +1,23 @@
 const assert = require('node:assert/strict');
 const crypto = require('crypto');
 const fs = require('fs');
+const http = require('http');
 const os = require('os');
 const path = require('path');
 const test = require('node:test');
 
 const { authenticator } = require('otplib');
 const request = require('supertest');
+const { WebSocket } = require('ws');
 
-const { buildRegistrationSigningPayload } = require('../registrationAuth');
+const {
+    buildMachineLogHelloSigningPayload,
+    buildRegistrationSigningPayload,
+} = require('../registrationAuth');
+const {
+    attachMachineLogWebSocketServer,
+    MACHINE_LOG_PROTOCOL_VERSION,
+} = require('../machineLogServer');
 const { createApp } = require('../server');
 
 const TEST_REGISTRATION_CERT_PEM = `-----BEGIN CERTIFICATE-----
@@ -535,6 +544,210 @@ function buildSignedRegistrationRequest(machineId, keyId, keyType, pubkeyPem, no
     };
 }
 
+function deriveMachineLogSessionKeys(sharedSecret, bootstrapSecret, clientNonce, serverNonce) {
+    const ikm = Buffer.concat([
+        Buffer.from(sharedSecret),
+        Buffer.from(String(bootstrapSecret || ''), 'base64'),
+    ]);
+    const salt = Buffer.from(`${clientNonce}${serverNonce}`, 'utf8');
+
+    return {
+        authKey: crypto.hkdfSync('sha256', ikm, salt, Buffer.from('machine-log-ws-auth-v1', 'utf8'), 32),
+        sessionKey: crypto.hkdfSync('sha256', ikm, salt, Buffer.from('machine-log-ws-data-v1', 'utf8'), 32),
+    };
+}
+
+function hashMachineLogTranscript(clientHello, serverHello) {
+    return crypto
+        .createHash('sha256')
+        .update([
+            'VHDMounterMachineLogTranscriptV1',
+            clientHello.protocolVersion,
+            clientHello.machineId,
+            clientHello.keyId,
+            clientHello.sessionId,
+            clientHello.bootstrapId,
+            String(clientHello.timestamp),
+            clientHello.nonce,
+            clientHello.clientEcdhPublicKey,
+            serverHello.connectionId,
+            String(serverHello.timestamp),
+            serverHello.nonce,
+            serverHello.serverEcdhPublicKey,
+            String(serverHello.heartbeatSeconds),
+            String(serverHello.heartbeatTimeoutSeconds),
+            String(serverHello.reconnectBaseMs),
+            String(serverHello.reconnectMaxMs),
+            String(serverHello.resumeWindowSeconds),
+            String(serverHello.acknowledgedSeq),
+        ].join('\n'), 'utf8')
+        .digest();
+}
+
+function computeFinishMac(authKey, transcriptHash, label) {
+    return crypto
+        .createHmac('sha256', authKey)
+        .update(transcriptHash)
+        .update(label, 'utf8')
+        .digest('base64');
+}
+
+function waitForWsOpen(ws) {
+    return new Promise((resolve, reject) => {
+        ws.once('open', resolve);
+        ws.once('error', reject);
+    });
+}
+
+function waitForWsJsonMessage(ws) {
+    return new Promise((resolve, reject) => {
+        const handleMessage = (raw) => {
+            cleanup();
+            resolve(JSON.parse(Buffer.isBuffer(raw) ? raw.toString('utf8') : String(raw)));
+        };
+        const handleError = (error) => {
+            cleanup();
+            reject(error);
+        };
+        const handleClose = (code, reason) => {
+            cleanup();
+            reject(new Error(`WebSocket closed before message: ${code} ${String(reason || '')}`.trim()));
+        };
+        const cleanup = () => {
+            ws.off('message', handleMessage);
+            ws.off('error', handleError);
+            ws.off('close', handleClose);
+        };
+
+        ws.on('message', handleMessage);
+        ws.on('error', handleError);
+        ws.on('close', handleClose);
+    });
+}
+
+async function registerApprovedMachine(client, machineId, machineKeyPair) {
+    const keyId = `VHDMounterKey_${machineId}`;
+    const keyType = 'RSA';
+    const pubkeyPem = machineKeyPair.publicKey.export({ type: 'spki', format: 'pem' });
+    const signedRequest = buildSignedRegistrationRequest(machineId, keyId, keyType, pubkeyPem);
+
+    await client
+        .post(`/api/machines/${machineId}/keys`)
+        .send(signedRequest)
+        .expect(202);
+
+    await client.post('/api/auth/login').send({ password: 'ComplexPassword123!' }).expect(200);
+    await client.post(`/api/machines/${machineId}/approve`).send({ approved: true }).expect(200);
+    await client
+        .post(`/api/machines/${machineId}/evhd-password`)
+        .send({ evhdPassword: 'EnvelopeSecret-456' })
+        .expect(200);
+
+    const envelopeResponse = await client
+        .get('/api/evhd-envelope')
+        .query({ machineId })
+        .expect(200);
+
+    const bootstrapPlaintext = crypto.privateDecrypt({
+        key: machineKeyPair.privateKey,
+        padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+        oaepHash: 'sha1',
+    }, Buffer.from(envelopeResponse.body.logChannelBootstrapCiphertext, 'base64')).toString('utf8');
+
+    return {
+        keyId,
+        bootstrap: JSON.parse(bootstrapPlaintext),
+    };
+}
+
+function waitForWsClose(ws) {
+    return new Promise((resolve) => {
+        ws.once('close', (code, reason) => {
+            resolve({
+                code,
+                reason: Buffer.isBuffer(reason) ? reason.toString('utf8') : String(reason || ''),
+            });
+        });
+    });
+}
+
+async function performMachineLogHandshake({ port, machineId, keyId, machineKeyPair, bootstrap, useIncorrectSharedSecret = false }) {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/machine-log`);
+    await waitForWsOpen(ws);
+
+    const sessionId = `20260420T010203Z-${useIncorrectSharedSecret ? 'incorrect' : 'raw'}`;
+    const clientEcdh = crypto.createECDH('prime256v1');
+    clientEcdh.generateKeys();
+    const timestamp = Date.now();
+    const nonce = crypto.randomBytes(16).toString('hex');
+    const clientEcdhPublicKey = clientEcdh.getPublicKey().toString('base64');
+    const hello = {
+        type: 'client_hello',
+        protocolVersion: MACHINE_LOG_PROTOCOL_VERSION,
+        machineId,
+        keyId,
+        sessionId,
+        bootstrapId: bootstrap.bootstrapId,
+        timestamp,
+        nonce,
+        clientEcdhPublicKey,
+    };
+    const helloPayload = buildMachineLogHelloSigningPayload({
+        protocolVersion: hello.protocolVersion,
+        machineId,
+        keyId,
+        sessionId,
+        bootstrapId: bootstrap.bootstrapId,
+        timestamp,
+        nonce,
+        clientEcdhPublicKey,
+    });
+    const signer = crypto.createSign('RSA-SHA256');
+    signer.update(helloPayload);
+    signer.end();
+
+    ws.send(JSON.stringify({
+        ...hello,
+        signature: signer.sign(machineKeyPair.privateKey, 'base64'),
+    }));
+
+    const serverHello = await waitForWsJsonMessage(ws);
+    assert.equal(serverHello.type, 'server_hello');
+
+    const rawSharedSecret = clientEcdh.computeSecret(Buffer.from(serverHello.serverEcdhPublicKey, 'base64'));
+    const handshakeSharedSecret = useIncorrectSharedSecret
+        ? crypto.createHash('sha256').update(rawSharedSecret).digest()
+        : rawSharedSecret;
+    const derivedKeys = deriveMachineLogSessionKeys(
+        handshakeSharedSecret,
+        bootstrap.bootstrapSecret,
+        nonce,
+        serverHello.nonce,
+    );
+    const transcriptHash = hashMachineLogTranscript(hello, serverHello);
+
+    ws.send(JSON.stringify({
+        type: 'client_finish',
+        mac: computeFinishMac(derivedKeys.authKey, transcriptHash, 'client_finish'),
+    }));
+
+    if (useIncorrectSharedSecret) {
+        const closed = await waitForWsClose(ws);
+        assert.equal(closed.code, 1008);
+        assert.match(closed.reason, /client_finish 校验失败/);
+        return;
+    }
+
+    const serverFinish = await waitForWsJsonMessage(ws);
+    assert.equal(serverFinish.type, 'server_finish');
+    assert.equal(serverFinish.mac, computeFinishMac(derivedKeys.authKey, transcriptHash, 'server_finish'));
+
+    await new Promise((resolve) => {
+        ws.once('close', () => resolve());
+        ws.close();
+    });
+}
+
 async function createInitializedHarness(t) {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vhd-select-server-'));
     t.after(() => {
@@ -1019,6 +1232,71 @@ test('机台注册必须使用可信证书签名且拒绝 nonce 重放', async (
     assert.equal(bootstrapPayload.expiresAt, envelopeResponse.body.logChannelBootstrapExpiresAt);
 });
 
+test('机台日志 WebSocket 握手按原始 ECDH shared secret 完成认证', async (t) => {
+    const { app, client, runtime } = await createInitializedHarness(t);
+    const server = http.createServer(app);
+    attachMachineLogWebSocketServer({
+        server,
+        runtime,
+        logger: {
+            log() {},
+            warn() {},
+            error() {},
+        },
+    });
+
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    t.after(async () => {
+        await new Promise((resolve) => server.close(() => resolve()));
+    });
+
+    const port = server.address().port;
+
+    const rawMachineKeyPair = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const rawMachineId = 'MACHINE-WS-RAW-01';
+    const rawMachine = await registerApprovedMachine(client, rawMachineId, rawMachineKeyPair);
+    await performMachineLogHandshake({
+        port,
+        machineId: rawMachineId,
+        keyId: rawMachine.keyId,
+        machineKeyPair: rawMachineKeyPair,
+        bootstrap: rawMachine.bootstrap,
+    });
+});
+
+test('机台日志 WebSocket 会拒绝非原始 ECDH shared secret 的 client_finish', async (t) => {
+    const { app, client, runtime } = await createInitializedHarness(t);
+    const server = http.createServer(app);
+    attachMachineLogWebSocketServer({
+        server,
+        runtime,
+        logger: {
+            log() {},
+            warn() {},
+            error() {},
+        },
+    });
+
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    t.after(async () => {
+        await new Promise((resolve) => server.close(() => resolve()));
+    });
+
+    const port = server.address().port;
+
+    const machineKeyPair = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const machineId = 'MACHINE-WS-RAW-FAIL-01';
+    const machine = await registerApprovedMachine(client, machineId, machineKeyPair);
+    await performMachineLogHandshake({
+        port,
+        machineId,
+        keyId: machine.keyId,
+        machineKeyPair,
+        bootstrap: machine.bootstrap,
+        useIncorrectSharedSecret: true,
+    });
+});
+
 test('管理员可以配置全局与单机日志保留策略', async (t) => {
     const { client } = await createInitializedHarness(t);
 
@@ -1076,6 +1354,24 @@ test('管理员可以配置全局与单机日志保留策略', async (t) => {
         .expect(200);
 
     assert.equal(clearedOverride.body.retentionActiveDaysOverride, null);
+});
+
+test('管理员更新日志保留策略时必须提供 IANA 时区', async (t) => {
+    const { client } = await createInitializedHarness(t);
+
+    await client.post('/api/auth/login').send({ password: 'ComplexPassword123!' }).expect(200);
+
+    const response = await client
+        .post('/api/settings/log-retention')
+        .send({
+            defaultRetentionActiveDays: 30,
+            dailyInspectionHour: 1,
+            dailyInspectionMinute: 15,
+            timezone: 'China Standard Time',
+        })
+        .expect(400);
+
+    assert.match(response.body.error, /IANA 时区/);
 });
 
 test('管理员可以按机台分页查询并导出机台日志', async (t) => {
