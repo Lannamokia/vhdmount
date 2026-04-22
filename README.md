@@ -355,4 +355,4 @@ GitHub Actions：
 - Copyright 2024 MuNET Team
 - 原始仓库：https://github.com/MuNET-OSS/AquaMai
 
-上述文件保留了原始的 Apache 2.0 版权声明，完整许可证文本请参阅仓库根目录下的 `LICENSE-APACHE-2.0` 文件。
+上述文件保留了原始的 Apache 2.0 版权声明，完整许可证文本请参阅 `third-party-licenses/LICENSE-APACHE-2.0`。
