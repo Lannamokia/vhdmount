@@ -1,4 +1,5 @@
 name: build
+
 on:
   push:
     branches:
@@ -7,9 +8,17 @@ on:
       - maimoller_control_test
     tags:
       - "*"
+    paths:
+      - 'src/**'
+      - 'Updater/**'
+      - 'VHDMountAdminTools/**'
+      - '**.csproj'
+      - '.github/workflows/build.yml'
   workflow_dispatch:
+
 permissions:
   contents: write
+
 jobs:
   windows:
     runs-on: windows-latest

@@ -1,0 +1,27 @@
+name: Tests (Node.js)
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - 'VHDSelectServer/**'
+      - '.github/workflows/test-nodejs.yml'
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'VHDSelectServer/**'
+      - '.github/workflows/test-nodejs.yml'
+  workflow_dispatch:
+
+jobs:
+  nodejs-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      - name: Install dependencies
+        run: cd VHDSelectServer && npm ci
+      - name: Run tests
+        run: cd VHDSelectServer && npm test

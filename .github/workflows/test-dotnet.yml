@@ -1,0 +1,29 @@
+name: Tests (.NET)
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - 'src/VHDMounter/**'
+      - 'VHDMounter.Tests/**'
+      - '**.csproj'
+      - '.github/workflows/test-dotnet.yml'
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'src/VHDMounter/**'
+      - 'VHDMounter.Tests/**'
+      - '**.csproj'
+      - '.github/workflows/test-dotnet.yml'
+  workflow_dispatch:
+
+jobs:
+  dotnet-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Test VHDMounter
+        run: dotnet test ./VHDMounter.Tests/VHDMounter.Tests.csproj -p:EnableHidMenuFeatures=true --verbosity normal
