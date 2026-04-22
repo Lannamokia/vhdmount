@@ -9,6 +9,8 @@ on:
     paths:
       - 'VHDSelectServer/**'
       - '.github/workflows/docker-image.yml'
+    tags:
+      - '*'
   pull_request:
     branches:
       - main
@@ -17,14 +19,12 @@ on:
     paths:
       - 'VHDSelectServer/**'
       - '.github/workflows/docker-image.yml'
-  release:
-    types: [published]
   workflow_dispatch:
 
 jobs:
   build_artifact:
     name: Build image and upload artifact (on changes)
-    if: github.event_name != 'release'
+    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -52,7 +52,7 @@ jobs:
 
   release_push:
     name: Tag and push to DockerHub (on release)
-    if: github.event_name == 'release'
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     env:
       DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
@@ -64,7 +64,7 @@ jobs:
       - name: Parse version from tag
         id: version
         run: |
-          TAG="${{ github.event.release.tag_name }}"
+          TAG="${{ github.ref_name }}"
           VER="${TAG#v}"
           echo "version=$VER" >> $GITHUB_OUTPUT
 
