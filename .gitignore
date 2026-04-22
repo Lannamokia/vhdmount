@@ -68,6 +68,7 @@ staging/
 *.md
 !README.md
 !**/README.md
+!documents/**/*.md
 docs/**/*.md
 !VHDSelectServer/*.md
 README.old.md
