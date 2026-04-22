@@ -106,7 +106,7 @@ namespace VHDMountAdminTools
                 var payloadDirectory = PayloadDir.Text;
                 var outputDirectory = string.IsNullOrWhiteSpace(ManifestOutDir.Text) ? "." : ManifestOutDir.Text;
                 var type = ((System.Windows.Controls.ComboBoxItem)TypeBox.SelectedItem).Content?.ToString() ?? "app-update";
-                var minVersion = string.IsNullOrWhiteSpace(MinVersionBox.Text) ? "1.5.0" : MinVersionBox.Text.Trim();
+                var minVersion = string.IsNullOrWhiteSpace(MinVersionBox.Text) ? "1.7.0" : MinVersionBox.Text.Trim();
                 var version = string.IsNullOrWhiteSpace(VersionBox.Text) ? DateTime.UtcNow.ToString("yyyy.MM.dd.HHmmss") : VersionBox.Text.Trim();
 
                 if (string.IsNullOrWhiteSpace(payloadDirectory) || !Directory.Exists(payloadDirectory))
