@@ -1,0 +1,42 @@
+name: Tests
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+jobs:
+  dotnet-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Test VHDMounter
+        run: dotnet test ./VHDMounter.Tests/VHDMounter.Tests.csproj -p:EnableHidMenuFeatures=true --verbosity normal
+
+  nodejs-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      - name: Install dependencies
+        run: cd VHDSelectServer && npm ci
+      - name: Run tests
+        run: cd VHDSelectServer && npm test
+
+  flutter-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+      - name: Get dependencies
+        run: cd vhd_mount_admin_flutter && flutter pub get
+      - name: Run tests
+        run: cd vhd_mount_admin_flutter && flutter test
