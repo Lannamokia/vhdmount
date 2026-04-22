@@ -4,6 +4,8 @@
 
 旧版可操作 Web 管理前端已经移除；VHDSelectServer 根路径 `/` 现在只提供轻量的客户端下载与连接提示页，不再提供可操作的浏览器管理界面。
 
+> 📖 **安装与使用指南**：<https://lannamokia.github.io/vhdmount/>
+
 ## 组件概览
 
 - VHDMounter
