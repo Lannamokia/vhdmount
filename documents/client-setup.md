@@ -170,6 +170,8 @@ Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -
 Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows Embedded\KeyboardFilter" -Name "Config" -Value "..."
 ```
 
+配置值的完整语法和可用键码请参阅微软官方文档：<https://learn.microsoft.com/zh-cn/windows/configuration/keyboard-filter/>
+
 恢复：删除或修改对应注册表值。
 
 ### 自动登录
