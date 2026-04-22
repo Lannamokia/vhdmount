@@ -15,6 +15,7 @@ namespace VHDMounter
         private VHDManager vhdManager;
         private List<string> availableVHDs;
         private bool isProcessing = false;
+        private string currentPackagePath;
         // 三次 Delete 关闭程序的检测
         private int delPressCount = 0;
         private DateTime lastDelPressTime = DateTime.MinValue;
@@ -333,6 +334,9 @@ namespace VHDMounter
                     await ShowFatalErrorAndShutdownAfterDelay();
                     return;
                 }
+
+                // 保存当前游戏路径，用于菜单退出后重启
+                currentPackagePath = targetFolder;
 
                 // 阶段：正在更新和启动游戏程序，请耐心等待
                 SetStage(UiStage.UpdateAndLaunch);

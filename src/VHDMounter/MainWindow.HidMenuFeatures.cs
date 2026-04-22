@@ -181,6 +181,9 @@ namespace VHDMounter
                 return;
             }
 
+            vhdManager.IsMenuOpen = true;
+            vhdManager.KillGameProcesses();
+
             overlayActivationContext = await windowActivationService.EnsureWindowVisibleForOverlayAsync(this);
             isServiceMenuOpen = true;
             currentOverlayState = OverlayState.ServiceMenuHome;
@@ -207,14 +210,15 @@ namespace VHDMounter
             SyncFeatureInputState();
             RenderOverlay();
 
-            if (activationContext != null && activationContext.WasBackgroundHidden && isWindowHiddenForGame)
+            vhdManager.IsMenuOpen = false;
+
+            if (!string.IsNullOrEmpty(currentPackagePath))
+            {
+                await vhdManager.RestartGameProcesses(currentPackagePath);
+            }
+            else if (activationContext != null && activationContext.WasBackgroundHidden && isWindowHiddenForGame)
             {
                 await windowActivationService.RestoreWindowAsync(this, activationContext);
-                var process = vhdManager.GetFirstTargetProcess();
-                if (process != null)
-                {
-                    vhdManager.FocusProcessWindow(process);
-                }
             }
         }
 

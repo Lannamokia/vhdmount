@@ -35,6 +35,9 @@ namespace VHDMounter
         private const string TARGET_DRIVE_ROOT = "M:\\";
         private readonly string[] TARGET_KEYWORDS = { "SDEZ", "SDGB", "SDHJ", "SDDT", "SDHD" };
         private readonly string[] PROCESS_KEYWORDS = { "sinmai", "chusanapp", "mu3" };
+        private readonly string[] AUXILIARY_PROCESS_KEYWORDS = { "inject", "amdaemon" };
+
+        public bool IsMenuOpen { get; set; }
 
         public event Action<string> StatusChanged;
         public event Action<FileReplaceProgress> ReplaceProgressChanged;
@@ -3767,6 +3770,91 @@ exit";
             }
         }
 
+        public void KillGameProcesses()
+        {
+            var allKeywords = PROCESS_KEYWORDS.Concat(AUXILIARY_PROCESS_KEYWORDS).ToArray();
+            try
+            {
+                var processes = Process.GetProcesses();
+                foreach (var proc in processes)
+                {
+                    try
+                    {
+                        if (allKeywords.Any(keyword =>
+                            proc.ProcessName.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0))
+                        {
+                            Trace.WriteLine($"KILL_PROCESS: {proc.ProcessName} (PID={proc.Id})");
+                            try { proc.Kill(entireProcessTree: true); } catch { }
+                        }
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"KILL_GAME_PROCESSES_FAILED: {ex.Message}");
+            }
+        }
+
+        public async Task RestartGameProcesses(string packagePath)
+        {
+            if (string.IsNullOrEmpty(packagePath))
+            {
+                Trace.WriteLine("RESTART_GAME: packagePath is null or empty");
+                return;
+            }
+
+            // 根据存在情况选择重启脚本：优先 start_game.bat；仅有 start.bat 时用 start.bat
+            var startGameBatPath = Path.Combine(packagePath, "start_game.bat");
+            var startBatPath = Path.Combine(packagePath, "start.bat");
+            bool hasStartGame = File.Exists(startGameBatPath);
+            bool hasStart = File.Exists(startBatPath);
+
+            if (hasStartGame)
+            {
+                await ShowStatusAndWait("菜单退出，使用 start_game.bat 重新启动游戏...");
+                await StartGameBatchFile(packagePath);
+            }
+            else if (hasStart)
+            {
+                await ShowStatusAndWait("菜单退出，使用 start.bat 重新启动游戏...");
+                await StartBatchFile(packagePath);
+            }
+            else
+            {
+                await ShowStatusAndWait("菜单退出，未找到启动脚本，无法重新启动游戏...");
+                return;
+            }
+
+            // 等待启动到可检测
+            var startWaitMs = 0;
+            while (!IsTargetProcessRunning() && startWaitMs < 30000)
+            {
+                await Task.Delay(1000);
+                startWaitMs += 1000;
+            }
+
+            if (IsTargetProcessRunning())
+            {
+                // 检测到进程后，等待 5 秒确保游戏窗口已创建并稳定
+                await ShowStatusAndWait("检测到游戏进程已启动，等待5秒稳定...");
+                await Task.Delay(5000);
+
+                // 尝试将游戏窗口前置到前台
+                var proc = GetFirstTargetProcess();
+                if (proc != null)
+                {
+                    FocusProcessWindow(proc);
+                }
+
+                // 通知 UI 已成功重启
+                try { GameStarted?.Invoke(); } catch { }
+                await ShowStatusAndWait("游戏进程已重启并前置");
+            }
+        }
+
         public async Task MonitorAndRestart(string packagePath)
         {
             await ShowStatusAndWait("开始监控目标进程...");
@@ -3774,6 +3862,13 @@ exit";
             {
                 if (!IsTargetProcessRunning())
                 {
+                    if (IsMenuOpen)
+                    {
+                        // 菜单打开期间，只等待不重启
+                        await Task.Delay(1000);
+                        continue;
+                    }
+
                     try { GameCrashed?.Invoke(); } catch { }
 
                     // 根据存在情况选择重启脚本：优先 start_game.bat；仅有 start.bat 时用 start.bat
