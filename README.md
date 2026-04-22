@@ -344,4 +344,13 @@ GitHub Actions：
 
 ## 许可
 
-MIT License
+本项目主体代码以 [MIT License](LICENSE) 授权。
+
+### 第三方代码声明
+
+本项目 `src/VHDMounter/` 目录下的 HID 输入处理相关模块（`MaimollerInputService.cs`、`MaimollerInputModels.cs` 等）部分代码改编自 [AquaMai](https://github.com/MuNET-OSS/AquaMai)，该项目以 [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0) 授权。
+
+- Copyright 2024 MuNET Team
+- 原始仓库：https://github.com/MuNET-OSS/AquaMai
+
+上述文件保留了原始的 Apache 2.0 版权声明，完整许可证文本请参阅仓库根目录下的 `LICENSE-APACHE-2.0` 文件。
