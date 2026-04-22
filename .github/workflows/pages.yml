@@ -29,19 +29,15 @@ jobs:
         with:
           ruby-version: '3.3'
           bundler-cache: true
+          working-directory: documents
 
       - name: Setup Pages
         id: pages
         uses: actions/configure-pages@v5
 
       - name: Build with Jekyll
-        run: |
-          cd documents
-          bundle init
-          bundle add jekyll --skip-install
-          bundle add jekyll-remote-theme --skip-install
-          bundle install
-          bundle exec jekyll build --baseurl "${{ steps.pages.outputs.base_path }}"
+        run: bundle exec jekyll build --baseurl "${{ steps.pages.outputs.base_path }}"
+        working-directory: documents
         env:
           JEKYLL_ENV: production
 
