@@ -1,3 +1,8 @@
+---
+layout: default
+title: Windows 客户端安装
+---
+
 # Windows 客户端安装
 
 ---
@@ -74,7 +79,9 @@ EnableLogUpload=false
 
 ## Maimoller HID 系统菜单（仅限增强版）
 
-使用 `VHDMounter_Maimoller.exe` 时，可通过 Maimoller 操控面板访问系统菜单：
+使用 `VHDMounter_Maimoller.exe` 时，可通过 Maimoller 操控面板访问系统菜单。
+
+简要操作：
 
 | 操作 | 按键 |
 |------|------|
@@ -83,7 +90,7 @@ EnableLogUpload=false
 | 确认 | 4 号键 |
 | 返回/关闭 | 5 号键 |
 
-菜单功能包括：系统重启、关机、系统信息查看、网络设置、音频设置。
+完整功能说明、HID 数据包格式、数字编辑模式、故障排查等详情请参阅 [Maimoller HID 系统菜单指南](maimoller)。
 
 ---
 
@@ -148,3 +155,97 @@ Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -
 ```
 
 > 密码以明文存储在注册表中，仅在受控物理环境下使用。
+
+---
+
+## 生产环境机台加固（Windows IoT Enterprise）
+
+建议在正式机台上部署 **Windows IoT Enterprise**，利用系统级锁定功能进一步减少暴露面。
+
+### 限制键盘输入
+
+通过 KeyboardFilter 禁用非必要按键：
+
+```powershell
+Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows Embedded\KeyboardFilter" -Name "Config" -Value "..."
+```
+
+恢复：删除或修改对应注册表值。
+
+### 自动登录
+
+配置 AppUser 自动登录：
+
+```powershell
+Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "AutoAdminLogon" -Value "1"
+Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "DefaultUserName" -Value "AppUser"
+Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "DefaultPassword" -Value "密码"
+```
+
+### 隐藏自动登录页面
+
+```powershell
+Set-ItemProperty "HKLM:\Software\Microsoft\Windows Embedded\EmbeddedLogon" -Name "HideAutoLogonUI" -Value 1
+```
+
+恢复：将值改为 `0`。
+
+### 隐藏登录页面右下角元素
+
+```powershell
+Set-ItemProperty "HKLM:\Software\Microsoft\Windows Embedded\EmbeddedLogon" -Name "BrandingNeutral" -Value 0x3f
+```
+
+恢复：将值改回 `0`。
+
+### 统一写入过滤器（UWF）
+
+UWF 可将系统盘设为只读，重启后还原。若需临时修改系统配置，先禁用过滤再重启：
+
+```powershell
+# 禁用 UWF
+uwfmgr filter disable
+Restart-Computer
+
+# 修改完成后重新启用
+uwfmgr filter enable
+Restart-Computer
+```
+
+### 登录页面不显示上次用户名
+
+```powershell
+# 启用"不显示上次登录的用户名"
+Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "dontdisplaylastusername" -Value 1
+```
+
+恢复：改为 `0`，或通过 `secpol.msc` > 本地策略 > 安全选项 > "交互式登录: 不显示上次登录的用户名" 设置为"已禁用"。
+
+### 系统盘 BitLocker 加密
+
+建议为系统分区启用 BitLocker，防止物理拆盘导致的配置泄露：
+
+```powershell
+# 检查 BitLocker 状态
+Get-BitLockerVolume C:
+
+# 启用 BitLocker（需要 TPM 或恢复密钥）
+Enable-BitLocker -MountPoint C: -RecoveryPasswordProtector
+
+# 保存恢复密钥到安全位置
+(Get-BitLockerVolume C:).KeyProtector | Where-Object { $_.KeyProtectorType -eq "RecoveryPassword" }
+```
+
+> 启用 BitLocker 后首次启动需要完成加密过程，建议在机台正式投用前完成。
+
+### 检查清单
+
+| 加固项 | 推荐值 | 恢复方式 |
+|--------|--------|----------|
+| KeyboardFilter | 按需配置 | 修改注册表 |
+| AutoAdminLogon | `1` | 改为 `0` |
+| HideAutoLogonUI | `1` | 改为 `0` |
+| BrandingNeutral | `0x3f` (63) | 改为 `0` |
+| UWF | 按需启用/禁用 | `uwfmgr filter enable/disable` |
+| dontdisplaylastusername | `1` | 改为 `0` |
+| BitLocker | 启用 | `Disable-BitLocker C:` |

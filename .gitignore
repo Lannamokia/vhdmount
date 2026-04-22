@@ -64,6 +64,11 @@ staging/
 *.cert
 *.pem
 
+# ============ Jekyll / GitHub Pages Preview ============
+documents/.jekyll-cache/
+documents/_site/
+.pages_preview/
+
 # ============ Documentation Artifacts ============
 *.md
 !README.md

@@ -1,3 +1,8 @@
+---
+layout: default
+title: 服务端部署
+---
+
 # 服务端部署
 
 VHDSelectServer 提供两种部署方式：Docker（推荐）和本地直接运行。
