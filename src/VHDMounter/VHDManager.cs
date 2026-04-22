@@ -1748,7 +1748,7 @@ namespace VHDMounter
             }
 
             var trimmed = mountPoint.Trim();
-            if (Regex.IsMatch(trimmed, "^[A-Za-z]:\\?$"))
+            if (Regex.IsMatch(trimmed, @"^[A-Za-z]:\\?$"))
             {
                 return trimmed.EndsWith("\\", StringComparison.Ordinal) ? trimmed : trimmed + "\\";
             }
