@@ -16,6 +16,7 @@ namespace VHDMounter
         private List<string> availableVHDs;
         private bool isProcessing = false;
         private string currentPackagePath;
+        private SoftwareDeploy.DeployPoller? deployPoller;
         // 三次 Delete 关闭程序的检测
         private int delPressCount = 0;
         private DateTime lastDelPressTime = DateTime.MinValue;
@@ -60,7 +61,10 @@ namespace VHDMounter
             
             // 注册关机事件监听
             SystemEvents.SessionEnding += OnSessionEnding;
-            
+
+            // 初始化远程部署轮询
+            InitializeDeployPoller();
+
             // 开始主流程（包含延迟启动）
             _ = StartMainProcessWithDelay();
             Trace.WriteLine("MAINWINDOW: ctor end");
@@ -462,10 +466,13 @@ namespace VHDMounter
             // 取消注册关机事件
             SystemEvents.SessionEnding -= OnSessionEnding;
 
+            // 停止部署轮询
+            deployPoller?.Dispose();
+
 #if FEATURE_HID_MENU
             DisposeFeatureServices();
 #endif
-            
+
             base.OnClosed(e);
         }
 
@@ -501,6 +508,91 @@ namespace VHDMounter
             finally
             {
                 Application.Current.Shutdown();
+            }
+        }
+
+        // ---------- 远程部署模块 ----------
+
+        private void InitializeDeployPoller()
+        {
+            try
+            {
+                var config = ReadDeployConfig();
+                if (string.IsNullOrWhiteSpace(config.serverUrl) || string.IsNullOrWhiteSpace(config.machineId))
+                {
+                    Trace.WriteLine("[Deploy] 缺少服务端地址或机台ID，跳过部署轮询初始化");
+                    return;
+                }
+
+                var trustedKeysPath = System.IO.Path.Combine(AppContext.BaseDirectory, "trusted_keys.pem");
+                if (!System.IO.File.Exists(trustedKeysPath))
+                {
+                    Trace.WriteLine("[Deploy] trusted_keys.pem 不存在，跳过部署轮询初始化");
+                    return;
+                }
+
+                deployPoller = new SoftwareDeploy.DeployPoller(config.serverUrl, config.machineId, trustedKeysPath, AppContext.BaseDirectory);
+                deployPoller.OnDeployStarted += (sender, message) =>
+                {
+                    Dispatcher.Invoke(() => ShowDeployOverlay(message));
+                };
+                deployPoller.OnDeployCompleted += (sender, taskId) =>
+                {
+                    Dispatcher.Invoke(() => HideDeployOverlay());
+                };
+                deployPoller.Start();
+                Trace.WriteLine("[Deploy] 部署轮询已启动");
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Deploy] 初始化部署轮询失败: {ex.Message}");
+            }
+        }
+
+        private void ShowDeployOverlay(string message)
+        {
+            try
+            {
+                DeployStatusText.Text = message;
+                DeployOverlay.Visibility = Visibility.Visible;
+                DeployOverlay.Activate();
+            }
+            catch { }
+        }
+
+        private void HideDeployOverlay()
+        {
+            try
+            {
+                DeployOverlay.Visibility = Visibility.Collapsed;
+            }
+            catch { }
+        }
+
+        private (string serverUrl, string machineId) ReadDeployConfig()
+        {
+            try
+            {
+                var configPath = System.IO.Path.Combine(AppContext.BaseDirectory, "vhdmonter_config.ini");
+                if (!System.IO.File.Exists(configPath))
+                    return ("", "");
+
+                var lines = System.IO.File.ReadAllLines(configPath);
+                string serverUrl = "";
+                string machineId = "";
+                foreach (var line in lines)
+                {
+                    var trimmed = line.Trim();
+                    if (trimmed.StartsWith("ServerUrl="))
+                        serverUrl = trimmed.Substring("ServerUrl=".Length).Trim();
+                    if (trimmed.StartsWith("MachineId="))
+                        machineId = trimmed.Substring("MachineId=".Length).Trim();
+                }
+                return (serverUrl, machineId);
+            }
+            catch
+            {
+                return ("", "");
             }
         }
     }

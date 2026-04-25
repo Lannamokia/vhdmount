@@ -133,6 +133,38 @@
             </Grid>
         </Grid>
 
+        <!-- 部署进度遮罩 -->
+        <Grid x:Name="DeployOverlay"
+              Grid.RowSpan="2"
+              Visibility="Collapsed"
+              Background="#AA111827"
+              Panel.ZIndex="20">
+            <Grid HorizontalAlignment="Center"
+                  VerticalAlignment="Center">
+                <Border Width="600"
+                        Padding="40"
+                        Background="#FFF9F6EE"
+                        BorderBrush="#FF111827"
+                        BorderThickness="3"
+                        CornerRadius="30">
+                    <StackPanel HorizontalAlignment="Center">
+                        <TextBlock x:Name="DeployStatusText"
+                                   Text="正在更新配套工具软件，请耐心等待"
+                                   FontSize="28"
+                                   FontWeight="Bold"
+                                   Foreground="#FF111827"
+                                   TextAlignment="Center"
+                                   TextWrapping="Wrap"/>
+                        <ProgressBar x:Name="DeployProgressBar"
+                                     Width="400"
+                                     Height="20"
+                                     Margin="0,24,0,0"
+                                     IsIndeterminate="True"/>
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Grid>
+
         <Grid x:Name="ServiceMenuOverlay"
               Grid.RowSpan="2"
               Visibility="Collapsed"
