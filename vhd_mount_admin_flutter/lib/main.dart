@@ -5,7 +5,9 @@ void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(
     app.AdminApp(
-      controller: app.AppController(api: app.HttpAdminApi()),
+      controller: app.AppController(
+        api: app.HttpAdminApi(cookieStore: app.FileCookieStore()),
+      ),
     ),
   );
 }

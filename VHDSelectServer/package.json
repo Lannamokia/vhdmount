@@ -19,6 +19,7 @@
   "license": "MIT",
   "dependencies": {
     "bcryptjs": "^2.4.3",
+    "connect-pg-simple": "^10.0.0",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "express-fileupload": "^1.5.1",

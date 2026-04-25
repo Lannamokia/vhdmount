@@ -548,6 +548,139 @@ class FileClientConfigStore implements ClientConfigStore {
   }
 }
 
+class CookieStoreException implements Exception {
+  const CookieStoreException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+abstract class CookieStore {
+  Future<Map<String, Cookie>> load();
+
+  Future<void> save(Map<String, Cookie> cookies);
+
+  Future<void> clear();
+}
+
+class FileCookieStore implements CookieStore {
+  FileCookieStore({
+    Future<Directory> Function()? directoryProvider,
+    this.fileName = 'vhd_mount_admin_cookies.json',
+  }) : _directoryProvider = directoryProvider ?? getApplicationSupportDirectory;
+
+  final Future<Directory> Function() _directoryProvider;
+  final String fileName;
+
+  Future<File> _getCookieFile() async {
+    final directory = await _directoryProvider();
+    return File('${directory.path}${Platform.pathSeparator}$fileName');
+  }
+
+  @override
+  Future<Map<String, Cookie>> load() async {
+    try {
+      final file = await _getCookieFile();
+      if (!await file.exists()) {
+        return <String, Cookie>{};
+      }
+
+      final content = await file.readAsString();
+      if (content.trim().isEmpty) {
+        return <String, Cookie>{};
+      }
+
+      final decoded = jsonDecode(content);
+      if (decoded is! Map<String, dynamic>) {
+        return <String, Cookie>{};
+      }
+
+      final cookiesJson = decoded['cookies'];
+      if (cookiesJson is! Map<String, dynamic>) {
+        return <String, Cookie>{};
+      }
+
+      final result = <String, Cookie>{};
+      for (final entry in cookiesJson.entries) {
+        final cookieData = entry.value;
+        if (cookieData is! Map<String, dynamic>) {
+          continue;
+        }
+        final name = cookieData['name'] as String?;
+        final value = cookieData['value'] as String?;
+        if (name == null || value == null) {
+          continue;
+        }
+        final cookie = Cookie(name, value);
+        final expiresStr = cookieData['expires'] as String?;
+        if (expiresStr != null && expiresStr.isNotEmpty) {
+          final expires = DateTime.tryParse(expiresStr);
+          if (expires != null) {
+            cookie.expires = expires;
+          }
+        }
+        final domain = cookieData['domain'] as String?;
+        if (domain != null && domain.isNotEmpty) {
+          cookie.domain = domain;
+        }
+        final path = cookieData['path'] as String?;
+        if (path != null && path.isNotEmpty) {
+          cookie.path = path;
+        }
+        result[name] = cookie;
+      }
+
+      return result;
+    } on FormatException {
+      return <String, Cookie>{};
+    } catch (error) {
+      throw CookieStoreException('读取持久化 Cookie 失败: $error');
+    }
+  }
+
+  @override
+  Future<void> save(Map<String, Cookie> cookies) async {
+    try {
+      final file = await _getCookieFile();
+      await file.parent.create(recursive: true);
+
+      final cookiesJson = <String, dynamic>{};
+      for (final entry in cookies.entries) {
+        final cookie = entry.value;
+        cookiesJson[entry.key] = <String, dynamic>{
+          'name': cookie.name,
+          'value': cookie.value,
+          if (cookie.expires != null)
+            'expires': cookie.expires!.toUtc().toIso8601String(),
+          if (cookie.domain != null) 'domain': cookie.domain,
+          if (cookie.path != null) 'path': cookie.path,
+        };
+      }
+
+      final data = <String, dynamic>{'cookies': cookiesJson};
+      await file.writeAsString(
+        '${const JsonEncoder.withIndent('  ').convert(data)}\n',
+      );
+    } catch (error) {
+      throw CookieStoreException('保存 Cookie 失败: $error');
+    }
+  }
+
+  @override
+  Future<void> clear() async {
+    try {
+      final file = await _getCookieFile();
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } catch (error) {
+      throw CookieStoreException('清除 Cookie 失败: $error');
+    }
+  }
+}
+
 class MachineRecord {
   const MachineRecord({
     required this.machineId,
@@ -1253,6 +1386,8 @@ abstract class AdminApi {
 
   Future<void> changePassword(String currentPassword, String newPassword);
 
+  Future<void> restoreSession();
+
   Future<List<DeploymentPackage>> getDeploymentPackages();
 
   Future<void> uploadDeploymentPackage({
@@ -1302,6 +1437,7 @@ class HttpAdminApi implements AdminApi {
   HttpAdminApi({
     String baseUrl = 'http://localhost:8080',
     Duration requestTimeout = const Duration(seconds: 15),
+    this.cookieStore,
   }) : _baseUrl = baseUrl,
        _requestTimeout = requestTimeout,
        _client = HttpClient()..connectionTimeout = requestTimeout;
@@ -1311,6 +1447,29 @@ class HttpAdminApi implements AdminApi {
   final Duration _requestTimeout;
   String _baseUrl;
   final Random _random = Random.secure();
+  final CookieStore? cookieStore;
+
+  Future<void> _persistCookies() async {
+    if (cookieStore == null || _cookies.isEmpty) {
+      return;
+    }
+    try {
+      await cookieStore!.save(Map<String, Cookie>.unmodifiable(_cookies));
+    } catch (_) {
+      // 静默失败，Cookie 持久化失败时不阻塞请求。
+    }
+  }
+
+  Future<void> clearCookies() async {
+    _cookies.clear();
+    if (cookieStore != null) {
+      try {
+        await cookieStore!.clear();
+      } catch (_) {
+        // 静默失败。
+      }
+    }
+  }
 
   @override
   String get baseUrl => _baseUrl;
@@ -1340,8 +1499,13 @@ class HttpAdminApi implements AdminApi {
   }
 
   void _storeCookies(HttpClientResponse response) {
+    var changed = false;
     for (final cookie in response.cookies) {
       _cookies[cookie.name] = cookie;
+      changed = true;
+    }
+    if (changed) {
+      unawaited(_persistCookies());
     }
   }
 
@@ -1525,6 +1689,21 @@ class HttpAdminApi implements AdminApi {
   }
 
   @override
+  Future<void> restoreSession() async {
+    if (cookieStore == null) {
+      return;
+    }
+    try {
+      final loaded = await cookieStore!.load();
+      if (loaded.isNotEmpty) {
+        _cookies.addAll(loaded);
+      }
+    } catch (_) {
+      // 静默失败，Cookie 恢复失败时不阻塞启动流程。
+    }
+  }
+
+  @override
   Future<void> login(String password) async {
     await _requestJson(
       'POST',
@@ -1536,6 +1715,7 @@ class HttpAdminApi implements AdminApi {
   @override
   Future<void> logout() async {
     await _requestJson('POST', '/api/auth/logout');
+    await clearCookies();
   }
 
   @override

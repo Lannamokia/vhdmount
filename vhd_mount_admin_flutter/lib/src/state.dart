@@ -192,6 +192,7 @@ class AppController extends ChangeNotifier {
     notifyListeners();
     try {
       await _ensureClientConfigLoaded();
+      await api.restoreSession();
       serverStatus = await api.getServerStatus();
       final authStatus = await api.getAuthStatus();
       isAuthenticated = authStatus.isAuthenticated;

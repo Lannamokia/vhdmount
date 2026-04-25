@@ -644,4 +644,7 @@ class FakeAdminApi implements AdminApi {
 
   @override
   Future<void> triggerUninstall(String machineId, String recordId) async {}
+
+  @override
+  Future<void> restoreSession() async {}
 }

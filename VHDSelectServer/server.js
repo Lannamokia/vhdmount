@@ -201,7 +201,27 @@ async function createApp(options = {}) {
     const serviceSettingsStore = options.serviceSettingsStore || createServiceSettingsStore(configDir, logger);
     const auditLog = options.auditLog || new AuditLog(securityStore.getPaths().auditFile);
     const databaseFactory = options.databaseFactory || ((dbConfig) => createDatabase(dbConfig, logger));
-    const sessionStore = options.sessionStore || new session.MemoryStore();
+    const sessionStore = options.sessionStore || (() => {
+        if (securityStore.isInitialized()) {
+            const config = securityStore.loadSecurityConfig();
+            if (config.dbConfig) {
+                try {
+                    const PgSession = require('connect-pg-simple')(session);
+                    const db = config.dbConfig;
+                    const conString = `postgresql://${db.user}:${db.password}@${db.host}:${db.port || 5432}/${db.database}`;
+                    return new PgSession({
+                        conString,
+                        tableName: 'user_sessions',
+                        createTableIfMissing: true,
+                        pruneSessionInterval: 60 * 15,
+                    });
+                } catch (error) {
+                    logger.warn('PgSession 创建失败，回退到 MemoryStore:', error.message);
+                }
+            }
+        }
+        return new session.MemoryStore();
+    })();
     const otpStepUpWindowMs = Number(options.otpStepUpWindowMs ?? OTP_STEP_UP_WINDOW_MS);
     const sessionSecrets = [crypto.randomBytes(48).toString('hex')];
     const providedDatabase = options.database || null;
@@ -318,6 +338,7 @@ async function createApp(options = {}) {
         resave: false,
         saveUninitialized: false,
         store: sessionStore,
+        rolling: true,
         cookie: {
             httpOnly: true,
             sameSite: 'strict',
