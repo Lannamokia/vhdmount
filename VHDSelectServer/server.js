@@ -8,8 +8,10 @@ const http = require('http');
 const path = require('path');
 const rateLimit = require('express-rate-limit');
 const session = require('express-session');
+const fileUpload = require('express-fileupload');
 
 const { AuditLog } = require('./auditLog');
+const { buildDeploymentRoutes } = require('./deploymentRoutes');
 const { ensureWritableDirectory, writeJsonAtomic } = require('./configStoreUtils');
 const { assertMachineLogTimeZone, createDatabase } = require('./database');
 const {
@@ -322,6 +324,11 @@ async function createApp(options = {}) {
             secure: 'auto',
             maxAge: 24 * 60 * 60 * 1000,
         },
+    }));
+
+    app.use(fileUpload({
+        limits: { fileSize: 2 * 1024 * 1024 * 1024 }, // 2GB
+        abortOnLimit: true,
     }));
 
     const apiLimiter = rateLimit({
@@ -1466,6 +1473,27 @@ async function createApp(options = {}) {
     app.get('/api/status', (req, res) => {
         res.json(buildPublicStatusPayload('running'));
     });
+
+    // ---------- 部署模块路由 ----------
+    const deploymentRoutes = buildDeploymentRoutes();
+
+    app.post('/api/deployments/packages', deploymentRoutes.requireAuth, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.uploadPackage));
+    app.get('/api/deployments/packages', deploymentRoutes.requireAuth, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.listPackages));
+    app.get('/api/deployments/packages/:id', deploymentRoutes.requireAuth, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.getPackage));
+    app.delete('/api/deployments/packages/:id', deploymentRoutes.requireAuth, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.deletePackage));
+
+    app.post('/api/deployments/tasks', deploymentRoutes.requireAuth, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.createTask));
+    app.get('/api/deployments/tasks', deploymentRoutes.requireAuth, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.listTasks));
+
+    app.get('/api/machines/:machineId/deployments/pending', deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.getPendingTasks));
+    app.post('/api/machines/:machineId/deployments/:taskId/status', deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.reportTaskStatus));
+    app.post('/api/machines/:machineId/deployments/sync', deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.syncRecords));
+
+    app.get('/api/machines/:machineId/deployments/history', deploymentRoutes.requireAuth, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.getMachineHistory));
+    app.post('/api/machines/:machineId/deployments/:recordId/uninstall', deploymentRoutes.requireAuth, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.triggerUninstall));
+
+    app.get('/api/deployments/packages/:id/download', deploymentRoutes.asyncHandler(deploymentRoutes.downloadPackage));
+    app.get('/api/deployments/packages/:id/signature', deploymentRoutes.asyncHandler(deploymentRoutes.downloadSignature));
 
     app.get('/', (req, res) => {
         res.setHeader('Cache-Control', 'no-store');
