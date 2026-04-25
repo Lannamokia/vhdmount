@@ -602,4 +602,46 @@ class FakeAdminApi implements AdminApi {
     return verifyOtpResponse ??
         const OtpStatus(verified: true, verifiedUntil: 0);
   }
+
+  @override
+  Future<List<DeploymentPackage>> getDeploymentPackages() async =>
+      <DeploymentPackage>[];
+
+  @override
+  Future<void> uploadDeploymentPackage({
+    required String name,
+    required String version,
+    required String type,
+    required String signer,
+    required List<int> packageBytes,
+    required String packageFileName,
+    required List<int> signatureBytes,
+    required String signatureFileName,
+  }) async {}
+
+  @override
+  Future<void> deleteDeploymentPackage(String packageId) async {}
+
+  @override
+  Future<List<DeploymentTask>> getDeploymentTasks({
+    String? machineId,
+    String? status,
+  }) async =>
+      <DeploymentTask>[];
+
+  @override
+  Future<void> createDeploymentTask(
+    String packageId,
+    List<String> targetMachineIds, {
+    String? scheduledAt,
+  }) async {}
+
+  @override
+  Future<List<DeploymentRecord>> getMachineDeploymentHistory(
+    String machineId,
+  ) async =>
+      <DeploymentRecord>[];
+
+  @override
+  Future<void> triggerUninstall(String machineId, String recordId) async {}
 }

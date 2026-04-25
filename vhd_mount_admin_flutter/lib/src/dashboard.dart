@@ -55,6 +55,12 @@ class DashboardScreen extends StatelessWidget {
         icon: Icons.tune_rounded,
         color: AppPalette.sun,
       ),
+      const DashboardDestinationSpec(
+        label: '部署管理',
+        subtitle: '包上传、任务下发、历史',
+        icon: Icons.rocket_launch_rounded,
+        color: AppPalette.coral,
+      ),
     ];
 
     Future<void> openOtpDialog() async {
@@ -146,6 +152,10 @@ class DashboardScreen extends StatelessWidget {
             embedInParentScroll: mobile,
           ),
           SettingsView(
+            controller: controller,
+            embedInParentScroll: mobile,
+          ),
+          DeploymentsView(
             controller: controller,
             embedInParentScroll: mobile,
           ),

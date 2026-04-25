@@ -936,6 +936,202 @@ class MachineLogFilter {
   }
 }
 
+class DeploymentPackage {
+  const DeploymentPackage({
+    required this.packageId,
+    required this.name,
+    required this.version,
+    required this.type,
+    required this.signer,
+    required this.fileName,
+    required this.fileSize,
+    required this.createdAt,
+  });
+
+  final String packageId;
+  final String name;
+  final String version;
+  final String type;
+  final String signer;
+  final String fileName;
+  final int fileSize;
+  final String createdAt;
+
+  factory DeploymentPackage.fromJson(Map<String, dynamic> json) {
+    return DeploymentPackage(
+      packageId: (json['package_id'] as String?) ?? '',
+      name: (json['name'] as String?) ?? '',
+      version: (json['version'] as String?) ?? '',
+      type: (json['type'] as String?) ?? 'software-deploy',
+      signer: (json['signer'] as String?) ?? '',
+      fileName: (json['file_name'] as String?) ?? '',
+      fileSize: (json['file_size'] as num?)?.toInt() ?? 0,
+      createdAt: (json['created_at'] as String?) ?? '',
+    );
+  }
+
+  String get displayType {
+    switch (type) {
+      case 'software-deploy':
+        return '软件部署';
+      case 'file-deploy':
+        return '文件部署';
+      default:
+        return type;
+    }
+  }
+
+  String get displaySize {
+    if (fileSize < 1024) {
+      return '$fileSize B';
+    } else if (fileSize < 1024 * 1024) {
+      return '${(fileSize / 1024).toStringAsFixed(1)} KB';
+    } else if (fileSize < 1024 * 1024 * 1024) {
+      return '${(fileSize / (1024 * 1024)).toStringAsFixed(1)} MB';
+    } else {
+      return '${(fileSize / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+    }
+  }
+}
+
+class DeploymentTask {
+  const DeploymentTask({
+    required this.taskId,
+    required this.packageId,
+    required this.machineId,
+    required this.taskType,
+    required this.status,
+    required this.errorMessage,
+    required this.createdAt,
+    required this.scheduledAt,
+    required this.completedAt,
+    required this.packageName,
+    required this.packageVersion,
+  });
+
+  final String taskId;
+  final String packageId;
+  final String machineId;
+  final String taskType;
+  final String status;
+  final String? errorMessage;
+  final String createdAt;
+  final String? scheduledAt;
+  final String? completedAt;
+  final String? packageName;
+  final String? packageVersion;
+
+  factory DeploymentTask.fromJson(Map<String, dynamic> json) {
+    return DeploymentTask(
+      taskId: (json['task_id'] as String?) ?? '',
+      packageId: (json['package_id'] as String?) ?? '',
+      machineId: (json['machine_id'] as String?) ?? '',
+      taskType: (json['task_type'] as String?) ?? 'deploy',
+      status: (json['status'] as String?) ?? 'pending',
+      errorMessage: json['error_message'] as String?,
+      createdAt: (json['created_at'] as String?) ?? '',
+      scheduledAt: json['scheduled_at'] as String?,
+      completedAt: json['completed_at'] as String?,
+      packageName: json['package_name'] as String?,
+      packageVersion: json['package_version'] as String?,
+    );
+  }
+
+  String get displayStatus {
+    switch (status) {
+      case 'pending':
+        return '等待中';
+      case 'downloading':
+        return '下载中';
+      case 'success':
+        return '成功';
+      case 'failed':
+        return '失败';
+      default:
+        return status;
+    }
+  }
+
+  String get displayType {
+    switch (taskType) {
+      case 'deploy':
+        return '部署';
+      case 'uninstall':
+        return '卸载';
+      default:
+        return taskType;
+    }
+  }
+}
+
+class DeploymentRecord {
+  const DeploymentRecord({
+    required this.recordId,
+    required this.machineId,
+    required this.packageId,
+    required this.name,
+    required this.version,
+    required this.type,
+    required this.targetPath,
+    required this.status,
+    required this.deployedAt,
+    required this.uninstalledAt,
+    required this.syncedAt,
+  });
+
+  final String recordId;
+  final String machineId;
+  final String packageId;
+  final String name;
+  final String version;
+  final String type;
+  final String? targetPath;
+  final String status;
+  final String deployedAt;
+  final String? uninstalledAt;
+  final String? syncedAt;
+
+  factory DeploymentRecord.fromJson(Map<String, dynamic> json) {
+    return DeploymentRecord(
+      recordId: (json['record_id'] as String?) ?? '',
+      machineId: (json['machine_id'] as String?) ?? '',
+      packageId: (json['package_id'] as String?) ?? '',
+      name: (json['name'] as String?) ?? '',
+      version: (json['version'] as String?) ?? '',
+      type: (json['type'] as String?) ?? 'software-deploy',
+      targetPath: json['target_path'] as String?,
+      status: (json['status'] as String?) ?? 'success',
+      deployedAt: (json['deployed_at'] as String?) ?? '',
+      uninstalledAt: json['uninstalled_at'] as String?,
+      syncedAt: json['synced_at'] as String?,
+    );
+  }
+
+  String get displayStatus {
+    switch (status) {
+      case 'success':
+        return '已部署';
+      case 'uninstalled':
+        return '已卸载';
+      case 'failed':
+        return '失败';
+      default:
+        return status;
+    }
+  }
+
+  String get displayType {
+    switch (type) {
+      case 'software-deploy':
+        return '软件部署';
+      case 'file-deploy':
+        return '文件部署';
+      default:
+        return type;
+    }
+  }
+}
+
 List<String> buildAuditMachineOptions(
   Iterable<MachineRecord> machines,
   Iterable<AuditEntry> entries,
@@ -1056,6 +1252,50 @@ abstract class AdminApi {
   Future<void> updateDefaultVhd(String vhdKeyword);
 
   Future<void> changePassword(String currentPassword, String newPassword);
+
+  Future<List<DeploymentPackage>> getDeploymentPackages();
+
+  Future<void> uploadDeploymentPackage({
+    required String name,
+    required String version,
+    required String type,
+    required String signer,
+    required List<int> packageBytes,
+    required String packageFileName,
+    required List<int> signatureBytes,
+    required String signatureFileName,
+  });
+
+  Future<void> deleteDeploymentPackage(String packageId);
+
+  Future<List<DeploymentTask>> getDeploymentTasks({
+    String? machineId,
+    String? status,
+  });
+
+  Future<void> createDeploymentTask(
+    String packageId,
+    List<String> targetMachineIds, {
+    String? scheduledAt,
+  });
+
+  Future<List<DeploymentRecord>> getMachineDeploymentHistory(
+    String machineId,
+  );
+
+  Future<void> triggerUninstall(String machineId, String recordId);
+}
+
+class _MultipartFile {
+  const _MultipartFile({
+    required this.fileName,
+    required this.bytes,
+    required this.contentType,
+  });
+
+  final String fileName;
+  final List<int> bytes;
+  final String contentType;
 }
 
 class HttpAdminApi implements AdminApi {
@@ -1070,6 +1310,7 @@ class HttpAdminApi implements AdminApi {
   final Map<String, Cookie> _cookies = <String, Cookie>{};
   final Duration _requestTimeout;
   String _baseUrl;
+  final Random _random = Random.secure();
 
   @override
   String get baseUrl => _baseUrl;
@@ -1593,6 +1834,203 @@ class HttpAdminApi implements AdminApi {
         'newPassword': newPassword,
         'confirmPassword': newPassword,
       },
+    );
+  }
+
+  // ---- Deployment API ----
+
+  Future<Map<String, dynamic>> _uploadMultipart(
+    String path, {
+    required Map<String, String> fields,
+    required Map<String, _MultipartFile> files,
+  }) async {
+    final boundary =
+        '----FlutterFormBoundary${_random.nextInt(999999)}';
+    final body = BytesBuilder();
+
+    for (final entry in fields.entries) {
+      body.add(utf8.encode('--$boundary\r\n'));
+      body.add(
+        utf8.encode(
+          'Content-Disposition: form-data; name="${entry.key}"\r\n\r\n',
+        ),
+      );
+      body.add(utf8.encode('${entry.value}\r\n'));
+    }
+
+    for (final entry in files.entries) {
+      body.add(utf8.encode('--$boundary\r\n'));
+      body.add(
+        utf8.encode(
+          'Content-Disposition: form-data; name="${entry.key}"; '
+          'filename="${entry.value.fileName}"\r\n',
+        ),
+      );
+      body.add(
+        utf8.encode('Content-Type: ${entry.value.contentType}\r\n\r\n'),
+      );
+      body.add(entry.value.bytes);
+      body.add(utf8.encode('\r\n'));
+    }
+
+    body.add(utf8.encode('--$boundary--\r\n'));
+
+    final request = await _client.postUrl(_resolve(path));
+    request.headers.set(
+      HttpHeaders.contentTypeHeader,
+      'multipart/form-data; boundary=$boundary',
+    );
+    _applyCookies(request);
+    request.add(body.toBytes());
+
+    final response = await request.close();
+    _storeCookies(response);
+    final text = await response.transform(utf8.decoder).join();
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      if (text.trim().isEmpty) {
+        return <String, dynamic>{};
+      }
+      final decoded = jsonDecode(text);
+      if (decoded is Map<String, dynamic>) {
+        return decoded;
+      }
+      return <String, dynamic>{'data': decoded};
+    }
+
+    Map<String, dynamic> errorJson = <String, dynamic>{};
+    if (text.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(text);
+        if (decoded is Map<String, dynamic>) {
+          errorJson = decoded;
+        }
+      } catch (_) {
+        errorJson = <String, dynamic>{'error': text};
+      }
+    }
+
+    throw AdminApiException(
+      (errorJson['error'] as String?) ??
+          (errorJson['message'] as String?) ??
+          '请求失败: ${response.statusCode}',
+      statusCode: response.statusCode,
+      requireAuth: errorJson['requireAuth'] == true,
+      requireOtp: errorJson['requireOtp'] == true,
+      initializeRequired: errorJson['initializeRequired'] == true,
+    );
+  }
+
+  @override
+  Future<List<DeploymentPackage>> getDeploymentPackages() async {
+    final json = await _requestJson('GET', '/api/deployments/packages');
+    return (json['packages'] as List<dynamic>? ?? <dynamic>[])
+        .whereType<Map<String, dynamic>>()
+        .map(DeploymentPackage.fromJson)
+        .toList();
+  }
+
+  @override
+  Future<void> uploadDeploymentPackage({
+    required String name,
+    required String version,
+    required String type,
+    required String signer,
+    required List<int> packageBytes,
+    required String packageFileName,
+    required List<int> signatureBytes,
+    required String signatureFileName,
+  }) async {
+    await _uploadMultipart(
+      '/api/deployments/packages',
+      fields: <String, String>{
+        'name': name,
+        'version': version,
+        'type': type,
+        'signer': signer,
+      },
+      files: <String, _MultipartFile>{
+        'package': _MultipartFile(
+          fileName: packageFileName,
+          bytes: packageBytes,
+          contentType: 'application/zip',
+        ),
+        'signature': _MultipartFile(
+          fileName: signatureFileName,
+          bytes: signatureBytes,
+          contentType: 'application/octet-stream',
+        ),
+      },
+    );
+  }
+
+  @override
+  Future<void> deleteDeploymentPackage(String packageId) async {
+    await _requestJson(
+      'DELETE',
+      '/api/deployments/packages/${encodePathSegment(packageId)}',
+    );
+  }
+
+  @override
+  Future<List<DeploymentTask>> getDeploymentTasks({
+    String? machineId,
+    String? status,
+  }) async {
+    final queryParameters = <String, String>{};
+    if (machineId != null && machineId.trim().isNotEmpty) {
+      queryParameters['machineId'] = machineId.trim();
+    }
+    if (status != null && status.trim().isNotEmpty) {
+      queryParameters['status'] = status.trim();
+    }
+
+    final query = Uri(queryParameters: queryParameters).query;
+    final path = query.isEmpty
+        ? '/api/deployments/tasks'
+        : '/api/deployments/tasks?$query';
+    final json = await _requestJson('GET', path);
+    return (json['tasks'] as List<dynamic>? ?? <dynamic>[])
+        .whereType<Map<String, dynamic>>()
+        .map(DeploymentTask.fromJson)
+        .toList();
+  }
+
+  @override
+  Future<void> createDeploymentTask(
+    String packageId,
+    List<String> targetMachineIds, {
+    String? scheduledAt,
+  }) async {
+    final body = <String, dynamic>{
+      'packageId': packageId,
+      'targetMachineIds': targetMachineIds,
+    };
+    if (scheduledAt != null && scheduledAt.trim().isNotEmpty) {
+      body['scheduledAt'] = scheduledAt.trim();
+    }
+    await _requestJson('POST', '/api/deployments/tasks', body: body);
+  }
+
+  @override
+  Future<List<DeploymentRecord>> getMachineDeploymentHistory(
+    String machineId,
+  ) async {
+    final json = await _requestJson(
+      'GET',
+      '/api/deployments/history/${encodePathSegment(machineId)}',
+    );
+    return (json['records'] as List<dynamic>? ?? <dynamic>[])
+        .whereType<Map<String, dynamic>>()
+        .map(DeploymentRecord.fromJson)
+        .toList();
+  }
+
+  @override
+  Future<void> triggerUninstall(String machineId, String recordId) async {
+    await _requestJson(
+      'POST',
+      '/api/deployments/history/${encodePathSegment(machineId)}/records/${encodePathSegment(recordId)}/uninstall',
     );
   }
 }

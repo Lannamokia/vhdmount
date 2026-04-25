@@ -37,6 +37,11 @@ class AppController extends ChangeNotifier {
   String? machineLogTo;
   String? machineLogCursor;
   bool machineLogHasMore = false;
+  List<DeploymentPackage> deploymentPackages = <DeploymentPackage>[];
+  List<DeploymentTask> deploymentTasks = <DeploymentTask>[];
+  List<DeploymentRecord> deploymentRecords = <DeploymentRecord>[];
+  String? deploymentSelectedMachineId;
+  String? deploymentTaskStatusFilter;
 
   String get baseUrl => api.baseUrl;
 
@@ -609,6 +614,73 @@ class AppController extends ChangeNotifier {
     await _runAction(() => api.changePassword(currentPassword, newPassword));
     otpRotationPreparation = null;
     notifyListeners();
+  }
+
+  Future<void> loadDeploymentPackages() async {
+    deploymentPackages = await _runAction(api.getDeploymentPackages);
+    notifyListeners();
+  }
+
+  Future<void> uploadDeploymentPackage({
+    required String name,
+    required String version,
+    required String type,
+    required String signer,
+    required List<int> packageBytes,
+    required String packageFileName,
+    required List<int> signatureBytes,
+    required String signatureFileName,
+  }) async {
+    await _runAction(() => api.uploadDeploymentPackage(
+      name: name,
+      version: version,
+      type: type,
+      signer: signer,
+      packageBytes: packageBytes,
+      packageFileName: packageFileName,
+      signatureBytes: signatureBytes,
+      signatureFileName: signatureFileName,
+    ));
+    await loadDeploymentPackages();
+  }
+
+  Future<void> deleteDeploymentPackage(String packageId) async {
+    await _runAction(() => api.deleteDeploymentPackage(packageId));
+    await loadDeploymentPackages();
+  }
+
+  Future<void> loadDeploymentTasks({
+    String? machineId,
+    String? status,
+  }) async {
+    deploymentTasks = await _runAction(
+      () => api.getDeploymentTasks(machineId: machineId, status: status),
+    );
+    notifyListeners();
+  }
+
+  Future<void> createDeploymentTask(
+    String packageId,
+    List<String> targetMachineIds, {
+    String? scheduledAt,
+  }) async {
+    await _runAction(
+      () => api.createDeploymentTask(packageId, targetMachineIds, scheduledAt: scheduledAt),
+    );
+    await loadDeploymentTasks();
+  }
+
+  Future<void> loadMachineDeploymentHistory(String machineId) async {
+    deploymentSelectedMachineId = machineId.trim().isEmpty ? null : machineId.trim();
+    deploymentRecords = await _runAction(
+      () => api.getMachineDeploymentHistory(machineId),
+    );
+    notifyListeners();
+  }
+
+  Future<void> triggerUninstall(String machineId, String recordId) async {
+    await _runAction(() => api.triggerUninstall(machineId, recordId));
+    await loadMachineDeploymentHistory(machineId);
   }
 
   @override

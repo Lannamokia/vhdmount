@@ -240,7 +240,7 @@ void main() {
     await tester.pumpWidget(AdminApp(controller: controller));
     await tester.pumpAndSettle();
 
-    expect(find.byType(DashboardSidebarButton), findsNWidgets(5));
+    expect(find.byType(DashboardSidebarButton), findsNWidgets(6));
     expect(find.text('审批、保护、EVHD'), findsOneWidget);
     expect(find.text('会话、分页、详情'), findsOneWidget);
     expect(find.byType(NavigationRail), findsNothing);
