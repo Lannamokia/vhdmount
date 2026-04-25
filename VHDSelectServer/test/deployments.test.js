@@ -191,6 +191,7 @@ async function createInitializedHarness(t) {
     fs.writeFileSync(securityStore.getPaths().lockFile, '');
     runtime.initialized = true;
     runtime.securityConfig = securityStore.loadSecurityConfig();
+    runtime.database = fakeDatabase;
 
     return { app, runtime, tempDir, database: fakeDatabase };
 }

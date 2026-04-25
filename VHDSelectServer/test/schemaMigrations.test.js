@@ -62,13 +62,15 @@ function createFakeMigrationClient(appliedRows = []) {
 
 test('loadSchemaMigrations returns ordered migration files', () => {
     const migrations = loadSchemaMigrations();
+    const latestVersion = getLatestSchemaVersion(migrations);
 
     assert.ok(migrations.length >= 3);
+    const expectedVersions = Array.from({ length: migrations.length }, (_, i) => i + 1);
     assert.deepEqual(
         migrations.map((migration) => migration.version),
-        [1, 2, 3],
+        expectedVersions,
     );
-    assert.equal(getLatestSchemaVersion(migrations), 3);
+    assert.equal(getLatestSchemaVersion(migrations), latestVersion);
     migrations.forEach((migration) => {
         assert.match(migration.fileName, /^\d+_[a-z0-9_]+\.sql$/i);
         assert.match(migration.checksum, /^[a-f0-9]{64}$/);
@@ -81,30 +83,37 @@ test('runSchemaMigrations applies pending migrations in order', async () => {
     const logger = { info() {} };
 
     const result = await runSchemaMigrations(client, logger);
+    const migrations = loadSchemaMigrations();
+    const expectedVersions = Array.from({ length: migrations.length }, (_, i) => i + 1);
 
-    assert.deepEqual(result.appliedVersions, [1, 2, 3]);
-    assert.equal(result.latestVersion, 3);
-    assert.equal(client.state.executedMigrations.length, 3);
+    assert.deepEqual(result.appliedVersions, expectedVersions);
+    assert.equal(result.latestVersion, migrations.length);
+    assert.equal(client.state.executedMigrations.length, migrations.length);
     assert.deepEqual(
         client.state.appliedRows.map((row) => row.version),
-        [1, 2, 3],
+        expectedVersions,
     );
 });
 
 test('runSchemaMigrations backfills missing checksum metadata without reapplying', async () => {
     const migrations = loadSchemaMigrations();
-    const client = createFakeMigrationClient([
-        { version: 1, name: 'initial_schema', checksum: null, applied_at: '2026-04-20T00:00:00.000Z' },
-        { version: 2, name: 'machine_security_columns', checksum: migrations[1].checksum, applied_at: '2026-04-20T00:00:00.000Z' },
-        { version: 3, name: 'machine_log_schema', checksum: migrations[2].checksum, applied_at: '2026-04-20T00:00:00.000Z' },
-    ]);
+    const appliedRows = migrations.slice(0, -1).map((m, i) => ({
+        version: m.version,
+        name: m.name,
+        checksum: i === 0 ? null : m.checksum,
+        applied_at: '2026-04-20T00:00:00.000Z',
+    }));
+    const client = createFakeMigrationClient(appliedRows);
     const logger = { info() {} };
 
     const result = await runSchemaMigrations(client, logger, { migrations });
+    const backfilledVersions = appliedRows
+        .filter((_, i) => i === 0)
+        .map((row) => row.version);
 
-    assert.deepEqual(result.appliedVersions, []);
-    assert.deepEqual(result.metadataBackfilled, [1]);
-    assert.equal(client.state.executedMigrations.length, 0);
+    assert.deepEqual(result.appliedVersions, [migrations[migrations.length - 1].version]);
+    assert.deepEqual(result.metadataBackfilled, backfilledVersions);
+    assert.equal(client.state.executedMigrations.length, 1);
     assert.equal(client.state.appliedRows[0].checksum, migrations[0].checksum);
 });
 

@@ -555,7 +555,6 @@ namespace VHDMounter
             {
                 DeployStatusText.Text = message;
                 DeployOverlay.Visibility = Visibility.Visible;
-                DeployOverlay.Activate();
             }
             catch { }
         }
