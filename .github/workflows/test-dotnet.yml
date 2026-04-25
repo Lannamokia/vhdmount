@@ -2,14 +2,14 @@ name: Tests (.NET)
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, feature/software-deployment]
     paths:
       - 'src/VHDMounter/**'
       - 'VHDMounter.Tests/**'
       - '**.csproj'
       - '.github/workflows/test-dotnet.yml'
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, feature/software-deployment]
     paths:
       - 'src/VHDMounter/**'
       - 'VHDMounter.Tests/**'

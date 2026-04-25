@@ -2,12 +2,12 @@ name: Tests (Node.js)
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, feature/software-deployment]
     paths:
       - 'VHDSelectServer/**'
       - '.github/workflows/test-nodejs.yml'
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, feature/software-deployment]
     paths:
       - 'VHDSelectServer/**'
       - '.github/workflows/test-nodejs.yml'
