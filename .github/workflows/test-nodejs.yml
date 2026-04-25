@@ -13,6 +13,9 @@ on:
       - '.github/workflows/test-nodejs.yml'
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   nodejs-test:
     runs-on: ubuntu-latest
