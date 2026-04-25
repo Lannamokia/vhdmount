@@ -124,7 +124,119 @@
                 </Grid>
             </GroupBox>
 
-            <StackPanel Grid.Row="6" Orientation="Horizontal" HorizontalAlignment="Right">
+            <GroupBox Header="软件部署管理" Grid.Row="6">
+                <Grid Margin="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="200"/>
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="140"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- 服务端配置 -->
+                    <TextBlock Text="服务端地址" VerticalAlignment="Center"/>
+                    <TextBox x:Name="DeployServerUrl" Grid.Column="1" Margin="8,0" Text="http://localhost:8080"/>
+                    <Button Grid.Column="2" Content="连接" Padding="12,2" Click="DeployConnect"/>
+
+                    <TextBlock Grid.Row="2" Text="管理员密码" VerticalAlignment="Center"/>
+                    <PasswordBox x:Name="DeployAdminPassword" Grid.Row="2" Grid.Column="1" Margin="8,0"/>
+                    <TextBlock x:Name="DeployLoginStatus" Grid.Row="2" Grid.Column="2" VerticalAlignment="Center" Margin="8,0" Foreground="Gray"/>
+
+                    <!-- 部署包列表 -->
+                    <TextBlock Grid.Row="4" Grid.Column="1" FontWeight="Bold" Text="已上传部署包"/>
+                    <Button Grid.Row="4" Grid.Column="2" Content="刷新" Padding="12,2" Click="DeployRefreshPackages"/>
+                    <DataGrid x:Name="DeployPackagesGrid" Grid.Row="6" Grid.Column="1" Grid.ColumnSpan="2"
+                              AutoGenerateColumns="False" IsReadOnly="True" Height="100">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="名称" Binding="{Binding name}" Width="150"/>
+                            <DataGridTextColumn Header="版本" Binding="{Binding version}" Width="80"/>
+                            <DataGridTextColumn Header="类型" Binding="{Binding type}" Width="100"/>
+                            <DataGridTextColumn Header="大小" Binding="{Binding fileSize}" Width="80"/>
+                            <DataGridTextColumn Header="签名者" Binding="{Binding signer}" Width="100"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <!-- 上传新包 -->
+                    <TextBlock Grid.Row="8" Text="ZIP 包" VerticalAlignment="Center"/>
+                    <TextBox x:Name="DeployZipPath" Grid.Row="8" Grid.Column="1" Margin="8,0"/>
+                    <Button Grid.Row="8" Grid.Column="2" Content="选择" Padding="12,2" Click="DeployBrowseZip"/>
+
+                    <TextBlock Grid.Row="10" Text="签名文件" VerticalAlignment="Center"/>
+                    <TextBox x:Name="DeploySigPath" Grid.Row="10" Grid.Column="1" Margin="8,0"/>
+                    <Button Grid.Row="10" Grid.Column="2" Content="选择" Padding="12,2" Click="DeployBrowseSig"/>
+
+                    <TextBlock Grid.Row="12" Text="包名称" VerticalAlignment="Center"/>
+                    <TextBox x:Name="DeployPackageName" Grid.Row="12" Grid.Column="1" Margin="8,0" Text="配套工具"/>
+                    <TextBlock Grid.Row="12" Grid.Column="2" Text="版本" VerticalAlignment="Center" Margin="4,0"/>
+
+                    <TextBlock Grid.Row="14" Text="版本号" VerticalAlignment="Center"/>
+                    <TextBox x:Name="DeployPackageVersion" Grid.Row="14" Grid.Column="1" Margin="8,0" Text="1.0.0"/>
+                    <ComboBox x:Name="DeployPackageType" Grid.Row="14" Grid.Column="2" Margin="4,0" Width="120">
+                        <ComboBoxItem Content="software-deploy" IsSelected="True"/>
+                        <ComboBoxItem Content="file-deploy"/>
+                    </ComboBox>
+
+                    <TextBlock Grid.Row="16" Text="签名者" VerticalAlignment="Center"/>
+                    <TextBox x:Name="DeployPackageSigner" Grid.Row="16" Grid.Column="1" Margin="8,0" Text="admin"/>
+                    <Button Grid.Row="16" Grid.Column="2" Content="上传" Padding="12,2" Click="DeployUploadPackage"/>
+
+                    <!-- 创建任务 -->
+                    <TextBlock Grid.Row="18" Text="目标机台" VerticalAlignment="Center"/>
+                    <TextBox x:Name="DeployTargetMachines" Grid.Row="18" Grid.Column="1" Margin="8,0"
+                             Text="machine-001" ToolTip="多个机台用逗号分隔"/>
+                    <Button Grid.Row="18" Grid.Column="2" Content="下发" Padding="12,2" Click="DeployCreateTask"/>
+
+                    <!-- 机台历史 -->
+                    <TextBlock Grid.Row="20" Text="查询机台" VerticalAlignment="Center"/>
+                    <TextBox x:Name="DeployQueryMachine" Grid.Row="20" Grid.Column="1" Margin="8,0" Text="machine-001"/>
+                    <Button Grid.Row="20" Grid.Column="2" Content="查询" Padding="12,2" Click="DeployQueryHistory"/>
+
+                    <DataGrid x:Name="DeployHistoryGrid" Grid.Row="22" Grid.Column="1" Grid.ColumnSpan="2"
+                              AutoGenerateColumns="False" IsReadOnly="True">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="名称" Binding="{Binding name}" Width="120"/>
+                            <DataGridTextColumn Header="版本" Binding="{Binding version}" Width="80"/>
+                            <DataGridTextColumn Header="类型" Binding="{Binding type}" Width="100"/>
+                            <DataGridTextColumn Header="状态" Binding="{Binding status}" Width="80"/>
+                            <DataGridTextColumn Header="部署时间" Binding="{Binding deployedAt}" Width="150"/>
+                            <DataGridTemplateColumn Header="操作" Width="80">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Button Content="卸载" Padding="4,0" Click="DeployUninstall_Click"
+                                                Tag="{Binding recordId}"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </GroupBox>
+
+            <StackPanel Grid.Row="8" Orientation="Horizontal" HorizontalAlignment="Right">
                 <TextBlock x:Name="StatusText" VerticalAlignment="Center" Margin="0,0,12,0"/>
                 <Button Content="关闭" Padding="16,4" Width="100" Click="CloseApp"/>
             </StackPanel>

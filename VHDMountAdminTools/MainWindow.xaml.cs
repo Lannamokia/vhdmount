@@ -1,10 +1,13 @@
 using System;
 using System.IO;
+using System.Net;
+using System.Net.Http;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
@@ -13,6 +16,9 @@ namespace VHDMountAdminTools
     public partial class MainWindow : Window
     {
         private const long MaxAppUpdatePayloadBytes = 1L << 30;
+        private HttpClient? deployHttpClient;
+        private CookieContainer deployCookieContainer = new();
+        private bool deployLoggedIn = false;
 
         public MainWindow()
         {
@@ -336,6 +342,309 @@ namespace VHDMountAdminTools
         private string FormatBytes(long bytes)
         {
             return $"{bytes / 1024d / 1024d:F2} MB";
+        }
+
+        // ---------- 软件部署管理 ----------
+
+        private void EnsureHttpClient()
+        {
+            if (deployHttpClient != null) return;
+            var handler = new HttpClientHandler { CookieContainer = deployCookieContainer };
+            deployHttpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) };
+        }
+
+        private string DeployApiUrl(string path)
+        {
+            var baseUrl = DeployServerUrl.Text.Trim().TrimEnd('/');
+            return $"{baseUrl}{path}";
+        }
+
+        private async void DeployConnect(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                EnsureHttpClient();
+                var url = DeployApiUrl("/api/auth/login");
+                var content = new StringContent(
+                    JsonSerializer.Serialize(new { password = DeployAdminPassword.Password }),
+                    Encoding.UTF8, "application/json");
+                var response = await deployHttpClient!.PostAsync(url, content);
+                if (response.IsSuccessStatusCode)
+                {
+                    deployLoggedIn = true;
+                    DeployLoginStatus.Text = "已登录";
+                    DeployLoginStatus.Foreground = System.Windows.Media.Brushes.Green;
+                    StatusText.Text = "部署管理已连接";
+                    await DeployLoadPackagesAsync();
+                }
+                else
+                {
+                    deployLoggedIn = false;
+                    DeployLoginStatus.Text = "登录失败";
+                    DeployLoginStatus.Foreground = System.Windows.Media.Brushes.Red;
+                    StatusText.Text = $"登录失败: {response.StatusCode}";
+                }
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = $"连接失败: {ex.Message}";
+            }
+        }
+
+        private async void DeployRefreshPackages(object sender, RoutedEventArgs e)
+        {
+            await DeployLoadPackagesAsync();
+        }
+
+        private async System.Threading.Tasks.Task DeployLoadPackagesAsync()
+        {
+            if (!deployLoggedIn || deployHttpClient == null) return;
+            try
+            {
+                var response = await deployHttpClient.GetAsync(DeployApiUrl("/api/deployments/packages"));
+                if (!response.IsSuccessStatusCode) return;
+                var json = await response.Content.ReadAsStringAsync();
+                var result = JsonSerializer.Deserialize<DeployListResponse>(json);
+                DeployPackagesGrid.ItemsSource = result?.packages ?? new System.Collections.Generic.List<DeployPackageItem>();
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = $"刷新包列表失败: {ex.Message}";
+            }
+        }
+
+        private void DeployBrowseZip(object sender, RoutedEventArgs e)
+        {
+            var dialog = new Microsoft.Win32.OpenFileDialog { Filter = "ZIP Files|*.zip|All Files|*.*" };
+            if (dialog.ShowDialog() == true) DeployZipPath.Text = dialog.FileName;
+        }
+
+        private void DeployBrowseSig(object sender, RoutedEventArgs e)
+        {
+            var dialog = new Microsoft.Win32.OpenFileDialog { Filter = "SIG Files|*.sig|All Files|*.*" };
+            if (dialog.ShowDialog() == true) DeploySigPath.Text = dialog.FileName;
+        }
+
+        private async void DeployUploadPackage(object sender, RoutedEventArgs e)
+        {
+            if (!deployLoggedIn || deployHttpClient == null)
+            {
+                StatusText.Text = "请先连接并登录服务端";
+                return;
+            }
+
+            try
+            {
+                var zipPath = DeployZipPath.Text;
+                var sigPath = DeploySigPath.Text;
+                if (!File.Exists(zipPath) || !File.Exists(sigPath))
+                {
+                    StatusText.Text = "请选择 ZIP 包和签名文件";
+                    return;
+                }
+
+                var name = DeployPackageName.Text.Trim();
+                var version = DeployPackageVersion.Text.Trim();
+                var type = ((ComboBoxItem)DeployPackageType.SelectedItem).Content?.ToString() ?? "software-deploy";
+                var signer = DeployPackageSigner.Text.Trim();
+
+                var content = new MultipartFormDataContent();
+                content.Add(new StreamContent(File.OpenRead(zipPath)), "package", Path.GetFileName(zipPath));
+                content.Add(new StreamContent(File.OpenRead(sigPath)), "signature", Path.GetFileName(sigPath));
+                content.Add(new StringContent(name), "name");
+                content.Add(new StringContent(version), "version");
+                content.Add(new StringContent(type), "type");
+                content.Add(new StringContent(signer), "signer");
+
+                var response = await deployHttpClient.PostAsync(DeployApiUrl("/api/deployments/packages"), content);
+                if (response.IsSuccessStatusCode)
+                {
+                    StatusText.Text = "部署包上传成功";
+                    DeployZipPath.Text = "";
+                    DeploySigPath.Text = "";
+                    await DeployLoadPackagesAsync();
+                }
+                else
+                {
+                    var error = await response.Content.ReadAsStringAsync();
+                    StatusText.Text = $"上传失败: {response.StatusCode} {error}";
+                }
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = $"上传异常: {ex.Message}";
+            }
+        }
+
+        private async void DeployCreateTask(object sender, RoutedEventArgs e)
+        {
+            if (!deployLoggedIn || deployHttpClient == null)
+            {
+                StatusText.Text = "请先连接并登录服务端";
+                return;
+            }
+
+            try
+            {
+                var machineIds = DeployTargetMachines.Text.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                if (machineIds.Length == 0)
+                {
+                    StatusText.Text = "请输入目标机台ID";
+                    return;
+                }
+
+                // 获取选中的包
+                var selected = DeployPackagesGrid.SelectedItem as DeployPackageItem;
+                if (selected == null)
+                {
+                    StatusText.Text = "请先从列表中选择一个部署包";
+                    return;
+                }
+
+                var body = new
+                {
+                    packageId = selected.packageId,
+                    targetMachineIds = machineIds,
+                };
+                var content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
+                var response = await deployHttpClient.PostAsync(DeployApiUrl("/api/deployments/tasks"), content);
+                if (response.IsSuccessStatusCode)
+                {
+                    var result = JsonSerializer.Deserialize<DeployTaskResponse>(await response.Content.ReadAsStringAsync());
+                    StatusText.Text = $"任务创建成功，共 {result?.count ?? 0} 个任务";
+                }
+                else
+                {
+                    StatusText.Text = $"创建任务失败: {response.StatusCode}";
+                }
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = $"创建任务异常: {ex.Message}";
+            }
+        }
+
+        private async void DeployQueryHistory(object sender, RoutedEventArgs e)
+        {
+            if (!deployLoggedIn || deployHttpClient == null)
+            {
+                StatusText.Text = "请先连接并登录服务端";
+                return;
+            }
+
+            try
+            {
+                var machineId = DeployQueryMachine.Text.Trim();
+                if (string.IsNullOrWhiteSpace(machineId))
+                {
+                    StatusText.Text = "请输入机台ID";
+                    return;
+                }
+
+                var response = await deployHttpClient.GetAsync(DeployApiUrl($"/api/machines/{machineId}/deployments/history"));
+                if (response.IsSuccessStatusCode)
+                {
+                    var result = JsonSerializer.Deserialize<DeployHistoryResponse>(await response.Content.ReadAsStringAsync());
+                    DeployHistoryGrid.ItemsSource = result?.records ?? new System.Collections.Generic.List<DeployRecordItem>();
+                    StatusText.Text = $"查询到 {result?.count ?? 0} 条记录";
+                }
+                else
+                {
+                    StatusText.Text = $"查询失败: {response.StatusCode}";
+                }
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = $"查询异常: {ex.Message}";
+            }
+        }
+
+        private async void DeployUninstall_Click(object sender, RoutedEventArgs e)
+        {
+            if (!deployLoggedIn || deployHttpClient == null) return;
+
+            try
+            {
+                var button = (System.Windows.Controls.Button)sender;
+                var recordId = button.Tag?.ToString();
+                if (string.IsNullOrWhiteSpace(recordId)) return;
+
+                var machineId = DeployQueryMachine.Text.Trim();
+                if (string.IsNullOrWhiteSpace(machineId)) return;
+
+                var response = await deployHttpClient.PostAsync(
+                    DeployApiUrl($"/api/machines/{machineId}/deployments/{recordId}/uninstall"), null);
+                if (response.IsSuccessStatusCode)
+                {
+                    StatusText.Text = "卸载任务已创建";
+                    await DeployQueryHistoryAsync();
+                }
+                else
+                {
+                    StatusText.Text = $"卸载失败: {response.StatusCode}";
+                }
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = $"卸载异常: {ex.Message}";
+            }
+        }
+
+        private async System.Threading.Tasks.Task DeployQueryHistoryAsync()
+        {
+            try
+            {
+                var machineId = DeployQueryMachine.Text.Trim();
+                if (string.IsNullOrWhiteSpace(machineId) || deployHttpClient == null) return;
+                var response = await deployHttpClient.GetAsync(DeployApiUrl($"/api/machines/{machineId}/deployments/history"));
+                if (response.IsSuccessStatusCode)
+                {
+                    var result = JsonSerializer.Deserialize<DeployHistoryResponse>(await response.Content.ReadAsStringAsync());
+                    DeployHistoryGrid.ItemsSource = result?.records ?? new System.Collections.Generic.List<DeployRecordItem>();
+                }
+            }
+            catch { }
+        }
+
+        // JSON 模型
+        private class DeployListResponse
+        {
+            public bool success { get; set; }
+            public System.Collections.Generic.List<DeployPackageItem> packages { get; set; } = new();
+            public int count { get; set; }
+        }
+
+        private class DeployPackageItem
+        {
+            public string packageId { get; set; } = "";
+            public string name { get; set; } = "";
+            public string version { get; set; } = "";
+            public string type { get; set; } = "";
+            public long fileSize { get; set; }
+            public string signer { get; set; } = "";
+        }
+
+        private class DeployTaskResponse
+        {
+            public bool success { get; set; }
+            public int count { get; set; }
+        }
+
+        private class DeployHistoryResponse
+        {
+            public bool success { get; set; }
+            public System.Collections.Generic.List<DeployRecordItem> records { get; set; } = new();
+            public int count { get; set; }
+        }
+
+        private class DeployRecordItem
+        {
+            public string recordId { get; set; } = "";
+            public string name { get; set; } = "";
+            public string version { get; set; } = "";
+            public string type { get; set; } = "";
+            public string status { get; set; } = "";
+            public string deployedAt { get; set; } = "";
         }
     }
 }
