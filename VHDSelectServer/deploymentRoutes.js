@@ -245,8 +245,8 @@ function buildDeploymentRoutes(options = {}) {
                 packageVersion: task.packageVersion,
                 packageType: task.packageType,
                 packageSize: task.packageSize,
-                downloadUrl: `/api/deployments/packages/${task.packageId}/download?token=${packageToken}&expires=${Date.now() + 3600000}`,
-                signatureUrl: `/api/deployments/packages/${task.packageId}/signature?token=${signatureToken}&expires=${Date.now() + 3600000}`,
+                downloadUrl: `/api/deployments/packages/${task.packageId}/download?token=${packageToken}&machineId=${encodeURIComponent(machineId)}&expires=${Date.now() + 3600000}`,
+                signatureUrl: `/api/deployments/packages/${task.packageId}/signature?token=${signatureToken}&machineId=${encodeURIComponent(machineId)}&expires=${Date.now() + 3600000}`,
             });
 
             await deploymentStore.updateTaskStatus(runtime.database, task.taskId, 'downloading');

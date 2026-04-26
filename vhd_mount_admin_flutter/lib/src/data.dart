@@ -1092,14 +1092,22 @@ class DeploymentPackage {
 
   factory DeploymentPackage.fromJson(Map<String, dynamic> json) {
     return DeploymentPackage(
-      packageId: (json['package_id'] as String?) ?? '',
+      packageId: (json['package_id'] as String?) ??
+          (json['packageId'] as String?) ??
+          '',
       name: (json['name'] as String?) ?? '',
       version: (json['version'] as String?) ?? '',
       type: (json['type'] as String?) ?? 'software-deploy',
       signer: (json['signer'] as String?) ?? '',
-      fileName: (json['file_name'] as String?) ?? '',
-      fileSize: (json['file_size'] as num?)?.toInt() ?? 0,
-      createdAt: (json['created_at'] as String?) ?? '',
+      fileName: (json['file_name'] as String?) ??
+          (json['filePath'] as String?) ??
+          '',
+      fileSize: (json['file_size'] as num?)?.toInt() ??
+          (json['fileSize'] as num?)?.toInt() ??
+          0,
+      createdAt: (json['created_at'] as String?) ??
+          (json['createdAt'] as String?) ??
+          '',
     );
   }
 
@@ -1156,17 +1164,32 @@ class DeploymentTask {
 
   factory DeploymentTask.fromJson(Map<String, dynamic> json) {
     return DeploymentTask(
-      taskId: (json['task_id'] as String?) ?? '',
-      packageId: (json['package_id'] as String?) ?? '',
-      machineId: (json['machine_id'] as String?) ?? '',
-      taskType: (json['task_type'] as String?) ?? 'deploy',
+      taskId: (json['task_id'] as String?) ??
+          (json['taskId'] as String?) ??
+          '',
+      packageId: (json['package_id'] as String?) ??
+          (json['packageId'] as String?) ??
+          '',
+      machineId: (json['machine_id'] as String?) ??
+          (json['machineId'] as String?) ??
+          '',
+      taskType: (json['task_type'] as String?) ??
+          (json['taskType'] as String?) ??
+          'deploy',
       status: (json['status'] as String?) ?? 'pending',
-      errorMessage: json['error_message'] as String?,
-      createdAt: (json['created_at'] as String?) ?? '',
-      scheduledAt: json['scheduled_at'] as String?,
-      completedAt: json['completed_at'] as String?,
-      packageName: json['package_name'] as String?,
-      packageVersion: json['package_version'] as String?,
+      errorMessage: json['error_message'] as String? ??
+          json['errorMessage'] as String?,
+      createdAt: (json['created_at'] as String?) ??
+          (json['createdAt'] as String?) ??
+          '',
+      scheduledAt: json['scheduled_at'] as String? ??
+          json['scheduledAt'] as String?,
+      completedAt: json['completed_at'] as String? ??
+          json['completedAt'] as String?,
+      packageName: json['package_name'] as String? ??
+          json['packageName'] as String?,
+      packageVersion: json['package_version'] as String? ??
+          json['packageVersion'] as String?,
     );
   }
 
@@ -1226,17 +1249,28 @@ class DeploymentRecord {
 
   factory DeploymentRecord.fromJson(Map<String, dynamic> json) {
     return DeploymentRecord(
-      recordId: (json['record_id'] as String?) ?? '',
-      machineId: (json['machine_id'] as String?) ?? '',
-      packageId: (json['package_id'] as String?) ?? '',
+      recordId: (json['record_id'] as String?) ??
+          (json['recordId'] as String?) ??
+          '',
+      machineId: (json['machine_id'] as String?) ??
+          (json['machineId'] as String?) ??
+          '',
+      packageId: (json['package_id'] as String?) ??
+          (json['packageId'] as String?) ??
+          '',
       name: (json['name'] as String?) ?? '',
       version: (json['version'] as String?) ?? '',
       type: (json['type'] as String?) ?? 'software-deploy',
-      targetPath: json['target_path'] as String?,
+      targetPath: json['target_path'] as String? ??
+          json['targetPath'] as String?,
       status: (json['status'] as String?) ?? 'success',
-      deployedAt: (json['deployed_at'] as String?) ?? '',
-      uninstalledAt: json['uninstalled_at'] as String?,
-      syncedAt: json['synced_at'] as String?,
+      deployedAt: (json['deployed_at'] as String?) ??
+          (json['deployedAt'] as String?) ??
+          '',
+      uninstalledAt: json['uninstalled_at'] as String? ??
+          json['uninstalledAt'] as String?,
+      syncedAt: json['synced_at'] as String? ??
+          json['syncedAt'] as String?,
     );
   }
 
