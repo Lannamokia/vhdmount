@@ -270,6 +270,16 @@ class _PackagesTab extends StatelessWidget {
               label: const Text('上传部署包'),
             ),
             OutlinedButton.icon(
+              onPressed: () async {
+                await showDialog<void>(
+                  context: context,
+                  builder: (context) => const LocalPackagerDialog(),
+                );
+              },
+              icon: const Icon(Icons.build_circle_rounded),
+              label: const Text('本地打包器'),
+            ),
+            OutlinedButton.icon(
               onPressed: controller.loadDeploymentPackages,
               icon: const Icon(Icons.refresh_rounded),
               label: const Text('刷新列表'),
@@ -1062,6 +1072,441 @@ class _HistoryTabState extends State<_HistoryTab> {
           recordsList
         else
           Expanded(child: recordsList),
+      ],
+    );
+  }
+}
+
+class LocalPackagerDialog extends StatefulWidget {
+  const LocalPackagerDialog({super.key});
+
+  @override
+  State<LocalPackagerDialog> createState() => _LocalPackagerDialogState();
+}
+
+class _LocalPackagerDialogState extends State<LocalPackagerDialog> {
+  final TextEditingController _nameController =
+      TextEditingController(text: '配套工具');
+  final TextEditingController _versionController =
+      TextEditingController(text: '1.0.0');
+  final TextEditingController _signerController =
+      TextEditingController(text: 'admin');
+  final TextEditingController _installScriptController =
+      TextEditingController();
+  final TextEditingController _uninstallScriptController =
+      TextEditingController();
+  final TextEditingController _payloadDirController = TextEditingController();
+  final TextEditingController _privateKeyController = TextEditingController();
+  final TextEditingController _outputDirController = TextEditingController();
+  final TextEditingController _targetPathController = TextEditingController();
+
+  String _type = 'software-deploy';
+  bool _isPacking = false;
+  bool _requiresAdmin = false;
+  double _progress = 0.0;
+  String _step = '';
+  String? _resultMessage;
+  bool _resultIsError = false;
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _versionController.dispose();
+    _signerController.dispose();
+    _installScriptController.dispose();
+    _uninstallScriptController.dispose();
+    _payloadDirController.dispose();
+    _privateKeyController.dispose();
+    _outputDirController.dispose();
+    _targetPathController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickInstallScript() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: <String>['ps1'],
+      allowMultiple: false,
+      withData: false,
+    );
+    if (result != null &&
+        result.files.isNotEmpty &&
+        result.files.first.path != null) {
+      setState(() {
+        _installScriptController.text = result.files.first.path!;
+      });
+    }
+  }
+
+  Future<void> _pickUninstallScript() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: <String>['ps1'],
+      allowMultiple: false,
+      withData: false,
+    );
+    if (result != null &&
+        result.files.isNotEmpty &&
+        result.files.first.path != null) {
+      setState(() {
+        _uninstallScriptController.text = result.files.first.path!;
+      });
+    }
+  }
+
+  Future<void> _pickPrivateKey() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: <String>['pem'],
+      allowMultiple: false,
+      withData: false,
+    );
+    if (result != null &&
+        result.files.isNotEmpty &&
+        result.files.first.path != null) {
+      setState(() {
+        _privateKeyController.text = result.files.first.path!;
+      });
+    }
+  }
+
+  Future<void> _pickPayloadDir() async {
+    final result = await FilePicker.platform.getDirectoryPath();
+    if (result != null && result.isNotEmpty) {
+      setState(() {
+        _payloadDirController.text = result;
+      });
+    }
+  }
+
+  Future<void> _pickOutputDir() async {
+    final result = await FilePicker.platform.getDirectoryPath();
+    if (result != null && result.isNotEmpty) {
+      setState(() {
+        _outputDirController.text = result;
+      });
+    }
+  }
+
+  Future<void> _pack() async {
+    final name = _nameController.text.trim();
+    final version = _versionController.text.trim();
+    final signer = _signerController.text.trim();
+    final installScriptPath = _installScriptController.text.trim();
+    final uninstallScriptPath = _uninstallScriptController.text.trim();
+    final payloadDir = _payloadDirController.text.trim();
+    final privateKeyPath = _privateKeyController.text.trim();
+    final outputDir = _outputDirController.text.trim();
+    final targetPath = _targetPathController.text.trim();
+
+    if (name.isEmpty || version.isEmpty || signer.isEmpty) {
+      setState(() {
+        _resultMessage = '包名称、版本号和签名者不能为空';
+        _resultIsError = true;
+      });
+      return;
+    }
+    if (privateKeyPath.isEmpty) {
+      setState(() {
+        _resultMessage = '请选择私钥文件';
+        _resultIsError = true;
+      });
+      return;
+    }
+    if (_type == 'software-deploy' && installScriptPath.isEmpty) {
+      setState(() {
+        _resultMessage = 'software-deploy 类型必须提供安装脚本';
+        _resultIsError = true;
+      });
+      return;
+    }
+    if (_type == 'file-deploy') {
+      if (targetPath.isEmpty) {
+        setState(() {
+          _resultMessage = 'file-deploy 类型必须填写机台目标部署路径';
+          _resultIsError = true;
+        });
+        return;
+      }
+      if (payloadDir.isEmpty) {
+        setState(() {
+          _resultMessage = 'file-deploy 类型必须选择文件负载目录';
+          _resultIsError = true;
+        });
+        return;
+      }
+    }
+    if (outputDir.isEmpty) {
+      setState(() {
+        _resultMessage = '请选择输出目录';
+        _resultIsError = true;
+      });
+      return;
+    }
+
+    setState(() {
+      _isPacking = true;
+      _progress = 0.0;
+      _step = '准备开始...';
+      _resultMessage = null;
+      _resultIsError = false;
+    });
+
+    try {
+      final packager = DeploymentPackager();
+      final result = await packager.packAndSign(
+        type: _type,
+        installScriptPath:
+            installScriptPath.isEmpty ? null : installScriptPath,
+        uninstallScriptPath:
+            uninstallScriptPath.isEmpty ? null : uninstallScriptPath,
+        payloadDir: payloadDir.isEmpty ? null : payloadDir,
+        name: name,
+        version: version,
+        signer: signer,
+        targetPath: targetPath.isEmpty ? null : targetPath,
+        requiresAdmin: _requiresAdmin,
+        privateKeyPath: privateKeyPath,
+        outputDir: outputDir,
+        onProgress: (progress, step) {
+          if (mounted) {
+            setState(() {
+              _progress = progress;
+              _step = step;
+            });
+          }
+        },
+      );
+
+      if (mounted) {
+        setState(() {
+          _isPacking = false;
+          _resultMessage =
+              '打包完成：\n${result.zipPath}\n${result.sigPath}';
+          _resultIsError = false;
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _isPacking = false;
+          _resultMessage = '打包失败：$error';
+          _resultIsError = true;
+        });
+      }
+    }
+  }
+
+  Widget _buildPathPicker({
+    required String label,
+    required TextEditingController controller,
+    required VoidCallback onPick,
+    bool isDirectory = false,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Expanded(
+          child: TextField(
+            controller: controller,
+            decoration: InputDecoration(
+              labelText: label,
+              hintText: isDirectory ? '选择目录' : '选择文件',
+            ),
+            readOnly: true,
+          ),
+        ),
+        const SizedBox(width: 10),
+        OutlinedButton.icon(
+          onPressed: _isPacking ? null : onPick,
+          icon: Icon(
+            isDirectory
+                ? Icons.folder_open_rounded
+                : Icons.file_open_rounded,
+          ),
+          label: Text(isDirectory ? '浏览' : '选择'),
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return AlertDialog(
+      title: const Text('本地打包器'),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 600),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              DropdownMenu<String>(
+                initialSelection: _type,
+                label: const Text('包类型'),
+                enabled: !_isPacking,
+                dropdownMenuEntries: const <DropdownMenuEntry<String>>[
+                  DropdownMenuEntry<String>(
+                    value: 'software-deploy',
+                    label: '软件部署包（含安装/卸载脚本）',
+                  ),
+                  DropdownMenuEntry<String>(
+                    value: 'file-deploy',
+                    label: '文件部署包（直接解压）',
+                  ),
+                ],
+                onSelected: _isPacking
+                    ? null
+                    : (value) {
+                        if (value != null) {
+                          setState(() {
+                            _type = value;
+                          });
+                        }
+                      },
+              ),
+              const SizedBox(height: 12),
+              _buildPathPicker(
+                label: '安装脚本',
+                controller: _installScriptController,
+                onPick: _pickInstallScript,
+              ),
+              const SizedBox(height: 12),
+              _buildPathPicker(
+                label: '卸载脚本',
+                controller: _uninstallScriptController,
+                onPick: _pickUninstallScript,
+              ),
+              const SizedBox(height: 12),
+              _buildPathPicker(
+                label: '文件负载目录',
+                controller: _payloadDirController,
+                onPick: _pickPayloadDir,
+                isDirectory: true,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _targetPathController,
+                decoration: const InputDecoration(
+                  labelText: '目标部署路径',
+                  hintText: '机台端解压目标目录（file-deploy 必填）',
+                ),
+                enabled: !_isPacking,
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Switch(
+                    value: _requiresAdmin,
+                    onChanged: _isPacking
+                        ? null
+                        : (value) {
+                            setState(() {
+                              _requiresAdmin = value;
+                            });
+                          },
+                  ),
+                  const Text('需要管理员权限'),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _nameController,
+                decoration: const InputDecoration(labelText: '包名称'),
+                enabled: !_isPacking,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _versionController,
+                decoration: const InputDecoration(labelText: '版本号'),
+                enabled: !_isPacking,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _signerController,
+                decoration: const InputDecoration(labelText: '签名者'),
+                enabled: !_isPacking,
+              ),
+              const SizedBox(height: 12),
+              _buildPathPicker(
+                label: '私钥文件',
+                controller: _privateKeyController,
+                onPick: _pickPrivateKey,
+              ),
+              const SizedBox(height: 12),
+              _buildPathPicker(
+                label: '输出目录',
+                controller: _outputDirController,
+                onPick: _pickOutputDir,
+                isDirectory: true,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'software-deploy 类型必须包含 install.ps1；'
+                'file-deploy 类型不含脚本，只解压文件。'
+                '输出文件为 name-version.zip 和 .zip.sig，'
+                '可手动上传到服务端。',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: AppPalette.muted),
+              ),
+              if (_isPacking) ...<Widget>[
+                const SizedBox(height: 16),
+                LinearProgressIndicator(value: _progress),
+                const SizedBox(height: 8),
+                Text(_step, style: theme.textTheme.bodySmall),
+              ],
+              if (_resultMessage != null) ...<Widget>[
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: _resultIsError
+                        ? AppPalette.danger.withValues(alpha: 0.1)
+                        : AppPalette.mint.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: _resultIsError
+                          ? AppPalette.danger.withValues(alpha: 0.3)
+                          : AppPalette.mint.withValues(alpha: 0.3),
+                    ),
+                  ),
+                  child: Text(
+                    _resultMessage!,
+                    style: TextStyle(
+                      color: _resultIsError
+                          ? AppPalette.danger
+                          : AppPalette.mintDeep,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: _isPacking ? null : () => Navigator.of(context).pop(),
+          child: const Text('关闭'),
+        ),
+        if (!_isPacking && _resultMessage == null)
+          FilledButton.icon(
+            onPressed: _pack,
+            icon: const Icon(Icons.build_circle_rounded),
+            label: const Text('打包并签名'),
+          ),
+        if (!_isPacking && _resultMessage != null)
+          FilledButton.icon(
+            onPressed: () {
+              setState(() {
+                _resultMessage = null;
+              });
+            },
+            icon: const Icon(Icons.refresh_rounded),
+            label: const Text('重新打包'),
+          ),
       ],
     );
   }
