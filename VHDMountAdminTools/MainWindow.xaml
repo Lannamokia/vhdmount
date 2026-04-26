@@ -1,7 +1,7 @@
 <Window x:Class="VHDMountAdminTools.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="VHD Mount Admin Tools" Height="760" Width="920">
+        Title="VHD Mount Admin Tools" Height="860" Width="920">
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <Grid Margin="16">
             <Grid.RowDefinitions>
@@ -154,49 +154,49 @@
                     </Grid.RowDefinitions>
 
                     <TextBlock Text="包类型" VerticalAlignment="Center"/>
-                    <ComboBox x:Name="PackTypeBox" Grid.Column="1" Margin="8,0">
+                    <ComboBox x:Name="PackTypeBox" Grid.Column="1" Margin="8,0" VerticalAlignment="Center" MinHeight="26">
                         <ComboBoxItem Content="software-deploy" IsSelected="True"/>
                         <ComboBoxItem Content="file-deploy"/>
                     </ComboBox>
 
                     <TextBlock Grid.Row="2" Text="安装脚本" VerticalAlignment="Center"/>
                     <TextBox x:Name="PackInstallScript" Grid.Row="2" Grid.Column="1" Margin="8,0"/>
-                    <Button Grid.Row="2" Grid.Column="2" Content="选择" Padding="12,2" Click="PackBrowseInstallScript"/>
+                    <Button Grid.Row="2" Grid.Column="2" Content="选择" Padding="12,4" MinWidth="64" MinHeight="28" Click="PackBrowseInstallScript"/>
 
                     <TextBlock Grid.Row="4" Text="卸载脚本" VerticalAlignment="Center"/>
-                    <TextBox x:Name="PackUninstallScript" Grid.Row="4" Grid.Column="1" Margin="8,0"/>
-                    <Button Grid.Row="4" Grid.Column="2" Content="选择" Padding="12,2" Click="PackBrowseUninstallScript"/>
+                    <TextBox x:Name="PackUninstallScript" Grid.Row="4" Grid.Column="1" Margin="8,0" VerticalAlignment="Center" MinHeight="26"/>
+                    <Button Grid.Row="4" Grid.Column="2" Content="选择" Padding="12,4" MinWidth="64" MinHeight="28" Click="PackBrowseUninstallScript"/>
 
                     <TextBlock Grid.Row="6" Text="文件负载目录" VerticalAlignment="Center"/>
-                    <TextBox x:Name="PackPayloadDir" Grid.Row="6" Grid.Column="1" Margin="8,0"/>
-                    <Button Grid.Row="6" Grid.Column="2" Content="浏览" Padding="12,2" Click="PackBrowsePayloadDir"/>
+                    <TextBox x:Name="PackPayloadDir" Grid.Row="6" Grid.Column="1" Margin="8,0" VerticalAlignment="Center" MinHeight="26"/>
+                    <Button Grid.Row="6" Grid.Column="2" Content="浏览" Padding="12,4" MinWidth="64" MinHeight="28" Click="PackBrowsePayloadDir"/>
 
                     <TextBlock Grid.Row="8" Text="包名称" VerticalAlignment="Center"/>
-                    <TextBox x:Name="PackName" Grid.Row="8" Grid.Column="1" Margin="8,0" Text="配套工具"/>
+                    <TextBox x:Name="PackName" Grid.Row="8" Grid.Column="1" Margin="8,0" Text="配套工具" VerticalAlignment="Center" MinHeight="26"/>
 
                     <TextBlock Grid.Row="10" Text="版本号" VerticalAlignment="Center"/>
-                    <TextBox x:Name="PackVersion" Grid.Row="10" Grid.Column="1" Margin="8,0" Text="1.0.0"/>
+                    <TextBox x:Name="PackVersion" Grid.Row="10" Grid.Column="1" Margin="8,0" Text="1.0.0" VerticalAlignment="Center" MinHeight="26"/>
 
                     <TextBlock Grid.Row="12" Text="签名者" VerticalAlignment="Center"/>
-                    <TextBox x:Name="PackSigner" Grid.Row="12" Grid.Column="1" Margin="8,0" Text="admin"/>
+                    <TextBox x:Name="PackSigner" Grid.Row="12" Grid.Column="1" Margin="8,0" Text="admin" VerticalAlignment="Center" MinHeight="26"/>
 
                     <TextBlock Grid.Row="14" Text="私钥文件" VerticalAlignment="Center"/>
-                    <TextBox x:Name="PackPrivateKey" Grid.Row="14" Grid.Column="1" Margin="8,0"/>
-                    <Button Grid.Row="14" Grid.Column="2" Content="选择" Padding="12,2" Click="PackBrowsePrivateKey"/>
+                    <TextBox x:Name="PackPrivateKey" Grid.Row="14" Grid.Column="1" Margin="8,0" VerticalAlignment="Center" MinHeight="26"/>
+                    <Button Grid.Row="14" Grid.Column="2" Content="选择" Padding="12,4" MinWidth="64" MinHeight="28" Click="PackBrowsePrivateKey"/>
 
                     <TextBlock Grid.Row="16" Text="输出目录" VerticalAlignment="Center"/>
-                    <TextBox x:Name="PackOutDir" Grid.Row="16" Grid.Column="1" Margin="8,0"/>
-                    <Button Grid.Row="16" Grid.Column="2" Content="浏览" Padding="12,2" Click="PackBrowseOutDir"/>
+                    <TextBox x:Name="PackOutDir" Grid.Row="16" Grid.Column="1" Margin="8,0" VerticalAlignment="Center" MinHeight="26"/>
+                    <Button Grid.Row="16" Grid.Column="2" Content="浏览" Padding="12,4" MinWidth="64" MinHeight="28" Click="PackBrowseOutDir"/>
 
-                    <TextBlock Grid.Row="18" Grid.Column="1" Margin="8,0" TextWrapping="Wrap"
+                    <TextBlock Grid.Row="18" Grid.Column="1" Margin="8,0" TextWrapping="Wrap" VerticalAlignment="Center"
                                Text="software-deploy 类型必须包含 install.ps1；file-deploy 类型不含脚本，只解压文件。输出文件为 name-version.zip 和 .zip.sig，可手动上传到服务端。"/>
-                    <Button Grid.Row="18" Grid.Column="2" Content="打包并签名" Padding="12,2" Click="PackAndSign"/>
+                    <Button Grid.Row="18" Grid.Column="2" Content="打包并签名" Padding="16,6" MinWidth="96" MinHeight="32" Click="PackAndSign"/>
                 </Grid>
             </GroupBox>
 
-            <StackPanel Grid.Row="8" Orientation="Horizontal" HorizontalAlignment="Right">
-                <TextBlock x:Name="StatusText" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                <Button Content="关闭" Padding="16,4" Width="100" Click="CloseApp"/>
+            <StackPanel Grid.Row="7" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                <TextBlock x:Name="StatusText" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <Button Content="关闭" Padding="8,2" Width="64" Click="CloseApp"/>
             </StackPanel>
         </Grid>
     </ScrollViewer>
