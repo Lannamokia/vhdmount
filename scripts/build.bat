@@ -6,6 +6,8 @@ set "BASE_PUBLISH_DIR=%PUBLISH_ROOT%\VHDMounter"
 set "MAIMOLLER_PUBLISH_DIR=%PUBLISH_ROOT%\VHDMounter_Maimoller"
 set "UPDATER_PUBLISH_DIR=%PUBLISH_ROOT%\Updater"
 set "TOOLS_PUBLISH_DIR=%PUBLISH_ROOT%\VHDMountAdminTools"
+set "FLUTTER_DIR=%ROOT_DIR%\vhd_mount_admin_flutter"
+set "FLUTTER_BUILD_DIR=%FLUTTER_DIR%\build\windows\x64\runner\Release"
 set "SINGLE_DIR=%ROOT_DIR%\single"
 pushd "%ROOT_DIR%"
 
@@ -40,18 +42,34 @@ dotnet publish ./VHDMountAdminTools/VHDMountAdminTools.csproj -c Release -r win-
 if errorlevel 1 goto :publish_failed
 
 echo.
+echo Building Flutter Windows client...
+pushd "%FLUTTER_DIR%"
+call flutter build windows
+if errorlevel 1 (
+    popd
+    goto :publish_failed
+)
+popd
+
+echo.
 echo Publish succeeded!
 copy /Y "%BASE_PUBLISH_DIR%\VHDMounter.exe" "%SINGLE_DIR%\VHDMounter.exe" >nul
 copy /Y "%MAIMOLLER_PUBLISH_DIR%\VHDMounter_Maimoller.exe" "%SINGLE_DIR%\VHDMounter_Maimoller.exe" >nul
 copy /Y "%BASE_PUBLISH_DIR%\vhdmonter_config.ini" "%SINGLE_DIR%\vhdmonter_config.ini" >nul
 copy /Y "%UPDATER_PUBLISH_DIR%\Updater.exe" "%SINGLE_DIR%\Updater.exe" >nul
 copy /Y "%TOOLS_PUBLISH_DIR%\VHDMountAdminTools.exe" "%SINGLE_DIR%\VHDMountAdminTools.exe" >nul
+
+echo Packing Flutter Windows client...
+powershell -NoProfile -Command "Compress-Archive -Path '%FLUTTER_BUILD_DIR%\*' -DestinationPath '%SINGLE_DIR%\vhd_mount_admin_windows.zip' -Force"
+if errorlevel 1 goto :publish_failed
+
 echo Output to single directory:
 echo   single\VHDMounter.exe
 echo   single\VHDMounter_Maimoller.exe
 echo   single\vhdmonter_config.ini
 echo   single\Updater.exe
 echo   single\VHDMountAdminTools.exe
+echo   single\vhd_mount_admin_windows.zip
 echo.
 echo Note: Run VHDMounter.exe or VHDMounter_Maimoller.exe as Administrator
 goto :end
