@@ -102,35 +102,36 @@ namespace VHDMounter.Tests
         [Fact]
         public void KillGameProcesses_DoesNotKillUnrelatedProcesses()
         {
-            // 启动一个安全的无关进程（notepad），验证 KillGameProcesses 不会误杀
-            var notepad = Process.Start(new ProcessStartInfo
+            // 启动 ping.exe（进程名"ping"确定不匹配任何关键字），验证 KillGameProcesses 不误杀
+            // 不用 cmd/notepad：无控制台环境下 CreateNoWindow 的 cmd 会因 stdin 缺失秒退
+            var safeProc = Process.Start(new ProcessStartInfo
             {
-                FileName = "notepad.exe",
+                FileName = "ping.exe",
+                Arguments = "127.0.0.1 -t",
                 UseShellExecute = false,
+                CreateNoWindow = true,
             });
 
-            Assert.NotNull(notepad);
+            Assert.NotNull(safeProc);
             try
             {
-                // 给 notepad 一点时间启动
                 Task.Delay(500).Wait();
+                Assert.False(safeProc.HasExited, "测试用进程应在 KillGameProcesses 之前存活");
 
                 manager.KillGameProcesses();
 
-                // 再次给系统一点时间处理 Kill
                 Task.Delay(500).Wait();
 
-                // 验证 notepad 仍然存活
-                notepad.Refresh();
-                Assert.False(notepad.HasExited, "KillGameProcesses 不应结束不相关的进程");
+                safeProc.Refresh();
+                Assert.False(safeProc.HasExited, "KillGameProcesses 不应结束不相关的进程");
             }
             finally
             {
                 try
                 {
-                    if (!notepad.HasExited)
+                    if (!safeProc.HasExited)
                     {
-                        notepad.Kill();
+                        safeProc.Kill(entireProcessTree: true);
                     }
                 }
                 catch
