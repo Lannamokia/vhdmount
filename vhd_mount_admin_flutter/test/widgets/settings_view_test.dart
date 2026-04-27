@@ -123,6 +123,70 @@ void main() {
     expect(find.text('新的 OTP 绑定信息'), findsOneWidget);
   });
 
+  testWidgets(
+    'OTP rotation panel on Windows shows manual bind hint, no quick bind button',
+    (tester) async {
+      tester.view.physicalSize = const Size(1600, 960);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      final api = FakeAdminApi(
+        serverStatus: const ServerStatus(
+          initialized: true,
+          pendingInitialization: false,
+          databaseReady: true,
+          defaultVhdKeyword: 'SAFEBOOT',
+          trustedRegistrationCertificateCount: 1,
+        ),
+        authStatus: const AuthStatus(
+          initialized: true,
+          isAuthenticated: true,
+          otpVerified: true,
+        ),
+      );
+      final controller = AppController(
+        api: api,
+        clientConfigStore: FakeClientConfigStore(),
+      );
+
+      await tester.pumpWidget(AdminApp(controller: controller));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(DashboardSidebarButton).at(4));
+      await tester.pumpAndSettle();
+
+      await tester.scrollUntilVisible(
+        _textFieldWithLabel('旧 OTP 验证码'),
+        300,
+        scrollable: _settingsScrollable(),
+      );
+      await tester.enterText(_textFieldWithLabel('旧 OTP 验证码'), '123456');
+      await tester.scrollUntilVisible(
+        find.text('生成新的绑定密钥'),
+        300,
+        scrollable: _settingsScrollable(),
+      );
+      await tester.tap(find.text('生成新的绑定密钥'));
+      await tester.pumpAndSettle();
+
+      // OTP rotation panel should be visible.
+      expect(find.text('新的 OTP 绑定信息'), findsOneWidget);
+
+      // On Windows (non-mobile), manual bind hint should be shown.
+      expect(
+        find.text('如果验证器不支持扫码，可以使用下面的参数手动绑定。'),
+        findsOneWidget,
+      );
+
+      // Mobile quick bind buttons should NOT appear on Windows.
+      expect(find.text('绑定到 iCloud 密码'), findsNothing);
+      expect(find.text('绑定到验证器'), findsNothing);
+    },
+  );
+
   testWidgets('settings view submits password change', (tester) async {
     tester.view.physicalSize = const Size(1600, 960);
     tester.view.devicePixelRatio = 1.0;

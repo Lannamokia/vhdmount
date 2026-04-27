@@ -86,4 +86,52 @@ void main() {
       expect(foundWideContainer, isFalse);
     },
   );
+
+  testWidgets(
+    'OTP import panel on Windows shows scan QR text, no quick bind button',
+    (tester) async {
+      _setDesktopViewport(tester, const Size(1600, 960));
+      addTearDown(() => _resetViewport(tester));
+
+      final controller = AppController(
+        api: FakeAdminApi(
+          serverStatus: _uninitializedServerStatus,
+          authStatus: _unauthenticatedStatus,
+        ),
+        clientConfigStore: FakeClientConfigStore(),
+      );
+
+      await tester.pumpWidget(AdminApp(controller: controller));
+      await tester.pumpAndSettle();
+
+      // Trigger prepareInitialization to show OTP import panel.
+      await controller.prepareInitialization(
+        issuer: 'VHDMountServer',
+        accountName: 'admin',
+      );
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      // OTP import panel should be visible.
+      expect(find.text('OTP 导入信息'), findsOneWidget);
+
+      // On Windows (non-mobile), the scan QR instruction text should be shown.
+      expect(
+        find.text('使用手机验证器扫描此二维码即可添加 TOTP。'),
+        findsOneWidget,
+      );
+
+      // Mobile quick bind buttons should NOT appear on Windows.
+      expect(find.text('绑定到 iCloud 密码'), findsNothing);
+      expect(find.text('绑定到验证器'), findsNothing);
+
+      // Manual binding hint should be shown for desktop.
+      expect(
+        find.text(
+          '优先扫码导入；如果验证器不支持扫码，再使用下方密钥或 URI 手动添加。',
+        ),
+        findsOneWidget,
+      );
+    },
+  );
 }
