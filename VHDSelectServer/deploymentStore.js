@@ -198,6 +198,15 @@ class DeploymentStore {
         });
     }
 
+    async deleteTask(database, taskId) {
+        return database.withClient(async (client) => {
+            const result = await client.query(`
+                DELETE FROM deployment_tasks WHERE task_id = $1 RETURNING *
+            `, [taskId]);
+            return this._mapTaskRow(result.rows[0]);
+        });
+    }
+
     _mapTaskRow(row) {
         if (!row) return null;
         return {

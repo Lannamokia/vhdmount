@@ -1505,6 +1505,7 @@ async function createApp(options = {}) {
 
     app.post('/api/deployments/tasks', deploymentRoutes.requireAuth, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.createTask));
     app.get('/api/deployments/tasks', deploymentRoutes.requireAuth, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.listTasks));
+    app.delete('/api/deployments/tasks/:id', deploymentRoutes.requireAuth, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.deleteTask));
 
     app.get('/api/machines/:machineId/deployments/pending', deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.getPendingTasks));
     app.post('/api/machines/:machineId/deployments/:taskId/status', deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.reportTaskStatus));

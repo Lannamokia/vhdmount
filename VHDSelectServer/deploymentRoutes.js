@@ -203,6 +203,24 @@ function buildDeploymentRoutes(options = {}) {
         });
     }
 
+    async function deleteTask(req, res) {
+        const runtime = req.app.locals.runtime;
+        const taskId = assertString(req.params.id, 'taskId');
+        const task = await deploymentStore.deleteTask(runtime.database, taskId);
+        if (!task) {
+            throw createJsonError(404, '任务不存在');
+        }
+
+        runtime.writeAudit(req, {
+            type: 'deployment.task.delete',
+            actor: 'admin',
+            result: 'success',
+            taskId,
+        });
+
+        res.json({ success: true, taskId, message: '部署任务已删除' });
+    }
+
     async function listTasks(req, res) {
         const runtime = req.app.locals.runtime;
         const tasks = await deploymentStore.listTasks(runtime.database, {
@@ -444,6 +462,7 @@ function buildDeploymentRoutes(options = {}) {
         getPackage,
         deletePackage,
         createTask,
+        deleteTask,
         listTasks,
         getPendingTasks,
         reportTaskStatus,
