@@ -107,6 +107,9 @@ void main() {
           message: 'Starting mount',
           rawText: 'VHDManager: Starting mount',
           metadata: <String, dynamic>{},
+          logDay: null,
+          receivedAt: null,
+          uploadRequestId: null,
         ),
         MachineLogEntry(
           id: 2,
@@ -120,6 +123,9 @@ void main() {
           message: 'Retrying mount',
           rawText: 'VHDManager: Retrying mount',
           metadata: <String, dynamic>{},
+          logDay: null,
+          receivedAt: null,
+          uploadRequestId: null,
         ),
       ],
     );
@@ -129,16 +135,11 @@ void main() {
     );
     await controller.bootstrap();
 
-    await controller.loadMachineLogs(
-      const MachineLogFilter(
-        machineId: 'M-01',
-        limit: 50,
-      ),
-    );
+    await controller.loadMachineLogs(machineId: 'M-01');
 
     expect(controller.machineLogEntries, hasLength(2));
     expect(controller.machineLogEntries.first.level, 'info');
-    expect(controller.machineLogPage.hasMore, isFalse);
+    expect(controller.machineLogHasMore, isFalse);
     expect(api.getMachineLogsCalls, 1);
   });
 
@@ -155,15 +156,12 @@ void main() {
     await controller.bootstrap();
 
     await controller.loadMachineLogs(
-      const MachineLogFilter(
-        machineId: 'M-01',
-        sessionId: 'sess-01',
-        level: 'error',
-        component: 'VHDManager',
-        eventKey: 'MOUNT_FAIL',
-        query: 'error',
-        limit: 25,
-      ),
+      machineId: 'M-01',
+      sessionId: 'sess-01',
+      level: 'error',
+      component: 'VHDManager',
+      eventKey: 'MOUNT_FAIL',
+      query: 'error',
     );
 
     expect(api.getMachineLogsCalls, 1);
@@ -187,6 +185,9 @@ void main() {
           message: 'Message $index',
           rawText: 'VHDManager: Message $index',
           metadata: const <String, dynamic>{},
+          logDay: null,
+          receivedAt: null,
+          uploadRequestId: null,
         ),
       ),
     );
@@ -196,16 +197,11 @@ void main() {
     );
     await controller.bootstrap();
 
-    await controller.loadMachineLogs(
-      const MachineLogFilter(
-        machineId: 'M-01',
-        limit: 50,
-      ),
-    );
+    await controller.loadMachineLogs(machineId: 'M-01');
 
     expect(controller.machineLogEntries, hasLength(50));
-    expect(controller.machineLogPage.hasMore, isTrue);
-    expect(controller.machineLogPage.nextCursor, isNotNull);
+    expect(controller.machineLogHasMore, isTrue);
+    expect(controller.machineLogCursor, isNotNull);
 
     await controller.loadMoreMachineLogs();
 
@@ -229,6 +225,9 @@ void main() {
           message: 'Starting mount',
           rawText: 'VHDManager: Starting mount',
           metadata: <String, dynamic>{},
+          logDay: null,
+          receivedAt: null,
+          uploadRequestId: null,
         ),
       ],
     );
@@ -276,12 +275,10 @@ void main() {
     );
     await controller.bootstrap();
 
-    await controller.loadMachineLogs(
-      const MachineLogFilter(machineId: 'M-01', limit: 50),
-    );
+    await controller.loadMachineLogs(machineId: 'M-01');
 
     expect(controller.machineLogEntries, isEmpty);
-    expect(controller.machineLogPage.nextCursor, isNull);
-    expect(controller.machineLogPage.hasMore, isFalse);
+    expect(controller.machineLogCursor, isNull);
+    expect(controller.machineLogHasMore, isFalse);
   });
 }

@@ -153,6 +153,16 @@ void main() {
 
     expect(find.text('机台日志'), findsAtLeastNWidgets(1));
     expect(find.text('SESSION-01'), findsAtLeastNWidgets(1));
+
+    // Enter the session to view log entries.
+    await tester.tap(
+      find.descendant(
+        of: find.byType(Card),
+        matching: find.text('SESSION-01'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
     expect(find.text('卷挂载完成'), findsOneWidget);
     expect(api.lastMachineLogMachineId, 'MACHINE-01');
     expect(controller.machineLogSelectedMachineId, 'MACHINE-01');

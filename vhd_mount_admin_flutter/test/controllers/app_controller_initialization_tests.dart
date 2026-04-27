@@ -31,15 +31,16 @@ void main() {
     );
     await controller.bootstrap();
 
-    final prep = await controller.prepareInitialization(
+    await controller.prepareInitialization(
       issuer: 'VHDMountServer',
       accountName: 'admin',
     );
 
-    expect(prep.issuer, 'VHDMountServer');
-    expect(prep.accountName, 'admin');
-    expect(prep.totpSecret, isNotEmpty);
-    expect(prep.otpauthUrl, isNotEmpty);
+    expect(controller.initializationPreparation, isNotNull);
+    expect(controller.initializationPreparation!.issuer, 'VHDMountServer');
+    expect(controller.initializationPreparation!.accountName, 'admin');
+    expect(controller.initializationPreparation!.totpSecret, isNotEmpty);
+    expect(controller.initializationPreparation!.otpauthUrl, isNotEmpty);
   });
 
   test('completeInitialization finishes setup', () async {
@@ -80,12 +81,13 @@ void main() {
     );
     await controller.bootstrap();
 
-    final prep = await controller.prepareInitialization(
+    await controller.prepareInitialization(
       issuer: '',
       accountName: '',
     );
 
-    expect(prep.issuer, 'VHDMountServer');
-    expect(prep.accountName, 'admin');
+    expect(controller.initializationPreparation, isNotNull);
+    expect(controller.initializationPreparation!.issuer, 'VHDMountServer');
+    expect(controller.initializationPreparation!.accountName, 'admin');
   });
 }
