@@ -589,102 +589,114 @@ class _InitializationScreenState extends State<InitializationScreen> {
       title: 'OTP 导入信息',
       icon: Icons.qr_code_2_rounded,
       color: AppPalette.mint,
-      body: Wrap(
-        spacing: 20,
-        runSpacing: 20,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: <Widget>[
-          Container(
-            width: 232,
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: <Color>[
-                  Colors.white.withValues(alpha: 0.94),
-                  AppPalette.mint.withValues(alpha: 0.08),
-                ],
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final available = constraints.maxWidth.isFinite
+              ? constraints.maxWidth
+              : MediaQuery.of(context).size.width;
+          final infoMaxWidth = available < 520.0 ? available : 520.0;
+          final infoMinWidth = available < 280.0 ? 0.0 : 280.0;
+          return Wrap(
+            spacing: 20,
+            runSpacing: 20,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: <Widget>[
+              Container(
+                width: available < 232.0 ? available : 232.0,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: <Color>[
+                      Colors.white.withValues(alpha: 0.94),
+                      AppPalette.mint.withValues(alpha: 0.08),
+                    ],
+                  ),
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(
+                    color: AppPalette.mint.withValues(alpha: 0.18),
+                  ),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    const Text(
+                      '扫描二维码导入',
+                      style: TextStyle(
+                        fontFamily: _miSansFamily700,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    if (otpauthUrl.isNotEmpty)
+                      QrImageView(
+                        data: otpauthUrl,
+                        version: QrVersions.auto,
+                        size: 180,
+                        backgroundColor: Colors.white,
+                        eyeStyle: const QrEyeStyle(
+                          eyeShape: QrEyeShape.square,
+                          color: AppPalette.ink,
+                        ),
+                        dataModuleStyle: const QrDataModuleStyle(
+                          dataModuleShape: QrDataModuleShape.square,
+                          color: AppPalette.mintDeep,
+                        ),
+                      )
+                    else
+                      Container(
+                        width: 180,
+                        height: 180,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(color: AppPalette.border),
+                        ),
+                        child: const Text('未返回 otpauth URI'),
+                      ),
+                    const SizedBox(height: 12),
+                    Text(
+                      '使用手机验证器扫描此二维码即可添加 TOTP。',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: AppPalette.muted,
+                        height: 1.45,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              borderRadius: BorderRadius.circular(22),
-              border: Border.all(
-                color: AppPalette.mint.withValues(alpha: 0.18),
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  minWidth: infoMinWidth,
+                  maxWidth: infoMaxWidth,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      '优先扫码导入；如果验证器不支持扫码，再使用下方密钥或 URI 手动添加。',
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodyMedium?.copyWith(height: 1.5),
+                    ),
+                    const SizedBox(height: 12),
+                    SelectableText('Issuer: ${preparation.issuer}'),
+                    const SizedBox(height: 6),
+                    SelectableText('Account: ${preparation.accountName}'),
+                    const SizedBox(height: 6),
+                    SelectableText('Secret: ${preparation.totpSecret}'),
+                    const SizedBox(height: 6),
+                    SelectableText('URI: $otpauthUrl'),
+                  ],
+                ),
               ),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                const Text(
-                  '扫描二维码导入',
-                  style: TextStyle(
-                    fontFamily: _miSansFamily700,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                if (otpauthUrl.isNotEmpty)
-                  QrImageView(
-                    data: otpauthUrl,
-                    version: QrVersions.auto,
-                    size: 180,
-                    backgroundColor: Colors.white,
-                    eyeStyle: const QrEyeStyle(
-                      eyeShape: QrEyeShape.square,
-                      color: AppPalette.ink,
-                    ),
-                    dataModuleStyle: const QrDataModuleStyle(
-                      dataModuleShape: QrDataModuleShape.square,
-                      color: AppPalette.mintDeep,
-                    ),
-                  )
-                else
-                  Container(
-                    width: 180,
-                    height: 180,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: AppPalette.border),
-                    ),
-                    child: const Text('未返回 otpauth URI'),
-                  ),
-                const SizedBox(height: 12),
-                Text(
-                  '使用手机验证器扫描此二维码即可添加 TOTP。',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: AppPalette.muted,
-                    height: 1.45,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          ConstrainedBox(
-            constraints: const BoxConstraints(minWidth: 280, maxWidth: 520),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  '优先扫码导入；如果验证器不支持扫码，再使用下方密钥或 URI 手动添加。',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodyMedium?.copyWith(height: 1.5),
-                ),
-                const SizedBox(height: 12),
-                SelectableText('Issuer: ${preparation.issuer}'),
-                const SizedBox(height: 6),
-                SelectableText('Account: ${preparation.accountName}'),
-                const SizedBox(height: 6),
-                SelectableText('Secret: ${preparation.totpSecret}'),
-                const SizedBox(height: 6),
-                SelectableText('URI: $otpauthUrl'),
-              ],
-            ),
-          ),
-        ],
+            ],
+          );
+        },
       ),
     );
   }

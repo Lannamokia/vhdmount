@@ -156,6 +156,7 @@ class DashboardScreen extends StatelessWidget {
             embedInParentScroll: mobile,
           ),
           DeploymentsView(
+            key: const Key('deployments_view'),
             controller: controller,
             embedInParentScroll: mobile,
           ),
@@ -1441,102 +1442,114 @@ class _SettingsViewState extends State<SettingsView> {
       title: '新的 OTP 绑定信息',
       icon: Icons.qr_code_scanner_rounded,
       color: AppPalette.coral,
-      body: Wrap(
-        spacing: 20,
-        runSpacing: 20,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: <Widget>[
-          Container(
-            width: 232,
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: <Color>[
-                  Colors.white.withValues(alpha: 0.94),
-                  AppPalette.coral.withValues(alpha: 0.08),
-                ],
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final available = constraints.maxWidth.isFinite
+              ? constraints.maxWidth
+              : MediaQuery.of(context).size.width;
+          final infoMaxWidth = available < 520.0 ? available : 520.0;
+          final infoMinWidth = available < 280.0 ? 0.0 : 280.0;
+          return Wrap(
+            spacing: 20,
+            runSpacing: 20,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: <Widget>[
+              Container(
+                width: available < 232.0 ? available : 232.0,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: <Color>[
+                      Colors.white.withValues(alpha: 0.94),
+                      AppPalette.coral.withValues(alpha: 0.08),
+                    ],
+                  ),
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(
+                    color: AppPalette.coral.withValues(alpha: 0.18),
+                  ),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    const Text(
+                      '扫描二维码导入',
+                      style: TextStyle(
+                        fontFamily: _miSansFamily700,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    if (otpauthUrl.isNotEmpty)
+                      QrImageView(
+                        data: otpauthUrl,
+                        version: QrVersions.auto,
+                        size: 180,
+                        backgroundColor: Colors.white,
+                        eyeStyle: const QrEyeStyle(
+                          eyeShape: QrEyeShape.square,
+                          color: AppPalette.ink,
+                        ),
+                        dataModuleStyle: const QrDataModuleStyle(
+                          dataModuleShape: QrDataModuleShape.square,
+                          color: AppPalette.coralDeep,
+                        ),
+                      )
+                    else
+                      Container(
+                        width: 180,
+                        height: 180,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(color: AppPalette.border),
+                        ),
+                        child: const Text('未返回 otpauth URI'),
+                      ),
+                    const SizedBox(height: 12),
+                    Text(
+                      '旧绑定会一直保留，直到你使用新的绑定密钥生成验证码并验证通过。',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: AppPalette.muted,
+                        height: 1.45,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              borderRadius: BorderRadius.circular(22),
-              border: Border.all(
-                color: AppPalette.coral.withValues(alpha: 0.18),
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  minWidth: infoMinWidth,
+                  maxWidth: infoMaxWidth,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      '如果验证器不支持扫码，可以使用下面的参数手动绑定。',
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodyMedium?.copyWith(height: 1.5),
+                    ),
+                    const SizedBox(height: 12),
+                    SelectableText('Issuer: ${preparation.issuer}'),
+                    const SizedBox(height: 6),
+                    SelectableText('Account: ${preparation.accountName}'),
+                    const SizedBox(height: 6),
+                    SelectableText('Secret: ${preparation.totpSecret}'),
+                    const SizedBox(height: 6),
+                    SelectableText('URI: $otpauthUrl'),
+                  ],
+                ),
               ),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                const Text(
-                  '扫描二维码导入',
-                  style: TextStyle(
-                    fontFamily: _miSansFamily700,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                if (otpauthUrl.isNotEmpty)
-                  QrImageView(
-                    data: otpauthUrl,
-                    version: QrVersions.auto,
-                    size: 180,
-                    backgroundColor: Colors.white,
-                    eyeStyle: const QrEyeStyle(
-                      eyeShape: QrEyeShape.square,
-                      color: AppPalette.ink,
-                    ),
-                    dataModuleStyle: const QrDataModuleStyle(
-                      dataModuleShape: QrDataModuleShape.square,
-                      color: AppPalette.coralDeep,
-                    ),
-                  )
-                else
-                  Container(
-                    width: 180,
-                    height: 180,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: AppPalette.border),
-                    ),
-                    child: const Text('未返回 otpauth URI'),
-                  ),
-                const SizedBox(height: 12),
-                Text(
-                  '旧绑定会一直保留，直到你使用新的绑定密钥生成验证码并验证通过。',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: AppPalette.muted,
-                    height: 1.45,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          ConstrainedBox(
-            constraints: const BoxConstraints(minWidth: 280, maxWidth: 520),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  '如果验证器不支持扫码，可以使用下面的参数手动绑定。',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodyMedium?.copyWith(height: 1.5),
-                ),
-                const SizedBox(height: 12),
-                SelectableText('Issuer: ${preparation.issuer}'),
-                const SizedBox(height: 6),
-                SelectableText('Account: ${preparation.accountName}'),
-                const SizedBox(height: 6),
-                SelectableText('Secret: ${preparation.totpSecret}'),
-                const SizedBox(height: 6),
-                SelectableText('URI: $otpauthUrl'),
-              ],
-            ),
-          ),
-        ],
+            ],
+          );
+        },
       ),
     );
   }
@@ -1570,31 +1583,45 @@ class _SettingsViewState extends State<SettingsView> {
                 color: AppPalette.sun,
               ),
               const SizedBox(height: 12),
-              Row(
-                children: <Widget>[
-                  Expanded(
-                    child: TextField(
-                      controller: _logRetentionDaysController,
-                      decoration: const InputDecoration(
-                        labelText: '默认保留活动日数',
-                      ),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final narrow = constraints.maxWidth < 460;
+                  final retentionField = TextField(
+                    controller: _logRetentionDaysController,
+                    decoration: const InputDecoration(
+                      labelText: '默认保留活动日数',
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextField(
-                      controller: _logInspectionHourController,
-                      decoration: const InputDecoration(labelText: '每日巡检小时'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextField(
-                      controller: _logInspectionMinuteController,
-                      decoration: const InputDecoration(labelText: '每日巡检分钟'),
-                    ),
-                  ),
-                ],
+                  );
+                  final hourField = TextField(
+                    controller: _logInspectionHourController,
+                    decoration: const InputDecoration(labelText: '每日巡检小时'),
+                  );
+                  final minuteField = TextField(
+                    controller: _logInspectionMinuteController,
+                    decoration: const InputDecoration(labelText: '每日巡检分钟'),
+                  );
+                  if (narrow) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: <Widget>[
+                        retentionField,
+                        const SizedBox(height: 12),
+                        hourField,
+                        const SizedBox(height: 12),
+                        minuteField,
+                      ],
+                    );
+                  }
+                  return Row(
+                    children: <Widget>[
+                      Expanded(child: retentionField),
+                      const SizedBox(width: 12),
+                      Expanded(child: hourField),
+                      const SizedBox(width: 12),
+                      Expanded(child: minuteField),
+                    ],
+                  );
+                },
               ),
               const SizedBox(height: 12),
               TextField(
@@ -1752,26 +1779,39 @@ class _SettingsViewState extends State<SettingsView> {
                 decoration: const InputDecoration(labelText: '旧 OTP 验证码'),
               ),
               const SizedBox(height: 12),
-              Row(
-                children: <Widget>[
-                  Expanded(
-                    child: TextField(
-                      controller: _otpRotateIssuerController,
-                      decoration: const InputDecoration(
-                        labelText: '新的 OTP Issuer（可选）',
-                      ),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final narrow = constraints.maxWidth < 460;
+                  final issuerField = TextField(
+                    controller: _otpRotateIssuerController,
+                    decoration: const InputDecoration(
+                      labelText: '新的 OTP Issuer（可选）',
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextField(
-                      controller: _otpRotateAccountController,
-                      decoration: const InputDecoration(
-                        labelText: '新的 OTP Account（可选）',
-                      ),
+                  );
+                  final accountField = TextField(
+                    controller: _otpRotateAccountController,
+                    decoration: const InputDecoration(
+                      labelText: '新的 OTP Account（可选）',
                     ),
-                  ),
-                ],
+                  );
+                  if (narrow) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: <Widget>[
+                        issuerField,
+                        const SizedBox(height: 12),
+                        accountField,
+                      ],
+                    );
+                  }
+                  return Row(
+                    children: <Widget>[
+                      Expanded(child: issuerField),
+                      const SizedBox(width: 12),
+                      Expanded(child: accountField),
+                    ],
+                  );
+                },
               ),
               const SizedBox(height: 12),
               Wrap(
@@ -2031,6 +2071,7 @@ class InfoPanel extends StatelessWidget {
         border: Border.all(color: color.withValues(alpha: 0.2)),
       ),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           Row(
@@ -2109,8 +2150,13 @@ class StatusChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final showLabel = screenWidth >= 360;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: EdgeInsets.symmetric(
+        horizontal: showLabel ? 12 : 6,
+        vertical: 8,
+      ),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.14),
         border: Border.all(color: color.withValues(alpha: 0.22)),
@@ -2124,15 +2170,17 @@ class StatusChip extends StatelessWidget {
             height: 8,
             decoration: BoxDecoration(color: color, shape: BoxShape.circle),
           ),
-          const SizedBox(width: 8),
-          Text(
-            label,
-            style: TextStyle(
-              fontFamily: _miSansFamily700,
-              color: color,
-              fontWeight: FontWeight.w700,
+          if (showLabel) ...<Widget>[
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: TextStyle(
+                fontFamily: _miSansFamily700,
+                color: color,
+                fontWeight: FontWeight.w700,
+              ),
             ),
-          ),
+          ],
         ],
       ),
     );

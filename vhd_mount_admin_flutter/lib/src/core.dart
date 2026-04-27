@@ -823,7 +823,7 @@ class OverviewStatsGrid extends StatelessWidget {
         final availableWidth = constraints.maxWidth;
 
         if (forceTwoColumnGrid) {
-          final columns = min(2, max(1, cards.length));
+          final columns = availableWidth < 180 ? 1 : min(2, max(1, cards.length));
           final cardWidth = (availableWidth - spacing * (columns - 1)) / columns;
           final cardHeight = min(104.0, max(88.0, cardWidth * 0.54));
           final rows = (cards.length / columns).ceil();
