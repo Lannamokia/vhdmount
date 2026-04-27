@@ -583,8 +583,8 @@ namespace VHDMounter
                 foreach (var line in lines)
                 {
                     var trimmed = line.Trim();
-                    if (trimmed.StartsWith("ServerUrl="))
-                        serverUrl = trimmed.Substring("ServerUrl=".Length).Trim();
+                    if (trimmed.StartsWith("ServerBaseUrl="))
+                        serverUrl = trimmed.Substring("ServerBaseUrl=".Length).Trim();
                     if (trimmed.StartsWith("MachineId="))
                         machineId = trimmed.Substring("MachineId=".Length).Trim();
                 }

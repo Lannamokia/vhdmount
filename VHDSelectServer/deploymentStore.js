@@ -225,14 +225,14 @@ class DeploymentStore {
 
     // ---------- 临时下载令牌 ----------
 
-    async createDownloadToken(database, { taskId, machineId, packageId, resourceType }) {
+    async createDownloadToken(database, { taskId, machineId, packageId, resourceType, aesKey = null, aesIv = null }) {
         const token = generateToken();
 
         await database.withClient(async (client) => {
             await client.query(`
-                INSERT INTO deployment_tokens (token, task_id, machine_id, package_id, resource_type, expires_at)
-                VALUES ($1, $2, $3, $4, $5, NOW() + INTERVAL '${TOKEN_EXPIRY_MINUTES} minutes')
-            `, [token, taskId, machineId, packageId, resourceType]);
+                INSERT INTO deployment_tokens (token, task_id, machine_id, package_id, resource_type, expires_at, aes_key, aes_iv)
+                VALUES ($1, $2, $3, $4, $5, NOW() + INTERVAL '${TOKEN_EXPIRY_MINUTES} minutes', $6, $7)
+            `, [token, taskId, machineId, packageId, resourceType, aesKey, aesIv]);
         });
 
         return token;

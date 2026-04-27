@@ -6,6 +6,8 @@ using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -106,7 +108,29 @@ namespace VHDMounter.SoftwareDeploy
                 if (!response.IsSuccessStatusCode) return Array.Empty<PendingTaskInfo>();
 
                 var result = await response.Content.ReadFromJsonAsync<PendingTasksResponse>(ct);
-                return result?.tasks ?? Array.Empty<PendingTaskInfo>();
+                var tasks = result?.tasks ?? Array.Empty<PendingTaskInfo>();
+
+                // 解密每个任务的 AES 密钥（如果服务端返回了 keyCipher）
+                using var rsa = VHDManager.EnsureOrCreateTpmRsa(_machineId);
+                foreach (var task in tasks)
+                {
+                    if (!string.IsNullOrWhiteSpace(task.KeyCipher))
+                    {
+                        try
+                        {
+                            var keyCipherBytes = Convert.FromBase64String(task.KeyCipher);
+                            var aesKeyBase64 = rsa.Decrypt(keyCipherBytes, RSAEncryptionPadding.OaepSHA1);
+                            task.AesKey = Convert.FromBase64String(System.Text.Encoding.UTF8.GetString(aesKeyBase64));
+                            task.IvBytes = Convert.FromBase64String(task.Iv);
+                        }
+                        catch (Exception ex)
+                        {
+                            Trace.WriteLine($"[DeployPoller] 解密任务 AES 密钥失败 ({task.TaskId}): {ex.Message}");
+                        }
+                    }
+                }
+
+                return tasks;
             }
             catch (Exception ex)
             {
@@ -144,8 +168,14 @@ namespace VHDMounter.SoftwareDeploy
 
             try
             {
-                // 下载
-                var dlResult = await _downloader.DownloadAsync(_serverUrl, _machineId, task, ct);
+                if (task.AesKey == null || task.IvBytes == null)
+                {
+                    await _reporter.ReportStatusAsync(task.TaskId, false, "缺少 AES 解密密钥");
+                    return;
+                }
+
+                // 下载（传入 AES 密钥和 IV 用于解密加密流）
+                var dlResult = await _downloader.DownloadAsync(_serverUrl, _machineId, task, task.AesKey, task.IvBytes, ct);
                 if (!dlResult.Success)
                 {
                     await _reporter.ReportStatusAsync(task.TaskId, false, dlResult.ErrorMessage);

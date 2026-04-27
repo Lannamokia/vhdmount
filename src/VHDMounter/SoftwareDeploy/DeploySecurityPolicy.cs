@@ -25,10 +25,10 @@ namespace VHDMounter.SoftwareDeploy
         {
             if (string.IsNullOrWhiteSpace(path)) return false;
 
-            var normalized = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
+            // 禁止路径遍历（在 GetFullPath 解析前先检查）
+            if (path.Contains("..")) return false;
 
-            // 禁止路径遍历
-            if (normalized.Contains("..")) return false;
+            var normalized = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
 
             // 禁止系统目录
             foreach (var sysPath in SystemPaths)

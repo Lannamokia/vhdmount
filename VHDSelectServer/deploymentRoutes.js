@@ -54,8 +54,28 @@ function computeFileHash(filePath) {
     return hash.digest('hex');
 }
 
+function createCtrCipher(key, iv, offset = 0) {
+    const blockSize = 16;
+    const counter = Math.floor(offset / blockSize);
+    const blockOffset = offset % blockSize;
+
+    // IV = nonce(8 bytes) + counter(8 bytes big-endian)
+    const ivBuf = Buffer.alloc(16);
+    iv.copy(ivBuf, 0, 0, 8);
+    const counterBuf = Buffer.alloc(8);
+    counterBuf.writeBigUInt64BE(BigInt(counter), 0);
+    counterBuf.copy(ivBuf, 8);
+
+    const cipher = crypto.createCipheriv('aes-256-ctr', key, ivBuf);
+    if (blockOffset > 0) {
+        cipher.update(Buffer.alloc(blockOffset));
+    }
+    return cipher;
+}
+
 function buildDeploymentRoutes(options = {}) {
     const deploymentStore = options.deploymentStore || new DeploymentStore();
+    const encryptWithPublicKeyRSA = options.encryptWithPublicKeyRSA;
 
     function asyncHandler(handler) {
         return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
@@ -238,21 +258,43 @@ function buildDeploymentRoutes(options = {}) {
 
         await runtime.database.updateMachineLastSeen(machineId);
 
+        const machine = await runtime.database.getMachine(machineId);
+        if (!machine) {
+            throw createJsonError(404, '机台不存在');
+        }
+        if (!machine.pubkey_pem) {
+            throw createJsonError(400, '机台未注册公钥');
+        }
+
         const pendingTasks = await deploymentStore.listPendingTasks(runtime.database, machineId);
         const tasks = [];
 
         for (const task of pendingTasks) {
+            // 每个任务生成独立的 AES-256 密钥和 IV
+            const aesKey = crypto.randomBytes(32);
+            const nonce = crypto.randomBytes(8);
+            const iv = Buffer.concat([nonce, Buffer.alloc(8)]); // nonce(8) + counter(8 zero)
+            const aesKeyBase64 = aesKey.toString('base64');
+            const ivBase64 = iv.toString('base64');
+
+            // 用机台 RSA 公钥加密 AES 密钥
+            const keyCipher = encryptWithPublicKeyRSA(machine.pubkey_pem, aesKeyBase64);
+
             const packageToken = await deploymentStore.createDownloadToken(runtime.database, {
                 taskId: task.taskId,
                 machineId,
                 packageId: task.packageId,
                 resourceType: 'package',
+                aesKey: aesKeyBase64,
+                aesIv: ivBase64,
             });
             const signatureToken = await deploymentStore.createDownloadToken(runtime.database, {
                 taskId: task.taskId,
                 machineId,
                 packageId: task.packageId,
                 resourceType: 'signature',
+                aesKey: aesKeyBase64,
+                aesIv: ivBase64,
             });
 
             tasks.push({
@@ -265,6 +307,8 @@ function buildDeploymentRoutes(options = {}) {
                 packageSize: task.packageSize,
                 downloadUrl: `/api/deployments/packages/${task.packageId}/download?token=${packageToken}&machineId=${encodeURIComponent(machineId)}&expires=${Date.now() + 3600000}`,
                 signatureUrl: `/api/deployments/packages/${task.packageId}/signature?token=${signatureToken}&machineId=${encodeURIComponent(machineId)}&expires=${Date.now() + 3600000}`,
+                keyCipher,
+                iv: ivBase64,
             });
 
             await deploymentStore.updateTaskStatus(runtime.database, task.taskId, 'downloading');
@@ -399,25 +443,32 @@ function buildDeploymentRoutes(options = {}) {
         const stat = fs.statSync(pkg.filePath);
         const range = req.headers.range;
 
+        // 从 token 获取 AES 加密参数，对文件流做 AES-256-CTR 动态加密
+        const aesKey = Buffer.from(tokenRecord.aes_key || '', 'base64');
+        const aesIv = Buffer.from(tokenRecord.aes_iv || '', 'base64');
+        let start = 0;
+        let end = stat.size - 1;
         if (range) {
             const parts = range.replace(/bytes=/, '').split('-');
-            const start = parseInt(parts[0], 10);
-            const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
-            const chunksize = end - start + 1;
+            start = parseInt(parts[0], 10);
+            end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+        }
+        const cipher = createCtrCipher(aesKey, aesIv, start);
+        const chunksize = end - start + 1;
 
+        if (range) {
             res.writeHead(206, {
                 'Content-Range': `bytes ${start}-${end}/${stat.size}`,
                 'Accept-Ranges': 'bytes',
                 'Content-Length': chunksize,
-                'Content-Type': 'application/zip',
+                'Content-Type': 'application/octet-stream',
             });
-            fs.createReadStream(pkg.filePath, { start, end }).pipe(res);
         } else {
-            res.setHeader('Content-Length', stat.size);
-            res.setHeader('Content-Type', 'application/zip');
+            res.setHeader('Content-Length', chunksize);
+            res.setHeader('Content-Type', 'application/octet-stream');
             res.setHeader('Accept-Ranges', 'bytes');
-            fs.createReadStream(pkg.filePath).pipe(res);
         }
+        fs.createReadStream(pkg.filePath, { start, end }).pipe(cipher).pipe(res);
     }
 
     async function downloadSignature(req, res) {
@@ -451,9 +502,14 @@ function buildDeploymentRoutes(options = {}) {
         await deploymentStore.markTokenUsed(runtime.database, token);
 
         const stat = fs.statSync(sigPath);
+        // 从 token 获取 AES 加密参数，对签名文件流做 AES-256-CTR 动态加密
+        const aesKey = Buffer.from(tokenRecord.aes_key || '', 'base64');
+        const aesIv = Buffer.from(tokenRecord.aes_iv || '', 'base64');
+        const cipher = createCtrCipher(aesKey, aesIv, 0);
+
         res.setHeader('Content-Length', stat.size);
         res.setHeader('Content-Type', 'application/octet-stream');
-        fs.createReadStream(sigPath).pipe(res);
+        fs.createReadStream(sigPath).pipe(cipher).pipe(res);
     }
 
     return {
