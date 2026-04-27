@@ -1437,6 +1437,7 @@ class _SettingsViewState extends State<SettingsView> {
 
   Widget _buildOtpRotationImportPanel(InitializationPreparation preparation) {
     final otpauthUrl = normalizeOtpauthUrl(preparation.otpauthUrl);
+    final isMobile = Platform.isIOS || Platform.isAndroid;
 
     return InfoPanel(
       title: '新的 OTP 绑定信息',
@@ -1511,14 +1512,33 @@ class _SettingsViewState extends State<SettingsView> {
                         child: const Text('未返回 otpauth URI'),
                       ),
                     const SizedBox(height: 12),
-                    Text(
-                      '旧绑定会一直保留，直到你使用新的绑定密钥生成验证码并验证通过。',
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: AppPalette.muted,
-                        height: 1.45,
+                    if (isMobile)
+                      FilledButton.tonalIcon(
+                        onPressed: () async {
+                          final success = await launchOtpauthUrl(
+                            secret: preparation.totpSecret,
+                            account: preparation.accountName,
+                            issuer: preparation.issuer,
+                          );
+                          if (!context.mounted) return;
+                          if (!success) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('无法打开系统验证器，请使用扫码或手动绑定。')),
+                            );
+                          }
+                        },
+                        icon: const Icon(Icons.open_in_new_rounded),
+                        label: Text(Platform.isIOS ? '绑定到 iCloud 密码' : '绑定到验证器'),
+                      )
+                    else
+                      Text(
+                        '旧绑定会一直保留，直到你使用新的绑定密钥生成验证码并验证通过。',
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: AppPalette.muted,
+                          height: 1.45,
+                        ),
                       ),
-                    ),
                   ],
                 ),
               ),
@@ -1531,7 +1551,9 @@ class _SettingsViewState extends State<SettingsView> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
                     Text(
-                      '如果验证器不支持扫码，可以使用下面的参数手动绑定。',
+                      isMobile
+                          ? '点击左侧按钮可直接唤起系统验证器自动填充密钥；如果验证器不支持自动导入，再使用扫码或下方密钥手动添加。'
+                          : '如果验证器不支持扫码，可以使用下面的参数手动绑定。',
                       style: Theme.of(
                         context,
                       ).textTheme.bodyMedium?.copyWith(height: 1.5),

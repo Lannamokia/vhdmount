@@ -584,6 +584,7 @@ class _InitializationScreenState extends State<InitializationScreen> {
 
   Widget _buildOtpImportPanel(InitializationPreparation preparation) {
     final otpauthUrl = normalizeOtpauthUrl(preparation.otpauthUrl);
+    final isMobile = Platform.isIOS || Platform.isAndroid;
 
     return InfoPanel(
       title: 'OTP 导入信息',
@@ -658,14 +659,33 @@ class _InitializationScreenState extends State<InitializationScreen> {
                         child: const Text('未返回 otpauth URI'),
                       ),
                     const SizedBox(height: 12),
-                    Text(
-                      '使用手机验证器扫描此二维码即可添加 TOTP。',
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: AppPalette.muted,
-                        height: 1.45,
+                    if (isMobile)
+                      FilledButton.tonalIcon(
+                        onPressed: () async {
+                          final success = await launchOtpauthUrl(
+                            secret: preparation.totpSecret,
+                            account: preparation.accountName,
+                            issuer: preparation.issuer,
+                          );
+                          if (!context.mounted) return;
+                          if (!success) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('无法打开系统验证器，请使用扫码或手动绑定。')),
+                            );
+                          }
+                        },
+                        icon: const Icon(Icons.open_in_new_rounded),
+                        label: Text(Platform.isIOS ? '绑定到 iCloud 密码' : '绑定到验证器'),
+                      )
+                    else
+                      Text(
+                        '使用手机验证器扫描此二维码即可添加 TOTP。',
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: AppPalette.muted,
+                          height: 1.45,
+                        ),
                       ),
-                    ),
                   ],
                 ),
               ),
@@ -678,7 +698,9 @@ class _InitializationScreenState extends State<InitializationScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
                     Text(
-                      '优先扫码导入；如果验证器不支持扫码，再使用下方密钥或 URI 手动添加。',
+                      isMobile
+                          ? '点击左侧按钮可直接唤起系统验证器自动填充密钥；如果验证器不支持自动导入，再使用扫码或下方密钥手动添加。'
+                          : '优先扫码导入；如果验证器不支持扫码，再使用下方密钥或 URI 手动添加。',
                       style: Theme.of(
                         context,
                       ).textTheme.bodyMedium?.copyWith(height: 1.5),

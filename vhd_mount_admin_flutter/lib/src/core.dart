@@ -63,6 +63,68 @@ String normalizeOtpauthUrl(String value) {
   return trimmed;
 }
 
+/// 构建平台相关的 otpauth URI，用于一键跳转到系统验证器。
+/// iOS/macOS 使用 apple-otpauth:// 强制唤起原生密码应用；
+/// Android 使用通用的 otpauth://，由系统决定最合适的验证器。
+///
+/// [scheme] 为可选参数，测试可注入以覆盖不同平台分支。
+Uri buildOtpauthUri({
+  required String secret,
+  required String account,
+  required String issuer,
+  int digits = 6,
+  int period = 30,
+  String? scheme,
+}) {
+  final resolvedScheme = scheme ??
+      (Platform.isIOS || Platform.isMacOS ? 'apple-otpauth' : 'otpauth');
+  final path = '/${Uri.encodeComponent(issuer)}:${Uri.encodeComponent(account)}';
+
+  return Uri(
+    scheme: resolvedScheme,
+    host: 'totp',
+    path: path,
+    queryParameters: <String, String>{
+      'secret': secret,
+      'issuer': issuer,
+      'digits': digits.toString(),
+      'period': period.toString(),
+    },
+  );
+}
+
+/// 尝试通过系统 URI 跳转到验证器并导入 TOTP。
+/// 返回是否成功触发跳转（不代表用户完成了绑定）。
+///
+/// [scheme] 为可选参数，测试可注入以覆盖不同平台分支。
+Future<bool> launchOtpauthUrl({
+  required String secret,
+  required String account,
+  required String issuer,
+  int digits = 6,
+  int period = 30,
+  String? scheme,
+}) async {
+  final uri = buildOtpauthUri(
+    secret: secret,
+    account: account,
+    issuer: issuer,
+    digits: digits,
+    period: period,
+    scheme: scheme,
+  );
+
+  try {
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+      return true;
+    }
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
+
 String normalizeBaseUrl(String value) {
   final trimmed = value.trim();
   if (trimmed.isEmpty) {

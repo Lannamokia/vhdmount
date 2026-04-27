@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:pointycastle/asn1.dart';
 import 'package:pointycastle/export.dart' as pc;
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 part 'src/core.dart';
 part 'src/data.dart';
