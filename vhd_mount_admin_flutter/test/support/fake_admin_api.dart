@@ -623,6 +623,9 @@ class FakeAdminApi implements AdminApi {
   Future<void> deleteDeploymentPackage(String packageId) async {}
 
   @override
+  Future<void> deleteDeploymentTask(String taskId) async {}
+
+  @override
   Future<List<DeploymentTask>> getDeploymentTasks({
     String? machineId,
     String? status,

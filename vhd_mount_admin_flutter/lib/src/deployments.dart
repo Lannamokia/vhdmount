@@ -17,7 +17,26 @@ class DeploymentsView extends StatefulWidget {
 }
 
 class _DeploymentsViewState extends State<DeploymentsView> {
-  _DeploymentTab _selectedTab = _DeploymentTab.packages;
+  _DeploymentTab get _selectedTab {
+    switch (widget.controller.deploymentSelectedTab) {
+      case 'tasks':
+        return _DeploymentTab.tasks;
+      case 'history':
+        return _DeploymentTab.history;
+      default:
+        return _DeploymentTab.packages;
+    }
+  }
+
+  void _setTab(_DeploymentTab tab) {
+    widget.controller.setDeploymentSelectedTab(
+      switch (tab) {
+        _DeploymentTab.packages => 'packages',
+        _DeploymentTab.tasks => 'tasks',
+        _DeploymentTab.history => 'history',
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -31,53 +50,89 @@ class _DeploymentsViewState extends State<DeploymentsView> {
           title: '部署管理',
           subtitle: '上传部署包、向机台下发任务、查看部署历史与触发卸载。',
           actions: <Widget>[
-            SegmentedButton<_DeploymentTab>(
-              segments: const <ButtonSegment<_DeploymentTab>>[
-                ButtonSegment<_DeploymentTab>(
-                  value: _DeploymentTab.packages,
-                  label: Text('部署包'),
-                  icon: Icon(Icons.folder_zip_rounded),
-                ),
-                ButtonSegment<_DeploymentTab>(
-                  value: _DeploymentTab.tasks,
-                  label: Text('部署任务'),
-                  icon: Icon(Icons.assignment_rounded),
-                ),
-                ButtonSegment<_DeploymentTab>(
-                  value: _DeploymentTab.history,
-                  label: Text('机台历史'),
-                  icon: Icon(Icons.history_rounded),
-                ),
-              ],
-              selected: <_DeploymentTab>{_selectedTab},
-              onSelectionChanged: (Set<_DeploymentTab> value) {
-                setState(() {
-                  _selectedTab = value.first;
-                });
-                if (_selectedTab == _DeploymentTab.packages) {
-                  controller.loadDeploymentPackages();
-                } else if (_selectedTab == _DeploymentTab.tasks) {
-                  controller.loadDeploymentTasks();
-                }
+            Builder(
+              builder: (context) {
+                final narrow = MediaQuery.of(context).size.width < 500;
+                return SegmentedButton<_DeploymentTab>(
+                  segments: narrow
+                      ? const <ButtonSegment<_DeploymentTab>>[
+                        ButtonSegment<_DeploymentTab>(
+                          value: _DeploymentTab.packages,
+                          icon: Icon(Icons.folder_zip_rounded),
+                        ),
+                        ButtonSegment<_DeploymentTab>(
+                          value: _DeploymentTab.tasks,
+                          icon: Icon(Icons.assignment_rounded),
+                        ),
+                        ButtonSegment<_DeploymentTab>(
+                          value: _DeploymentTab.history,
+                          icon: Icon(Icons.history_rounded),
+                        ),
+                      ]
+                      : const <ButtonSegment<_DeploymentTab>>[
+                        ButtonSegment<_DeploymentTab>(
+                          value: _DeploymentTab.packages,
+                          label: Text('部署包'),
+                          icon: Icon(Icons.folder_zip_rounded),
+                        ),
+                        ButtonSegment<_DeploymentTab>(
+                          value: _DeploymentTab.tasks,
+                          label: Text('部署任务'),
+                          icon: Icon(Icons.assignment_rounded),
+                        ),
+                        ButtonSegment<_DeploymentTab>(
+                          value: _DeploymentTab.history,
+                          label: Text('机台历史'),
+                          icon: Icon(Icons.history_rounded),
+                        ),
+                      ],
+                  selected: <_DeploymentTab>{_selectedTab},
+                  onSelectionChanged: (Set<_DeploymentTab> value) {
+                    _setTab(value.first);
+                    if (_selectedTab == _DeploymentTab.packages) {
+                      controller.loadDeploymentPackages();
+                    } else if (_selectedTab == _DeploymentTab.tasks) {
+                      controller.loadDeploymentTasks();
+                    }
+                  },
+                );
               },
             ),
           ],
         ),
         const SizedBox(height: 16),
-        switch (_selectedTab) {
-          _DeploymentTab.packages => _PackagesTab(
-            controller: controller,
-            embedInParentScroll: widget.embedInParentScroll,
+        if (widget.embedInParentScroll)
+          switch (_selectedTab) {
+            _DeploymentTab.packages => _PackagesTab(
+              controller: controller,
+              embedInParentScroll: widget.embedInParentScroll,
+            ),
+            _DeploymentTab.tasks => _TasksTab(
+              controller: controller,
+              embedInParentScroll: widget.embedInParentScroll,
+            ),
+            _DeploymentTab.history => _HistoryTab(
+              controller: controller,
+              embedInParentScroll: widget.embedInParentScroll,
+            ),
+          }
+        else
+          Expanded(
+            child: switch (_selectedTab) {
+              _DeploymentTab.packages => _PackagesTab(
+                controller: controller,
+                embedInParentScroll: widget.embedInParentScroll,
+              ),
+              _DeploymentTab.tasks => _TasksTab(
+                controller: controller,
+                embedInParentScroll: widget.embedInParentScroll,
+              ),
+              _DeploymentTab.history => _HistoryTab(
+                controller: controller,
+                embedInParentScroll: widget.embedInParentScroll,
+              ),
+            },
           ),
-          _DeploymentTab.tasks => _TasksTab(
-            controller: controller,
-            embedInParentScroll: widget.embedInParentScroll,
-          ),
-          _DeploymentTab.history => _HistoryTab(
-            controller: controller,
-            embedInParentScroll: widget.embedInParentScroll,
-          ),
-        },
       ],
     );
   }
@@ -428,62 +483,70 @@ class _UploadPackageDialogState extends State<_UploadPackageDialog> {
       title: const Text('上传部署包'),
       content: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 520),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              TextField(
-                controller: _nameController,
-                decoration: const InputDecoration(labelText: '包名称'),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _versionController,
-                decoration: const InputDecoration(labelText: '版本号'),
-              ),
-              const SizedBox(height: 12),
-              DropdownMenu<String>(
-                width: 480,
-                label: const Text('包类型'),
-                initialSelection: _type,
-                dropdownMenuEntries: const <DropdownMenuEntry<String>>[
-                  DropdownMenuEntry<String>(
-                    value: 'software-deploy',
-                    label: '软件部署包（含安装/卸载脚本）',
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final available = constraints.maxWidth.isFinite
+                ? constraints.maxWidth
+                : 480.0;
+            final dropdownWidth = min(480.0, available);
+            return SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  TextField(
+                    controller: _nameController,
+                    decoration: const InputDecoration(labelText: '包名称'),
                   ),
-                  DropdownMenuEntry<String>(
-                    value: 'file-deploy',
-                    label: '文件部署包（直接解压）',
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _versionController,
+                    decoration: const InputDecoration(labelText: '版本号'),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownMenu<String>(
+                    width: dropdownWidth,
+                    label: const Text('包类型'),
+                    initialSelection: _type,
+                    dropdownMenuEntries: const <DropdownMenuEntry<String>>[
+                      DropdownMenuEntry<String>(
+                        value: 'software-deploy',
+                        label: '软件部署包（含安装/卸载脚本）',
+                      ),
+                      DropdownMenuEntry<String>(
+                        value: 'file-deploy',
+                        label: '文件部署包（直接解压）',
+                      ),
+                    ],
+                    onSelected: (value) {
+                      if (value != null) {
+                        setState(() {
+                          _type = value;
+                        });
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _signerController,
+                    decoration: const InputDecoration(labelText: '签名者'),
+                  ),
+                  const SizedBox(height: 16),
+                  _buildFilePicker(
+                    label: 'ZIP 包文件',
+                    path: _packagePath,
+                    onPick: _pickPackageFile,
+                  ),
+                  const SizedBox(height: 12),
+                  _buildFilePicker(
+                    label: '签名文件 (.sig)',
+                    path: _signaturePath,
+                    onPick: _pickSignatureFile,
                   ),
                 ],
-                onSelected: (value) {
-                  if (value != null) {
-                    setState(() {
-                      _type = value;
-                    });
-                  }
-                },
               ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _signerController,
-                decoration: const InputDecoration(labelText: '签名者'),
-              ),
-              const SizedBox(height: 16),
-              _buildFilePicker(
-                label: 'ZIP 包文件',
-                path: _packagePath,
-                onPick: _pickPackageFile,
-              ),
-              const SizedBox(height: 12),
-              _buildFilePicker(
-                label: '签名文件 (.sig)',
-                path: _signaturePath,
-                onPick: _pickSignatureFile,
-              ),
-            ],
-          ),
+            );
+          },
         ),
       ),
       actions: <Widget>[
@@ -647,6 +710,45 @@ class _TasksTab extends StatelessWidget {
                 if (task.errorMessage != null && task.errorMessage!.isNotEmpty)
                   Text('错误: ${task.errorMessage}',
                       style: const TextStyle(color: AppPalette.danger)),
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: <Widget>[
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        final confirmed = await showConfirmDialog(
+                          context,
+                          title: '删除部署任务',
+                          message: '确认删除任务 ${task.taskId} 吗？\n'
+                              '机台 ${task.machineId} 上的 ${task.displayType} 任务将被移除。',
+                          confirmLabel: '删除',
+                        );
+                        if (confirmed != true) {
+                          return;
+                        }
+                        try {
+                          await controller.deleteDeploymentTask(task.taskId);
+                          if (!context.mounted) {
+                            return;
+                          }
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('部署任务已删除。')),
+                          );
+                        } catch (error) {
+                          if (!context.mounted) {
+                            return;
+                          }
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(describeError(error))),
+                          );
+                        }
+                      },
+                      icon: const Icon(Icons.delete_outline_rounded),
+                      label: const Text('删除'),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -771,70 +873,78 @@ class _CreateTaskDialogState extends State<_CreateTaskDialog> {
     return AlertDialog(
       title: const Text('创建部署任务'),
       content: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 560, maxHeight: 600),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              if (widget.packages.isEmpty)
-                const InfoPanel(
-                  title: '没有可用部署包',
-                  body: Text('请先上传部署包，再创建任务。'),
-                  icon: Icons.warning_rounded,
-                  color: AppPalette.sun,
-                )
-              else
-                DropdownMenu<String>(
-                  width: 520,
-                  label: const Text('选择部署包'),
-                  enableSearch: true,
-                  dropdownMenuEntries: packageEntries,
-                  onSelected: (value) {
-                    setState(() {
-                      _selectedPackageId = value;
-                    });
-                  },
-                ),
-              const SizedBox(height: 16),
-              Text(
-                '选择目标机台',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 8),
-              if (widget.machines.isEmpty)
-                const Text('没有可用机台。')
-              else
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: widget.machines.map((machine) {
-                    final selected = _selectedMachineIds.contains(machine.machineId);
-                    return FilterChip(
-                      label: Text(machine.machineId),
-                      selected: selected,
+        constraints: const BoxConstraints(maxWidth: 560),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final available = constraints.maxWidth.isFinite
+                ? constraints.maxWidth
+                : 520.0;
+            final dropdownWidth = min(520.0, available);
+            return SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  if (widget.packages.isEmpty)
+                    const InfoPanel(
+                      title: '没有可用部署包',
+                      body: Text('请先上传部署包，再创建任务。'),
+                      icon: Icons.warning_rounded,
+                      color: AppPalette.sun,
+                    )
+                  else
+                    DropdownMenu<String>(
+                      width: dropdownWidth,
+                      label: const Text('选择部署包'),
+                      enableSearch: true,
+                      dropdownMenuEntries: packageEntries,
                       onSelected: (value) {
                         setState(() {
-                          if (value) {
-                            _selectedMachineIds.add(machine.machineId);
-                          } else {
-                            _selectedMachineIds.remove(machine.machineId);
-                          }
+                          _selectedPackageId = value;
                         });
                       },
-                    );
-                  }).toList(),
-                ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _scheduledAtController,
-                decoration: const InputDecoration(
-                  labelText: '计划执行时间（可选）',
-                  hintText: 'ISO 8601 格式，例如 2026-04-26T10:00:00Z',
-                ),
+                    ),
+                  const SizedBox(height: 16),
+                  Text(
+                    '选择目标机台',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  if (widget.machines.isEmpty)
+                    const Text('没有可用机台。')
+                  else
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: widget.machines.map((machine) {
+                        final selected = _selectedMachineIds.contains(machine.machineId);
+                        return FilterChip(
+                          label: Text(machine.machineId),
+                          selected: selected,
+                          onSelected: (value) {
+                            setState(() {
+                              if (value) {
+                                _selectedMachineIds.add(machine.machineId);
+                              } else {
+                                _selectedMachineIds.remove(machine.machineId);
+                              }
+                            });
+                          },
+                        );
+                      }).toList(),
+                    ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _scheduledAtController,
+                    decoration: const InputDecoration(
+                      labelText: '计划执行时间（可选）',
+                      hintText: 'ISO 8601 格式，例如 2026-04-26T10:00:00Z',
+                    ),
+                  ),
+                ],
               ),
-            ],
-          ),
+            );
+          },
         ),
       ),
       actions: <Widget>[
@@ -884,28 +994,18 @@ class _HistoryTabState extends State<_HistoryTab> {
         .where((id) => id.trim().isNotEmpty)
         .toList();
 
-    final emptyState = Center(
-      child: SizedBox(
-        width: 420,
-        child: const InfoPanel(
-          title: '请选择机台',
-          body: Text('从下拉菜单中选择一个机台，查看该机台的部署历史记录。'),
-          icon: Icons.history_rounded,
-          color: AppPalette.sky,
-        ),
-      ),
+    const emptyState = InfoPanel(
+      title: '请选择机台',
+      body: Text('从下拉菜单中选择一个机台，查看该机台的部署历史记录。'),
+      icon: Icons.history_rounded,
+      color: AppPalette.sky,
     );
 
-    final noRecordsState = Center(
-      child: SizedBox(
-        width: 420,
-        child: const InfoPanel(
-          title: '该机台暂无部署记录',
-          body: Text('该机台尚未上报任何部署记录。'),
-          icon: Icons.inventory_2_rounded,
-          color: AppPalette.mint,
-        ),
-      ),
+    const noRecordsState = InfoPanel(
+      title: '该机台暂无部署记录',
+      body: Text('该机台尚未上报任何部署记录。'),
+      icon: Icons.inventory_2_rounded,
+      color: AppPalette.mint,
     );
 
     final recordsList = ListView.separated(
@@ -1015,59 +1115,61 @@ class _HistoryTabState extends State<_HistoryTab> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: <Widget>[
-            SizedBox(
-              width: 320,
-              child: DropdownMenu<String>(
-                width: 320,
-                enableFilter: true,
-                enableSearch: true,
-                label: const Text('选择机台'),
-                hintText: '全部机台',
-                dropdownMenuEntries: machineOptions
-                    .map(
-                      (id) => DropdownMenuEntry<String>(
-                        value: id,
-                        label: id,
-                      ),
-                    )
-                    .toList(),
-                onSelected: (value) async {
-                  setState(() {
-                    _selectedMachineId = value;
-                  });
-                  if (value != null) {
-                    await controller.loadMachineDeploymentHistory(value);
-                  }
-                },
-              ),
-            ),
-            OutlinedButton.icon(
-              onPressed: _selectedMachineId == null
-                  ? null
-                  : () => controller.loadMachineDeploymentHistory(
-                        _selectedMachineId!,
-                      ),
-              icon: const Icon(Icons.refresh_rounded),
-              label: const Text('刷新历史'),
-            ),
-          ],
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final available = constraints.maxWidth.isFinite
+                ? constraints.maxWidth
+                : 320.0;
+            final dropdownWidth = min(320.0, available);
+            return Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: <Widget>[
+                SizedBox(
+                  width: dropdownWidth,
+                  child: DropdownMenu<String>(
+                    width: dropdownWidth,
+                    enableFilter: true,
+                    enableSearch: true,
+                    label: const Text('选择机台'),
+                    hintText: '全部机台',
+                    dropdownMenuEntries: machineOptions
+                        .map(
+                          (id) => DropdownMenuEntry<String>(
+                            value: id,
+                            label: id,
+                          ),
+                        )
+                        .toList(),
+                    onSelected: (value) async {
+                      setState(() {
+                        _selectedMachineId = value;
+                      });
+                      if (value != null) {
+                        await controller.loadMachineDeploymentHistory(value);
+                      }
+                    },
+                  ),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _selectedMachineId == null
+                      ? null
+                      : () => controller.loadMachineDeploymentHistory(
+                            _selectedMachineId!,
+                          ),
+                  icon: const Icon(Icons.refresh_rounded),
+                  label: const Text('刷新历史'),
+                ),
+              ],
+            );
+          },
         ),
         const SizedBox(height: 16),
         if (_selectedMachineId == null)
-          if (widget.embedInParentScroll)
-            emptyState
-          else
-            Expanded(child: emptyState)
+          emptyState
         else if (controller.deploymentRecords.isEmpty)
-          if (widget.embedInParentScroll)
-            noRecordsState
-          else
-            Expanded(child: noRecordsState)
+          noRecordsState
         else if (widget.embedInParentScroll)
           recordsList
         else

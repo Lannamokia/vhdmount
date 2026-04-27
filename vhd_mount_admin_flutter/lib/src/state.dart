@@ -42,6 +42,12 @@ class AppController extends ChangeNotifier {
   List<DeploymentRecord> deploymentRecords = <DeploymentRecord>[];
   String? deploymentSelectedMachineId;
   String? deploymentTaskStatusFilter;
+  String deploymentSelectedTab = 'packages';
+
+  void setDeploymentSelectedTab(String tab) {
+    deploymentSelectedTab = tab;
+    notifyListeners();
+  }
 
   String get baseUrl => api.baseUrl;
 
@@ -648,6 +654,11 @@ class AppController extends ChangeNotifier {
   Future<void> deleteDeploymentPackage(String packageId) async {
     await _runAction(() => api.deleteDeploymentPackage(packageId));
     await loadDeploymentPackages();
+  }
+
+  Future<void> deleteDeploymentTask(String taskId) async {
+    await _runAction(() => api.deleteDeploymentTask(taskId));
+    await loadDeploymentTasks();
   }
 
   Future<void> loadDeploymentTasks({

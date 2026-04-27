@@ -1437,6 +1437,8 @@ abstract class AdminApi {
 
   Future<void> deleteDeploymentPackage(String packageId);
 
+  Future<void> deleteDeploymentTask(String taskId);
+
   Future<List<DeploymentTask>> getDeploymentTasks({
     String? machineId,
     String? status,
@@ -2187,6 +2189,14 @@ class HttpAdminApi implements AdminApi {
   }
 
   @override
+  Future<void> deleteDeploymentTask(String taskId) async {
+    await _requestJson(
+      'DELETE',
+      '/api/deployments/tasks/${encodePathSegment(taskId)}',
+    );
+  }
+
+  @override
   Future<List<DeploymentTask>> getDeploymentTasks({
     String? machineId,
     String? status,
@@ -2232,7 +2242,7 @@ class HttpAdminApi implements AdminApi {
   ) async {
     final json = await _requestJson(
       'GET',
-      '/api/deployments/history/${encodePathSegment(machineId)}',
+      '/api/machines/${encodePathSegment(machineId)}/deployments/history',
     );
     return (json['records'] as List<dynamic>? ?? <dynamic>[])
         .whereType<Map<String, dynamic>>()
@@ -2244,7 +2254,7 @@ class HttpAdminApi implements AdminApi {
   Future<void> triggerUninstall(String machineId, String recordId) async {
     await _requestJson(
       'POST',
-      '/api/deployments/history/${encodePathSegment(machineId)}/records/${encodePathSegment(recordId)}/uninstall',
+      '/api/machines/${encodePathSegment(machineId)}/deployments/${encodePathSegment(recordId)}/uninstall',
     );
   }
 }
