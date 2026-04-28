@@ -5,6 +5,7 @@ const path = require('path');
 const { ensureWritableDirectory } = require('./configStoreUtils');
 
 const TOKEN_EXPIRY_MINUTES = 60;
+const DEFAULT_TASK_LEASE_SECONDS = Number(process.env.DEPLOYMENT_TASK_LEASE_SECONDS || 30 * 60);
 const PACKAGES_SUBDIR = 'deployment-packages';
 
 function generateId() {
@@ -152,39 +153,77 @@ class DeploymentStore {
         });
     }
 
-    async listPendingTasks(database, machineId) {
-        return database.withClient(async (client) => {
+    async claimPendingTasks(database, machineId, { leaseDurationSeconds = DEFAULT_TASK_LEASE_SECONDS } = {}) {
+        const runInTransaction = typeof database.withTransaction === 'function'
+            ? database.withTransaction.bind(database)
+            : database.withClient.bind(database);
+
+        return runInTransaction(async (client) => {
             const result = await client.query(`
                 SELECT t.*, p.name, p.version, p.type, p.file_size
                 FROM deployment_tasks t
                 JOIN deployment_packages p ON t.package_id = p.package_id
-                WHERE t.machine_id = $1 AND t.status = 'pending'
+                WHERE t.machine_id = $1
+                  AND (
+                        t.status = 'pending'
+                        OR (
+                            t.status IN ('downloading', 'running')
+                            AND t.lease_expires_at IS NOT NULL
+                            AND t.lease_expires_at <= NOW()
+                        )
+                  )
                   AND (t.scheduled_at IS NULL OR t.scheduled_at <= NOW())
                 ORDER BY t.created_at ASC
+                FOR UPDATE SKIP LOCKED
             `, [machineId]);
-            return result.rows.map((row) => ({
-                ...this._mapTaskRow(row),
-                packageName: row.name,
-                packageVersion: row.version,
-                packageType: row.type,
-                packageSize: Number(row.file_size),
-            }));
+
+            const claimedTasks = [];
+            for (const row of result.rows) {
+                const updated = await client.query(`
+                    UPDATE deployment_tasks
+                    SET status = 'downloading',
+                        started_at = COALESCE(started_at, NOW()),
+                        completed_at = NULL,
+                        error_message = NULL,
+                        lease_expires_at = NOW() + ($2 * INTERVAL '1 second')
+                    WHERE task_id = $1
+                    RETURNING *
+                `, [row.task_id, leaseDurationSeconds]);
+
+                if (updated.rows[0]) {
+                    claimedTasks.push({
+                        ...this._mapTaskRow(updated.rows[0]),
+                        packageName: row.name,
+                        packageVersion: row.version,
+                        packageType: row.type,
+                        packageSize: Number(row.file_size),
+                    });
+                }
+            }
+
+            return claimedTasks;
         });
     }
 
-    async updateTaskStatus(database, taskId, status, errorMessage = null) {
+    async updateTaskStatus(database, taskId, status, errorMessage = null, { leaseDurationSeconds = DEFAULT_TASK_LEASE_SECONDS } = {}) {
         const updates = ['status = $2'];
         const values = [taskId, status];
 
-        if (status === 'running') {
-            updates.push('started_at = NOW()');
+        if (['downloading', 'running'].includes(status)) {
+            updates.push('started_at = COALESCE(started_at, NOW())');
+            values.push(leaseDurationSeconds);
+            updates.push(`lease_expires_at = NOW() + ($${values.length} * INTERVAL '1 second')`);
+            updates.push('completed_at = NULL');
         }
         if (['success', 'failed'].includes(status)) {
             updates.push('completed_at = NOW()');
+            updates.push('lease_expires_at = NULL');
         }
-        if (errorMessage) {
+        if (errorMessage != null) {
             values.push(errorMessage);
             updates.push(`error_message = $${values.length}`);
+        } else if (status !== 'failed') {
+            updates.push('error_message = NULL');
         }
 
         return database.withClient(async (client) => {
@@ -218,6 +257,7 @@ class DeploymentStore {
             scheduledAt: row.scheduled_at,
             startedAt: row.started_at,
             completedAt: row.completed_at,
+            leaseExpiresAt: row.lease_expires_at,
             errorMessage: row.error_message,
             createdAt: row.created_at,
         };

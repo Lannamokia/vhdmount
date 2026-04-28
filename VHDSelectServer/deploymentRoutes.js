@@ -7,6 +7,7 @@ const { ValidationError } = require('./validators');
 
 const PACKAGE_MAX_BYTES = 2 * 1024 * 1024 * 1024; // 2GB
 const MACHINE_REQUEST_SIGNATURE_WINDOW_MS = 5 * 60 * 1000;
+const TASK_LEASE_SECONDS = Number(process.env.DEPLOYMENT_TASK_LEASE_SECONDS || 30 * 60);
 const UA_PREFIX = 'VHDMount/';
 
 function createJsonError(statusCode, message, extra = {}) {
@@ -75,7 +76,7 @@ function createCtrCipher(key, iv, offset = 0) {
 }
 
 function buildDeploymentRoutes(options = {}) {
-    const deploymentStore = options.deploymentStore || new DeploymentStore();
+    const deploymentStore = options.deploymentStore || new DeploymentStore(options.configDir);
     const encryptWithPublicKeyRSA = options.encryptWithPublicKeyRSA;
 
     function isValidDeploymentUserAgent(value) {
@@ -389,35 +390,42 @@ function buildDeploymentRoutes(options = {}) {
         const { machineId, machine } = await requireVerifiedMachineRequest(req);
         await runtime.database.updateMachineLastSeen(machineId);
 
-        const pendingTasks = await deploymentStore.listPendingTasks(runtime.database, machineId);
+        const pendingTasks = await deploymentStore.claimPendingTasks(runtime.database, machineId, {
+            leaseDurationSeconds: TASK_LEASE_SECONDS,
+        });
         const tasks = [];
 
         for (const task of pendingTasks) {
-            // 每个任务生成独立的 AES-256 密钥和 IV
-            const aesKey = crypto.randomBytes(32);
-            const nonce = crypto.randomBytes(8);
-            const iv = Buffer.concat([nonce, Buffer.alloc(8)]); // nonce(8) + counter(8 zero)
-            const aesKeyBase64 = aesKey.toString('base64');
-            const ivBase64 = iv.toString('base64');
+            // ZIP 与签名文件分别使用独立的 AES 参数，避免 CTR keystream 复用
+            const packageAesKey = crypto.randomBytes(32);
+            const packageIv = Buffer.concat([crypto.randomBytes(8), Buffer.alloc(8)]);
+            const packageAesKeyBase64 = packageAesKey.toString('base64');
+            const packageIvBase64 = packageIv.toString('base64');
+
+            const signatureAesKey = crypto.randomBytes(32);
+            const signatureIv = Buffer.concat([crypto.randomBytes(8), Buffer.alloc(8)]);
+            const signatureAesKeyBase64 = signatureAesKey.toString('base64');
+            const signatureIvBase64 = signatureIv.toString('base64');
 
             // 用机台 RSA 公钥加密 AES 密钥
-            const keyCipher = encryptWithPublicKeyRSA(machine.pubkey_pem, aesKeyBase64);
+            const keyCipher = encryptWithPublicKeyRSA(machine.pubkey_pem, packageAesKeyBase64);
+            const signatureKeyCipher = encryptWithPublicKeyRSA(machine.pubkey_pem, signatureAesKeyBase64);
 
             const packageToken = await deploymentStore.createDownloadToken(runtime.database, {
                 taskId: task.taskId,
                 machineId,
                 packageId: task.packageId,
                 resourceType: 'package',
-                aesKey: aesKeyBase64,
-                aesIv: ivBase64,
+                aesKey: packageAesKeyBase64,
+                aesIv: packageIvBase64,
             });
             const signatureToken = await deploymentStore.createDownloadToken(runtime.database, {
                 taskId: task.taskId,
                 machineId,
                 packageId: task.packageId,
                 resourceType: 'signature',
-                aesKey: aesKeyBase64,
-                aesIv: ivBase64,
+                aesKey: signatureAesKeyBase64,
+                aesIv: signatureIvBase64,
             });
 
             tasks.push({
@@ -431,7 +439,9 @@ function buildDeploymentRoutes(options = {}) {
                 downloadUrl: `/api/deployments/packages/${task.packageId}/download?token=${packageToken}&machineId=${encodeURIComponent(machineId)}&expires=${Date.now() + 3600000}`,
                 signatureUrl: `/api/deployments/packages/${task.packageId}/signature?token=${signatureToken}&machineId=${encodeURIComponent(machineId)}&expires=${Date.now() + 3600000}`,
                 keyCipher,
-                iv: ivBase64,
+                iv: packageIvBase64,
+                signatureKeyCipher,
+                signatureIv: signatureIvBase64,
             });
 
         }
@@ -446,8 +456,8 @@ function buildDeploymentRoutes(options = {}) {
         const status = assertString(req.body?.status, 'status');
         const errorMessage = req.body?.errorMessage || null;
 
-        if (!['success', 'failed'].includes(status)) {
-            throw createJsonError(400, 'status 必须是 success 或 failed');
+        if (!['downloading', 'running', 'success', 'failed'].includes(status)) {
+            throw createJsonError(400, 'status 必须是 downloading、running、success 或 failed');
         }
 
         const currentTask = await deploymentStore.getTask(runtime.database, taskId);
@@ -458,7 +468,9 @@ function buildDeploymentRoutes(options = {}) {
             throw createJsonError(403, '任务不属于该机台');
         }
 
-        const task = await deploymentStore.updateTaskStatus(runtime.database, taskId, status, errorMessage);
+        const task = await deploymentStore.updateTaskStatus(runtime.database, taskId, status, errorMessage, {
+            leaseDurationSeconds: TASK_LEASE_SECONDS,
+        });
         if (!task) {
             throw createJsonError(404, '任务不存在');
         }

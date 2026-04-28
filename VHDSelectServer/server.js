@@ -1502,7 +1502,7 @@ async function createApp(options = {}) {
     });
 
     // ---------- 部署模块路由 ----------
-    const deploymentRoutes = buildDeploymentRoutes({ encryptWithPublicKeyRSA });
+    const deploymentRoutes = buildDeploymentRoutes({ encryptWithPublicKeyRSA, configDir });
 
     app.post('/api/deployments/packages', deploymentRoutes.requireAuth, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.uploadPackage));
     app.get('/api/deployments/packages', deploymentRoutes.requireAuth, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.listPackages));

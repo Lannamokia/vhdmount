@@ -78,13 +78,18 @@ function createFakeDatabase() {
                 return { rows: pkg ? [pkg] : [] };
             }
             if (sql.includes('INSERT INTO deployment_tasks')) {
+                const hasExplicitStatus = params.length >= 6;
                 const task = {
                     task_id: params[0],
                     package_id: params[1],
                     machine_id: params[2],
                     task_type: params[3] || 'deploy',
-                    status: 'pending',
-                    scheduled_at: params[4],
+                    status: hasExplicitStatus ? params[4] : 'pending',
+                    scheduled_at: hasExplicitStatus ? params[5] : params[4],
+                    started_at: null,
+                    completed_at: null,
+                    lease_expires_at: null,
+                    error_message: null,
                     created_at: new Date().toISOString(),
                 };
                 tasks.set(params[0], task);
@@ -96,17 +101,71 @@ function createFakeDatabase() {
             if (sql.includes('ORDER BY created_at DESC')) {
                 return { rows: Array.from(tasks.values()).sort((a, b) => new Date(b.created_at) - new Date(a.created_at)) };
             }
-            if (sql.includes('machine_id = $1 AND t.status = \'pending\'')) {
-                const pending = Array.from(tasks.values())
-                    .filter(t => t.machine_id === params[0] && t.status === 'pending')
-                    .map(t => ({ ...t, name: 'Test', version: '1.0', type: 'software-deploy', file_size: 1024 }));
-                return { rows: pending };
+            if (sql.includes("t.status IN ('downloading', 'running')")) {
+                const claimable = Array.from(tasks.values())
+                    .filter((task) => {
+                        if (task.machine_id !== params[0]) {
+                            return false;
+                        }
+                        if (task.scheduled_at && Date.parse(task.scheduled_at) > Date.now()) {
+                            return false;
+                        }
+                        if (task.status === 'pending') {
+                            return true;
+                        }
+                        if ((task.status === 'downloading' || task.status === 'running') && task.lease_expires_at) {
+                            return Date.parse(task.lease_expires_at) <= Date.now();
+                        }
+                        return false;
+                    })
+                    .map((task) => {
+                        const pkg = packages.get(task.package_id);
+                        return {
+                            ...task,
+                            name: pkg?.name ?? 'Test',
+                            version: pkg?.version ?? '1.0',
+                            type: pkg?.type ?? 'software-deploy',
+                            file_size: pkg?.file_size ?? 1024,
+                        };
+                    });
+                return { rows: claimable };
             }
             if (sql.includes('UPDATE deployment_tasks')) {
                 const task = tasks.get(params[0]);
                 if (task) {
-                    if (params[1]) task.status = params[1];
-                    if (params.length > 2 && params[2]) task.error_message = params[2];
+                    if (sql.includes("SET status = 'downloading'")) {
+                        task.status = 'downloading';
+                        task.started_at ??= new Date().toISOString();
+                        task.completed_at = null;
+                        task.error_message = null;
+                        task.lease_expires_at = new Date(Date.now() + (Number(params[1]) * 1000)).toISOString();
+                    } else {
+                        task.status = params[1] || task.status;
+                        if (sql.includes('started_at = COALESCE(started_at, NOW())')) {
+                            task.started_at ??= new Date().toISOString();
+                        }
+                        if (sql.includes('completed_at = NOW()')) {
+                            task.completed_at = new Date().toISOString();
+                        }
+                        if (sql.includes('lease_expires_at = NOW() +')) {
+                            const leaseSeconds = Number(params[2]);
+                            if (Number.isFinite(leaseSeconds)) {
+                                task.lease_expires_at = new Date(Date.now() + (leaseSeconds * 1000)).toISOString();
+                            }
+                        }
+                        if (sql.includes('lease_expires_at = NULL')) {
+                            task.lease_expires_at = null;
+                        }
+                        if (sql.includes('error_message = NULL')) {
+                            task.error_message = null;
+                        }
+                        if (params.length > 2) {
+                            const lastParam = params[params.length - 1];
+                            if (typeof lastParam === 'string' && !Number.isFinite(Number(lastParam)) && lastParam !== task.status) {
+                                task.error_message = lastParam;
+                            }
+                        }
+                    }
                 }
                 return { rows: [task].filter(Boolean) };
             }
@@ -431,24 +490,43 @@ test('POST /api/machines/:machineId/deployments/:taskId/status 允许签名机�
         ['task-001', 'pkg-001', 'machine-001', 'deploy', 'pending', null]
     );
 
-    const path = '/api/machines/machine-001/deployments/task-001/status';
-    const body = JSON.stringify({ status: 'success' });
-    const res = await request(app)
-        .post(path)
+    const runningPath = '/api/machines/machine-001/deployments/task-001/status';
+    const runningBody = JSON.stringify({ status: 'running' });
+    const runningRes = await request(app)
+        .post(runningPath)
         .set('Content-Type', 'application/json')
         .set(createMachineAuthHeaders({
             privateKey: testKeyPair.privateKey,
             machineId: 'machine-001',
             keyId: testKeyId,
             method: 'POST',
-            path,
-            body,
+            path: runningPath,
+            body: runningBody,
         }))
-        .send(body);
+        .send(runningBody);
 
-    assert.strictEqual(res.status, 200);
-    assert.strictEqual(res.body.success, true);
-    assert.strictEqual(res.body.task.status, 'success');
+    assert.strictEqual(runningRes.status, 200);
+    assert.strictEqual(runningRes.body.success, true);
+    assert.strictEqual(runningRes.body.task.status, 'running');
+
+    const successPath = '/api/machines/machine-001/deployments/task-001/status';
+    const successBody = JSON.stringify({ status: 'success' });
+    const successRes = await request(app)
+        .post(successPath)
+        .set('Content-Type', 'application/json')
+        .set(createMachineAuthHeaders({
+            privateKey: testKeyPair.privateKey,
+            machineId: 'machine-001',
+            keyId: testKeyId,
+            method: 'POST',
+            path: successPath,
+            body: successBody,
+        }))
+        .send(successBody);
+
+    assert.strictEqual(successRes.status, 200);
+    assert.strictEqual(successRes.body.success, true);
+    assert.strictEqual(successRes.body.task.status, 'success');
 });
 
 test('POST /api/machines/:machineId/deployments/sync 需要机台签名认证', async (t) => {
@@ -578,11 +656,15 @@ test('GET /api/machines/:machineId/deployments/pending 有任务时返回加密�
     assert.strictEqual(task.packageId, 'pkg-enc-001');
     assert.ok(task.keyCipher, '应返回 keyCipher');
     assert.ok(task.iv, '应返回 iv');
+    assert.ok(task.signatureKeyCipher, '应返回 signatureKeyCipher');
+    assert.ok(task.signatureIv, '应返回 signatureIv');
     assert.ok(task.downloadUrl, '应返回 downloadUrl');
     assert.ok(task.signatureUrl, '应返回 signatureUrl');
+    assert.notStrictEqual(task.keyCipher, task.signatureKeyCipher, 'ZIP 与签名不应复用同一 AES 密钥');
+    assert.notStrictEqual(task.iv, task.signatureIv, 'ZIP 与签名不应复用同一 IV');
 });
 
-test('GET /api/machines/:machineId/deployments/pending 不会在读取时提前推进任务状态', async (t) => {
+test('GET /api/machines/:machineId/deployments/pending 读取后会 claim 任务，避免重复下发', async (t) => {
     const { app, database, tempDir, testKeyPair, testKeyId } = await createInitializedHarness(t);
 
     const zipPath = path.join(tempDir, 'test-pkg-pending.zip');
@@ -623,9 +705,8 @@ test('GET /api/machines/:machineId/deployments/pending 不会在读取时提前�
     assert.strictEqual(firstRes.status, 200);
     assert.strictEqual(secondRes.status, 200);
     assert.strictEqual(firstRes.body.tasks.length, 1);
-    assert.strictEqual(secondRes.body.tasks.length, 1);
+    assert.strictEqual(secondRes.body.tasks.length, 0);
     assert.strictEqual(firstRes.body.tasks[0].taskId, 'task-pending-001');
-    assert.strictEqual(secondRes.body.tasks[0].taskId, 'task-pending-001');
 });
 
 test('downloadPackage 有效 token 返回 AES-CTR 加密流，可被正确解密', async (t) => {
@@ -694,6 +775,70 @@ test('downloadPackage 有效 token 返回 AES-CTR 加密流，可被正确解密
     const decrypted = Buffer.concat([decipher.update(dlRes.body), decipher.final()]);
 
     assert.deepStrictEqual(decrypted, zipContent);
+});
+
+test('downloadSignature 有效 token 返回独立 AES-CTR 加密流，可被正确解密', async (t) => {
+    const { app, database, tempDir, testKeyPair, testKeyId } = await createInitializedHarness(t);
+
+    const zipPath = path.join(tempDir, 'test-sig.zip');
+    fs.writeFileSync(zipPath, crypto.randomBytes(32));
+
+    const packagesDir = path.join(tempDir, 'deployment-packages');
+    fs.mkdirSync(packagesDir, { recursive: true });
+    const signatureContent = crypto.randomBytes(128);
+    fs.writeFileSync(path.join(packagesDir, 'pkg-sig-001.zip.sig'), signatureContent);
+
+    await database.query(
+        'INSERT INTO deployment_packages (package_id, name, version, type, signer, file_path, file_size, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+        ['pkg-sig-001', 'SigPkg', '1.0.0', 'software-deploy', 'test', zipPath, 32, new Date(Date.now() + 30 * 86400000).toISOString()]
+    );
+    await database.query(
+        'INSERT INTO deployment_tasks (task_id, package_id, machine_id, task_type, status, scheduled_at) VALUES ($1, $2, $3, $4, $5, $6)',
+        ['task-sig-001', 'pkg-sig-001', 'machine-001', 'deploy', 'pending', null]
+    );
+
+    const pendingRes = await request(app)
+        .get('/api/machines/machine-001/deployments/pending')
+        .set(createMachineAuthHeaders({
+            privateKey: testKeyPair.privateKey,
+            machineId: 'machine-001',
+            keyId: testKeyId,
+            method: 'GET',
+            path: '/api/machines/machine-001/deployments/pending',
+        }))
+        .set('User-Agent', 'VHDMount/1.0.0');
+
+    assert.strictEqual(pendingRes.status, 200);
+    const task = pendingRes.body.tasks[0];
+
+    const signatureKeyCipherBytes = Buffer.from(task.signatureKeyCipher, 'base64');
+    const signatureKeyBase64 = crypto.privateDecrypt({
+        key: testKeyPair.privateKey,
+        padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+        oaepHash: 'sha1',
+    }, signatureKeyCipherBytes);
+    const signatureKey = Buffer.from(signatureKeyBase64.toString('utf8'), 'base64');
+    const signatureIv = Buffer.from(task.signatureIv, 'base64');
+
+    const signatureUrl = new URL(task.signatureUrl, 'http://localhost');
+    const signatureToken = signatureUrl.searchParams.get('token');
+
+    const sigRes = await request(app)
+        .get(`/api/deployments/packages/pkg-sig-001/signature?token=${signatureToken}&machineId=machine-001`)
+        .set('User-Agent', 'VHDMount/1.0.0')
+        .buffer(true)
+        .parse((res, callback) => {
+            res.data = '';
+            res.setEncoding('binary');
+            res.on('data', (chunk) => { res.data += chunk; });
+            res.on('end', () => callback(null, Buffer.from(res.data, 'binary')));
+        });
+
+    assert.strictEqual(sigRes.status, 200);
+    const decipher = crypto.createDecipheriv('aes-256-ctr', signatureKey, signatureIv);
+    const decrypted = Buffer.concat([decipher.update(sigRes.body), decipher.final()]);
+
+    assert.deepStrictEqual(decrypted, signatureContent);
 });
 
 test('downloadPackage Range 请求返回正确偏移的加密流', async (t) => {
