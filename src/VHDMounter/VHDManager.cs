@@ -37,6 +37,19 @@ namespace VHDMounter
         private readonly string[] PROCESS_KEYWORDS = { "sinmai", "chusanapp", "mu3" };
         private readonly string[] AUXILIARY_PROCESS_KEYWORDS = { "inject", "amdaemon" };
 
+        private static readonly char[] InvalidVhdPathChars = new[] { '"', '\n', '\r', '\0', '<', '>', '|', '*', '?' };
+
+        private static bool ValidateVhdPath(string path, out string error)
+        {
+            error = null;
+            if (string.IsNullOrWhiteSpace(path)) { error = "路径为空"; return false; }
+            if (!Path.IsPathRooted(path)) { error = "路径必须是绝对路径"; return false; }
+            if (InvalidVhdPathChars.Any(c => path.Contains(c))) { error = "路径包含非法字符"; return false; }
+            var ext = Path.GetExtension(path)?.ToLowerInvariant();
+            if (ext != ".vhd" && ext != ".evhd") { error = "扩展名必须是 .vhd 或 .evhd"; return false; }
+            return true;
+        }
+
         public bool IsMenuOpen { get; set; }
 
         public event Action<string> StatusChanged;
@@ -2578,11 +2591,17 @@ namespace VHDMounter
         public async Task<bool> MountVHD(string vhdPath)
         {
             await ShowStatusAndWait($"正在挂载VHD文件: {Path.GetFileName(vhdPath)}");
-            
+
             try
             {
+                if (!ValidateVhdPath(vhdPath, out var validationError))
+                {
+                    await ShowStatusAndWait($"挂载失败: VHD路径校验不通过 - {validationError}");
+                    return false;
+                }
+
                 // 基本校验：文件必须存在
-                if (string.IsNullOrWhiteSpace(vhdPath) || !File.Exists(vhdPath))
+                if (!File.Exists(vhdPath))
                 {
                     await ShowStatusAndWait("挂载失败: VHD文件不存在或路径无效");
                     return false;
@@ -3933,8 +3952,14 @@ exit";
         {
             try
             {
+                if (!ValidateVhdPath(vhdPath, out var validationError))
+                {
+                    await ShowStatusAndWait($"删除盘符失败: VHD路径校验不通过 - {validationError}");
+                    return false;
+                }
+
                 await ShowStatusAndWait("正在删除VHD第一个分区的现有盘符...");
-                
+
                 // 使用diskpart删除第一个分区的盘符
                 var removeScript = $@"select vdisk file=""{vhdPath}""
 list partition
@@ -4016,6 +4041,12 @@ exit";
         {
             try
             {
+                if (!ValidateVhdPath(vhdPath, out var validationError))
+                {
+                    await ShowStatusAndWait($"分配盘符失败: VHD路径校验不通过 - {validationError}");
+                    return false;
+                }
+
                 // 使用diskpart列出VHD的分区并为第一个分区分配盘符
                 var listScript = $@"select vdisk file=""{vhdPath}""
 list partition
@@ -4179,6 +4210,12 @@ exit";
         {
             try
             {
+                if (!ValidateVhdPath(vhdPath, out var validationError))
+                {
+                    await ShowStatusAndWait($"分配盘符失败: VHD路径校验不通过 - {validationError}");
+                    return false;
+                }
+
                 var detailScript = $@"select vdisk file=""{vhdPath}""
 attach vdisk
 detail vdisk
@@ -4561,7 +4598,7 @@ exit";
         public async Task<bool> UnmountVHD(string vhdPath = null)
         {
             await ShowStatusAndWait("正在解除VHD挂载...");
-            
+
             try
             {
                 var pathToDetach = string.IsNullOrWhiteSpace(vhdPath) ? activeMountedVhdPath : vhdPath;
@@ -4574,6 +4611,12 @@ exit";
 
                     StatusChanged?.Invoke("未记录当前VHD路径，跳过VHD分离");
                     return true;
+                }
+
+                if (!ValidateVhdPath(pathToDetach, out var validationError))
+                {
+                    await ShowStatusAndWait($"解除挂载失败: VHD路径校验不通过 - {validationError}");
+                    return false;
                 }
 
                 var diskpartScript = $@"select vdisk file=""{pathToDetach}""

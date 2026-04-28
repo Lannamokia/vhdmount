@@ -133,7 +133,11 @@ namespace VHDMounter.SoftwareDeploy
             var psi = new ProcessStartInfo
             {
                 FileName = "powershell.exe",
-                Arguments = $"-ExecutionPolicy Bypass -File \"{executionScriptPath}\" -DeployJson \"{deployJsonPath}\"",
+                ArgumentList = {
+                    "-ExecutionPolicy", "Bypass",
+                    "-File", executionScriptPath,
+                    "-DeployJson", deployJsonPath,
+                },
                 UseShellExecute = true,
                 Verb = manifest.requiresAdmin ? "runas" : null,
                 WorkingDirectory = deploymentPath,
@@ -225,7 +229,11 @@ namespace VHDMounter.SoftwareDeploy
             var psi = new ProcessStartInfo
             {
                 FileName = "powershell.exe",
-                Arguments = $"-ExecutionPolicy Bypass -File \"{uninstallScript}\" -DeployJson \"{deployJsonPath}\"",
+                ArgumentList = {
+                    "-ExecutionPolicy", "Bypass",
+                    "-File", uninstallScript,
+                    "-DeployJson", deployJsonPath,
+                },
                 UseShellExecute = true,
                 Verb = manifest.requiresAdmin ? "runas" : null,
                 WorkingDirectory = deploymentPath,
