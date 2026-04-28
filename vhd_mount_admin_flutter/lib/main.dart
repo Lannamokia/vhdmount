@@ -6,7 +6,7 @@ void main() {
   runApp(
     app.AdminApp(
       controller: app.AppController(
-        api: app.HttpAdminApi(cookieStore: app.FileCookieStore()),
+        api: app.HttpAdminApi(cookieStore: app.SecureCookieStore()),
       ),
     ),
   );

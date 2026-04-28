@@ -561,30 +561,19 @@ abstract class CookieStore {
   Future<void> clear();
 }
 
-class FileCookieStore implements CookieStore {
-  FileCookieStore({
-    Future<Directory> Function()? directoryProvider,
-    this.fileName = 'vhd_mount_admin_cookies.json',
-  }) : _directoryProvider = directoryProvider ?? getApplicationSupportDirectory;
+class SecureCookieStore implements CookieStore {
+  SecureCookieStore({
+    FlutterSecureStorage? secureStorage,
+  }) : _secureStorage = secureStorage ?? const FlutterSecureStorage();
 
-  final Future<Directory> Function() _directoryProvider;
-  final String fileName;
-
-  Future<File> _getCookieFile() async {
-    final directory = await _directoryProvider();
-    return File('${directory.path}${Platform.pathSeparator}$fileName');
-  }
+  static const String _storageKey = 'vhd_mount_admin_cookies';
+  final FlutterSecureStorage _secureStorage;
 
   @override
   Future<Map<String, Cookie>> load() async {
     try {
-      final file = await _getCookieFile();
-      if (!await file.exists()) {
-        return <String, Cookie>{};
-      }
-
-      final content = await file.readAsString();
-      if (content.trim().isEmpty) {
+      final content = await _secureStorage.read(key: _storageKey);
+      if (content == null || content.trim().isEmpty) {
         return <String, Cookie>{};
       }
 
@@ -639,9 +628,6 @@ class FileCookieStore implements CookieStore {
   @override
   Future<void> save(Map<String, Cookie> cookies) async {
     try {
-      final file = await _getCookieFile();
-      await file.parent.create(recursive: true);
-
       final cookiesJson = <String, dynamic>{};
       for (final entry in cookies.entries) {
         final cookie = entry.value;
@@ -656,8 +642,9 @@ class FileCookieStore implements CookieStore {
       }
 
       final data = <String, dynamic>{'cookies': cookiesJson};
-      await file.writeAsString(
-        '${const JsonEncoder.withIndent('  ').convert(data)}\n',
+      await _secureStorage.write(
+        key: _storageKey,
+        value: jsonEncode(data),
       );
     } catch (error) {
       throw CookieStoreException('保存 Cookie 失败: $error');
@@ -667,10 +654,7 @@ class FileCookieStore implements CookieStore {
   @override
   Future<void> clear() async {
     try {
-      final file = await _getCookieFile();
-      if (await file.exists()) {
-        await file.delete();
-      }
+      await _secureStorage.delete(key: _storageKey);
     } catch (error) {
       throw CookieStoreException('清除 Cookie 失败: $error');
     }
