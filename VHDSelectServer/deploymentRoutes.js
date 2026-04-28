@@ -434,7 +434,6 @@ function buildDeploymentRoutes(options = {}) {
                 iv: ivBase64,
             });
 
-            await deploymentStore.updateTaskStatus(runtime.database, task.taskId, 'downloading');
         }
 
         res.json({ success: true, tasks });

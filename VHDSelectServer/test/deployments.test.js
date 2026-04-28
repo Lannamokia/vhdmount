@@ -128,7 +128,14 @@ function createFakeDatabase() {
             }
             if (sql.includes('deployment_tokens') && sql.includes('token = $1')) {
                 const token = tokens.get(params[0]);
-                if (token && token.machine_id === params[1] && token.package_id === params[2] && token.resource_type === params[3]) {
+                const requiresUnused = sql.includes('used_at IS NULL');
+                if (
+                    token
+                    && token.machine_id === params[1]
+                    && token.package_id === params[2]
+                    && token.resource_type === params[3]
+                    && (!requiresUnused || !token.used_at)
+                ) {
                     return { rows: [token] };
                 }
                 return { rows: [] };
@@ -506,6 +513,18 @@ test('下载接口拒绝错误 UA 的请求', async (t) => {
     assert.strictEqual(res.status, 403);
 });
 
+test('下载接口在数据库不可用时返回 503', async (t) => {
+    const { app, runtime } = await createInitializedHarness(t);
+    runtime.database = null;
+
+    const res = await request(app)
+        .get('/api/deployments/packages/pkg-001/download?token=abc&machineId=m1')
+        .set('User-Agent', 'VHDMount/1.0.0');
+
+    assert.strictEqual(res.status, 503);
+    assert.strictEqual(res.body.success, false);
+});
+
 // ---------- 端到端加密传输专项测试 ----------
 
 test('GET /api/machines/:machineId/deployments/pending 无机台公钥时返回 400', async (t) => {
@@ -561,6 +580,52 @@ test('GET /api/machines/:machineId/deployments/pending 有任务时返回加密�
     assert.ok(task.iv, '应返回 iv');
     assert.ok(task.downloadUrl, '应返回 downloadUrl');
     assert.ok(task.signatureUrl, '应返回 signatureUrl');
+});
+
+test('GET /api/machines/:machineId/deployments/pending 不会在读取时提前推进任务状态', async (t) => {
+    const { app, database, tempDir, testKeyPair, testKeyId } = await createInitializedHarness(t);
+
+    const zipPath = path.join(tempDir, 'test-pkg-pending.zip');
+    fs.writeFileSync(zipPath, 'fake zip content for pending state');
+
+    await database.query(
+        'INSERT INTO deployment_packages (package_id, name, version, type, signer, file_path, file_size, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+        ['pkg-pending-001', 'PendingPkg', '1.0.0', 'software-deploy', 'test', zipPath, 32, new Date(Date.now() + 30 * 86400000).toISOString()]
+    );
+    await database.query(
+        'INSERT INTO deployment_tasks (task_id, package_id, machine_id, task_type, status, scheduled_at) VALUES ($1, $2, $3, $4, $5, $6)',
+        ['task-pending-001', 'pkg-pending-001', 'machine-001', 'deploy', 'pending', null]
+    );
+
+    const pathName = '/api/machines/machine-001/deployments/pending';
+    const firstRes = await request(app)
+        .get(pathName)
+        .set(createMachineAuthHeaders({
+            privateKey: testKeyPair.privateKey,
+            machineId: 'machine-001',
+            keyId: testKeyId,
+            method: 'GET',
+            path: pathName,
+        }))
+        .set('User-Agent', 'VHDMount/1.0.0');
+
+    const secondRes = await request(app)
+        .get(pathName)
+        .set(createMachineAuthHeaders({
+            privateKey: testKeyPair.privateKey,
+            machineId: 'machine-001',
+            keyId: testKeyId,
+            method: 'GET',
+            path: pathName,
+        }))
+        .set('User-Agent', 'VHDMount/1.0.0');
+
+    assert.strictEqual(firstRes.status, 200);
+    assert.strictEqual(secondRes.status, 200);
+    assert.strictEqual(firstRes.body.tasks.length, 1);
+    assert.strictEqual(secondRes.body.tasks.length, 1);
+    assert.strictEqual(firstRes.body.tasks[0].taskId, 'task-pending-001');
+    assert.strictEqual(secondRes.body.tasks[0].taskId, 'task-pending-001');
 });
 
 test('downloadPackage 有效 token 返回 AES-CTR 加密流，可被正确解密', async (t) => {
@@ -714,4 +779,94 @@ test('downloadPackage Range 请求返回正确偏移的加密流', async (t) => 
     const expectedSlice = zipContent.slice(rangeStart);
 
     assert.deepStrictEqual(decrypted, expectedSlice);
+});
+
+test('downloadPackage 同一 token 可用于多次 Range 请求续传', async (t) => {
+    const { app, database, tempDir, testKeyPair, testKeyId } = await createInitializedHarness(t);
+
+    const zipContent = crypto.randomBytes(256);
+    const zipPath = path.join(tempDir, 'test-resume.zip');
+    fs.writeFileSync(zipPath, zipContent);
+
+    await database.query(
+        'INSERT INTO deployment_packages (package_id, name, version, type, signer, file_path, file_size, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+        ['pkg-resume-001', 'ResumePkg', '1.0.0', 'software-deploy', 'test', zipPath, zipContent.length, new Date(Date.now() + 30 * 86400000).toISOString()]
+    );
+    await database.query(
+        'INSERT INTO deployment_tasks (task_id, package_id, machine_id, task_type, status, scheduled_at) VALUES ($1, $2, $3, $4, $5, $6)',
+        ['task-resume-001', 'pkg-resume-001', 'machine-001', 'deploy', 'pending', null]
+    );
+
+    const pendingRes = await request(app)
+        .get('/api/machines/machine-001/deployments/pending')
+        .set(createMachineAuthHeaders({
+            privateKey: testKeyPair.privateKey,
+            machineId: 'machine-001',
+            keyId: testKeyId,
+            method: 'GET',
+            path: '/api/machines/machine-001/deployments/pending',
+        }))
+        .set('User-Agent', 'VHDMount/1.0.0');
+
+    const task = pendingRes.body.tasks[0];
+    const keyCipherBytes = Buffer.from(task.keyCipher, 'base64');
+    const aesKeyBase64 = crypto.privateDecrypt({
+        key: testKeyPair.privateKey,
+        padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+        oaepHash: 'sha1',
+    }, keyCipherBytes);
+    const aesKey = Buffer.from(aesKeyBase64.toString('utf8'), 'base64');
+    const iv = Buffer.from(task.iv, 'base64');
+
+    const downloadUrl = new URL(task.downloadUrl, 'http://localhost');
+    const downloadToken = downloadUrl.searchParams.get('token');
+    const splitAt = 120;
+
+    const firstRes = await request(app)
+        .get(`/api/deployments/packages/pkg-resume-001/download?token=${downloadToken}&machineId=machine-001`)
+        .set('User-Agent', 'VHDMount/1.0.0')
+        .set('Range', `bytes=0-${splitAt - 1}`)
+        .buffer(true)
+        .parse((res, callback) => {
+            res.data = '';
+            res.setEncoding('binary');
+            res.on('data', (chunk) => { res.data += chunk; });
+            res.on('end', () => callback(null, Buffer.from(res.data, 'binary')));
+        });
+
+    const secondRes = await request(app)
+        .get(`/api/deployments/packages/pkg-resume-001/download?token=${downloadToken}&machineId=machine-001`)
+        .set('User-Agent', 'VHDMount/1.0.0')
+        .set('Range', `bytes=${splitAt}-`)
+        .buffer(true)
+        .parse((res, callback) => {
+            res.data = '';
+            res.setEncoding('binary');
+            res.on('data', (chunk) => { res.data += chunk; });
+            res.on('end', () => callback(null, Buffer.from(res.data, 'binary')));
+        });
+
+    assert.strictEqual(firstRes.status, 206);
+    assert.strictEqual(secondRes.status, 206);
+
+    const firstDecipher = crypto.createDecipheriv('aes-256-ctr', aesKey, iv);
+    const firstPlain = Buffer.concat([firstDecipher.update(firstRes.body), firstDecipher.final()]);
+
+    const blockSize = 16;
+    const counter = Math.floor(splitAt / blockSize);
+    const blockOffset = splitAt % blockSize;
+    const ivBuf = Buffer.alloc(16);
+    iv.copy(ivBuf, 0, 0, 8);
+    const counterBuf = Buffer.alloc(8);
+    counterBuf.writeBigUInt64BE(BigInt(counter), 0);
+    counterBuf.copy(ivBuf, 8);
+    const secondDecipher = crypto.createDecipheriv('aes-256-ctr', aesKey, ivBuf);
+    if (blockOffset > 0) {
+        secondDecipher.update(Buffer.alloc(blockOffset));
+    }
+    const secondPlain = Buffer.concat([secondDecipher.update(secondRes.body), secondDecipher.final()]);
+
+    assert.deepStrictEqual(firstPlain, zipContent.slice(0, splitAt));
+    assert.deepStrictEqual(secondPlain, zipContent.slice(splitAt));
+    assert.deepStrictEqual(Buffer.concat([firstPlain, secondPlain]), zipContent);
 });

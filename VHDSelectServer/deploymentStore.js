@@ -243,7 +243,7 @@ class DeploymentStore {
             const result = await client.query(`
                 SELECT * FROM deployment_tokens
                 WHERE token = $1 AND machine_id = $2 AND package_id = $3 AND resource_type = $4
-                  AND expires_at > NOW() AND used_at IS NULL
+                  AND expires_at > NOW()
             `, [token, machineId, packageId, resourceType]);
             return result.rows[0] || null;
         });

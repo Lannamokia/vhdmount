@@ -1520,8 +1520,8 @@ async function createApp(options = {}) {
     app.get('/api/machines/:machineId/deployments/history', deploymentRoutes.requireAuth, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.getMachineHistory));
     app.post('/api/machines/:machineId/deployments/:recordId/uninstall', deploymentRoutes.requireAuth, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.triggerUninstall));
 
-    app.get('/api/deployments/packages/:id/download', deploymentRoutes.asyncHandler(deploymentRoutes.downloadPackage));
-    app.get('/api/deployments/packages/:id/signature', deploymentRoutes.asyncHandler(deploymentRoutes.downloadSignature));
+    app.get('/api/deployments/packages/:id/download', deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.downloadPackage));
+    app.get('/api/deployments/packages/:id/signature', deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.downloadSignature));
 
     app.get('/', (req, res) => {
         res.setHeader('Cache-Control', 'no-store');
