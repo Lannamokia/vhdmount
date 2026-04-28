@@ -522,17 +522,13 @@ class FileClientConfigStore implements ClientConfigStore {
         return ClientConfig.fromJson(Map<String, dynamic>.from(decoded));
       }
 
-      throw const ClientConfigStoreException(
-        '本地配置文件格式无效，请修复或删除后重试。',
-      );
+      throw const ClientConfigStoreException('本地配置文件格式无效，请修复或删除后重试。');
     } on ClientConfigStoreException {
       rethrow;
     } on FileSystemException catch (error) {
       throw ClientConfigStoreException('读取本地配置失败: ${error.message}');
     } on FormatException {
-      throw const ClientConfigStoreException(
-        '本地配置文件 JSON 已损坏，请修复或删除后重试。',
-      );
+      throw const ClientConfigStoreException('本地配置文件 JSON 已损坏，请修复或删除后重试。');
     } catch (error) {
       throw ClientConfigStoreException('读取本地配置失败: $error');
     }
@@ -856,8 +852,7 @@ class LogRetentionSettings {
     return LogRetentionSettings(
       defaultRetentionActiveDays:
           (json['defaultRetentionActiveDays'] as num?)?.toInt() ?? 7,
-      dailyInspectionHour:
-          (json['dailyInspectionHour'] as num?)?.toInt() ?? 3,
+      dailyInspectionHour: (json['dailyInspectionHour'] as num?)?.toInt() ?? 3,
       dailyInspectionMinute:
           (json['dailyInspectionMinute'] as num?)?.toInt() ?? 0,
       timezone: (json['timezone'] as String?) ?? 'UTC',
@@ -923,13 +918,11 @@ class MachineLogSession {
     );
   }
 
-  String get localizedStartedAt =>
-      startedAt == null || startedAt!.isEmpty
+  String get localizedStartedAt => startedAt == null || startedAt!.isEmpty
       ? '未知时间'
       : formatAuditTimestamp(startedAt!);
 
-  String get localizedLastEventAt =>
-      lastEventAt == null || lastEventAt!.isEmpty
+  String get localizedLastEventAt => lastEventAt == null || lastEventAt!.isEmpty
       ? '未知时间'
       : formatAuditTimestamp(lastEventAt!);
 }
@@ -985,9 +978,7 @@ class MachineLogEntry {
           'TRACE_LINE',
       message: (json['message'] as String?) ?? '',
       rawText:
-          (json['raw_text'] as String?) ??
-          (json['rawText'] as String?) ??
-          '',
+          (json['raw_text'] as String?) ?? (json['rawText'] as String?) ?? '',
       metadata: rawMetadata is Map<String, dynamic>
           ? rawMetadata
           : rawMetadata is Map
@@ -1092,20 +1083,22 @@ class DeploymentPackage {
 
   factory DeploymentPackage.fromJson(Map<String, dynamic> json) {
     return DeploymentPackage(
-      packageId: (json['package_id'] as String?) ??
+      packageId:
+          (json['package_id'] as String?) ??
           (json['packageId'] as String?) ??
           '',
       name: (json['name'] as String?) ?? '',
       version: (json['version'] as String?) ?? '',
       type: (json['type'] as String?) ?? 'software-deploy',
       signer: (json['signer'] as String?) ?? '',
-      fileName: (json['file_name'] as String?) ??
-          (json['filePath'] as String?) ??
-          '',
-      fileSize: (json['file_size'] as num?)?.toInt() ??
+      fileName:
+          (json['file_name'] as String?) ?? (json['filePath'] as String?) ?? '',
+      fileSize:
+          (json['file_size'] as num?)?.toInt() ??
           (json['fileSize'] as num?)?.toInt() ??
           0,
-      createdAt: (json['created_at'] as String?) ??
+      createdAt:
+          (json['created_at'] as String?) ??
           (json['createdAt'] as String?) ??
           '',
     );
@@ -1164,31 +1157,34 @@ class DeploymentTask {
 
   factory DeploymentTask.fromJson(Map<String, dynamic> json) {
     return DeploymentTask(
-      taskId: (json['task_id'] as String?) ??
-          (json['taskId'] as String?) ??
-          '',
-      packageId: (json['package_id'] as String?) ??
+      taskId: (json['task_id'] as String?) ?? (json['taskId'] as String?) ?? '',
+      packageId:
+          (json['package_id'] as String?) ??
           (json['packageId'] as String?) ??
           '',
-      machineId: (json['machine_id'] as String?) ??
+      machineId:
+          (json['machine_id'] as String?) ??
           (json['machineId'] as String?) ??
           '',
-      taskType: (json['task_type'] as String?) ??
+      taskType:
+          (json['task_type'] as String?) ??
           (json['taskType'] as String?) ??
           'deploy',
       status: (json['status'] as String?) ?? 'pending',
-      errorMessage: json['error_message'] as String? ??
-          json['errorMessage'] as String?,
-      createdAt: (json['created_at'] as String?) ??
+      errorMessage:
+          json['error_message'] as String? ?? json['errorMessage'] as String?,
+      createdAt:
+          (json['created_at'] as String?) ??
           (json['createdAt'] as String?) ??
           '',
-      scheduledAt: json['scheduled_at'] as String? ??
-          json['scheduledAt'] as String?,
-      completedAt: json['completed_at'] as String? ??
-          json['completedAt'] as String?,
-      packageName: json['package_name'] as String? ??
-          json['packageName'] as String?,
-      packageVersion: json['package_version'] as String? ??
+      scheduledAt:
+          json['scheduled_at'] as String? ?? json['scheduledAt'] as String?,
+      completedAt:
+          json['completed_at'] as String? ?? json['completedAt'] as String?,
+      packageName:
+          json['package_name'] as String? ?? json['packageName'] as String?,
+      packageVersion:
+          json['package_version'] as String? ??
           json['packageVersion'] as String?,
     );
   }
@@ -1199,6 +1195,8 @@ class DeploymentTask {
         return '等待中';
       case 'downloading':
         return '下载中';
+      case 'running':
+        return '执行中';
       case 'success':
         return '成功';
       case 'failed':
@@ -1249,28 +1247,29 @@ class DeploymentRecord {
 
   factory DeploymentRecord.fromJson(Map<String, dynamic> json) {
     return DeploymentRecord(
-      recordId: (json['record_id'] as String?) ??
-          (json['recordId'] as String?) ??
-          '',
-      machineId: (json['machine_id'] as String?) ??
+      recordId:
+          (json['record_id'] as String?) ?? (json['recordId'] as String?) ?? '',
+      machineId:
+          (json['machine_id'] as String?) ??
           (json['machineId'] as String?) ??
           '',
-      packageId: (json['package_id'] as String?) ??
+      packageId:
+          (json['package_id'] as String?) ??
           (json['packageId'] as String?) ??
           '',
       name: (json['name'] as String?) ?? '',
       version: (json['version'] as String?) ?? '',
       type: (json['type'] as String?) ?? 'software-deploy',
-      targetPath: json['target_path'] as String? ??
-          json['targetPath'] as String?,
+      targetPath:
+          json['target_path'] as String? ?? json['targetPath'] as String?,
       status: (json['status'] as String?) ?? 'success',
-      deployedAt: (json['deployed_at'] as String?) ??
+      deployedAt:
+          (json['deployed_at'] as String?) ??
           (json['deployedAt'] as String?) ??
           '',
-      uninstalledAt: json['uninstalled_at'] as String? ??
-          json['uninstalledAt'] as String?,
-      syncedAt: json['synced_at'] as String? ??
-          json['syncedAt'] as String?,
+      uninstalledAt:
+          json['uninstalled_at'] as String? ?? json['uninstalledAt'] as String?,
+      syncedAt: json['synced_at'] as String? ?? json['syncedAt'] as String?,
     );
   }
 
@@ -1450,9 +1449,7 @@ abstract class AdminApi {
     String? scheduledAt,
   });
 
-  Future<List<DeploymentRecord>> getMachineDeploymentHistory(
-    String machineId,
-  );
+  Future<List<DeploymentRecord>> getMachineDeploymentHistory(String machineId);
 
   Future<void> triggerUninstall(String machineId, String recordId);
 }
@@ -2060,8 +2057,7 @@ class HttpAdminApi implements AdminApi {
     required Map<String, String> fields,
     required Map<String, _MultipartFile> files,
   }) async {
-    final boundary =
-        '----FlutterFormBoundary${_random.nextInt(999999)}';
+    final boundary = '----FlutterFormBoundary${_random.nextInt(999999)}';
     final body = BytesBuilder();
 
     for (final entry in fields.entries) {
@@ -2082,9 +2078,7 @@ class HttpAdminApi implements AdminApi {
           'filename="${entry.value.fileName}"\r\n',
         ),
       );
-      body.add(
-        utf8.encode('Content-Type: ${entry.value.contentType}\r\n\r\n'),
-      );
+      body.add(utf8.encode('Content-Type: ${entry.value.contentType}\r\n\r\n'));
       body.add(entry.value.bytes);
       body.add(utf8.encode('\r\n'));
     }

@@ -41,6 +41,11 @@ void _setDesktopViewport(WidgetTester tester, Size size) {
   tester.view.devicePixelRatio = 1.0;
 }
 
+void _setNarrowViewport(WidgetTester tester) {
+  tester.view.physicalSize = const Size(390, 844);
+  tester.view.devicePixelRatio = 1.0;
+}
+
 void _resetViewport(WidgetTester tester) {
   tester.view.resetPhysicalSize();
   tester.view.resetDevicePixelRatio();
@@ -222,107 +227,133 @@ void main() {
     },
   );
 
-  testWidgets(
-    'tasks tab empty state info panel height is bounded by content',
-    (tester) async {
-      _setDesktopViewport(tester, const Size(1600, 960));
-      addTearDown(() => _resetViewport(tester));
+  testWidgets('tasks tab empty state info panel height is bounded by content', (
+    tester,
+  ) async {
+    _setDesktopViewport(tester, const Size(1600, 960));
+    addTearDown(() => _resetViewport(tester));
 
-      final controller = AppController(
-        api: FakeAdminApi(
-          serverStatus: _readyServerStatus,
-          authStatus: _authenticatedStatus,
-        ),
-        clientConfigStore: FakeClientConfigStore(),
-      );
+    final controller = AppController(
+      api: FakeAdminApi(
+        serverStatus: _readyServerStatus,
+        authStatus: _authenticatedStatus,
+      ),
+      clientConfigStore: FakeClientConfigStore(),
+    );
 
-      await tester.pumpWidget(AdminApp(controller: controller));
-      await tester.pumpAndSettle();
+    await tester.pumpWidget(AdminApp(controller: controller));
+    await tester.pumpAndSettle();
 
-      await tester.tap(find.text('部署管理'));
-      await tester.pumpAndSettle();
+    await tester.tap(find.text('部署管理'));
+    await tester.pumpAndSettle();
 
-      await tester.tap(find.text('部署任务'));
-      await tester.pumpAndSettle();
+    await tester.tap(find.text('部署任务'));
+    await tester.pumpAndSettle();
 
-      final infoPanelFinder = find.widgetWithText(InfoPanel, '当前没有部署任务');
-      expect(infoPanelFinder, findsOneWidget);
+    final infoPanelFinder = find.widgetWithText(InfoPanel, '当前没有部署任务');
+    expect(infoPanelFinder, findsOneWidget);
 
-      final infoPanelSize = tester.getSize(infoPanelFinder);
-      expect(infoPanelSize.height, lessThan(300));
+    final infoPanelSize = tester.getSize(infoPanelFinder);
+    expect(infoPanelSize.height, lessThan(300));
 
-      // Resize to taller window.
-      _setDesktopViewport(tester, const Size(1600, 1400));
-      await tester.pump();
-      await tester.pumpAndSettle();
+    // Resize to taller window.
+    _setDesktopViewport(tester, const Size(1600, 1400));
+    await tester.pump();
+    await tester.pumpAndSettle();
 
-      final infoPanelSizeTall = tester.getSize(infoPanelFinder);
-      expect(infoPanelSizeTall.height, lessThan(300));
-      expect(tester.takeException(), isNull);
-    },
-  );
+    final infoPanelSizeTall = tester.getSize(infoPanelFinder);
+    expect(infoPanelSizeTall.height, lessThan(300));
+    expect(tester.takeException(), isNull);
+  });
 
-  testWidgets(
-    'segmented button shows labels on wide viewport',
-    (tester) async {
-      _setDesktopViewport(tester, const Size(1600, 960));
-      addTearDown(() => _resetViewport(tester));
+  testWidgets('segmented button shows labels on wide viewport', (tester) async {
+    _setDesktopViewport(tester, const Size(1600, 960));
+    addTearDown(() => _resetViewport(tester));
 
-      final controller = AppController(
-        api: FakeAdminApi(
-          serverStatus: _readyServerStatus,
-          authStatus: _authenticatedStatus,
-        ),
-        clientConfigStore: FakeClientConfigStore(),
-      );
+    final controller = AppController(
+      api: FakeAdminApi(
+        serverStatus: _readyServerStatus,
+        authStatus: _authenticatedStatus,
+      ),
+      clientConfigStore: FakeClientConfigStore(),
+    );
 
-      await tester.pumpWidget(AdminApp(controller: controller));
-      await tester.pumpAndSettle();
+    await tester.pumpWidget(AdminApp(controller: controller));
+    await tester.pumpAndSettle();
 
-      await tester.tap(find.text('部署管理'));
-      await tester.pumpAndSettle();
+    await tester.tap(find.text('部署管理'));
+    await tester.pumpAndSettle();
 
-      expect(find.text('部署包'), findsOneWidget);
-      expect(find.text('部署任务'), findsOneWidget);
-      expect(find.text('机台历史'), findsOneWidget);
-    },
-  );
+    expect(find.text('部署包'), findsOneWidget);
+    expect(find.text('部署任务'), findsOneWidget);
+    expect(find.text('机台历史'), findsOneWidget);
+  });
 
-  testWidgets(
-    'segmented button switches to icon-only on narrow viewport',
-    (tester) async {
-      _setDesktopViewport(tester, const Size(1600, 960));
-      addTearDown(() => _resetViewport(tester));
+  testWidgets('segmented button switches to icon-only on narrow viewport', (
+    tester,
+  ) async {
+    _setDesktopViewport(tester, const Size(1600, 960));
+    addTearDown(() => _resetViewport(tester));
 
-      final controller = AppController(
-        api: FakeAdminApi(
-          serverStatus: _readyServerStatus,
-          authStatus: _authenticatedStatus,
-        ),
-        clientConfigStore: FakeClientConfigStore(),
-      );
+    final controller = AppController(
+      api: FakeAdminApi(
+        serverStatus: _readyServerStatus,
+        authStatus: _authenticatedStatus,
+      ),
+      clientConfigStore: FakeClientConfigStore(),
+    );
 
-      await tester.pumpWidget(AdminApp(controller: controller));
-      await tester.pumpAndSettle();
+    await tester.pumpWidget(AdminApp(controller: controller));
+    await tester.pumpAndSettle();
 
-      await tester.tap(find.text('部署管理'));
-      await tester.pumpAndSettle();
+    await tester.tap(find.text('部署管理'));
+    await tester.pumpAndSettle();
 
-      // On desktop, labels are visible.
-      expect(find.text('部署包'), findsOneWidget);
+    // On desktop, labels are visible.
+    expect(find.text('部署包'), findsOneWidget);
 
-      // Switch to narrow viewport.
-      tester.view.physicalSize = const Size(400, 800);
-      tester.view.devicePixelRatio = 2.0;
-      await tester.pump();
-      await tester.pumpAndSettle();
+    // Switch to narrow viewport.
+    tester.view.physicalSize = const Size(400, 800);
+    tester.view.devicePixelRatio = 2.0;
+    await tester.pump();
+    await tester.pumpAndSettle();
 
-      // On narrow viewport, labels should be hidden (icon-only mode).
-      expect(find.text('部署包'), findsNothing);
-      expect(find.text('部署任务'), findsNothing);
-      expect(find.text('机台历史'), findsNothing);
+    // On narrow viewport, labels should be hidden (icon-only mode).
+    expect(find.text('部署包'), findsNothing);
+    expect(find.text('部署任务'), findsNothing);
+    expect(find.text('机台历史'), findsNothing);
 
-      expect(tester.takeException(), isNull);
-    },
-  );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('upload package dialog fits narrow viewport without overflow', (
+    tester,
+  ) async {
+    _setDesktopViewport(tester, const Size(1600, 960));
+    addTearDown(() => _resetViewport(tester));
+
+    final controller = AppController(
+      api: FakeAdminApi(
+        serverStatus: _readyServerStatus,
+        authStatus: _authenticatedStatus,
+      ),
+      clientConfigStore: FakeClientConfigStore(),
+    );
+
+    await tester.pumpWidget(AdminApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('部署管理'));
+    await tester.pumpAndSettle();
+
+    _setNarrowViewport(tester);
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('上传部署包'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('上传部署包'), findsWidgets);
+    expect(tester.takeException(), isNull);
+  });
 }

@@ -29,13 +29,11 @@ class _DeploymentsViewState extends State<DeploymentsView> {
   }
 
   void _setTab(_DeploymentTab tab) {
-    widget.controller.setDeploymentSelectedTab(
-      switch (tab) {
-        _DeploymentTab.packages => 'packages',
-        _DeploymentTab.tasks => 'tasks',
-        _DeploymentTab.history => 'history',
-      },
-    );
+    widget.controller.setDeploymentSelectedTab(switch (tab) {
+      _DeploymentTab.packages => 'packages',
+      _DeploymentTab.tasks => 'tasks',
+      _DeploymentTab.history => 'history',
+    });
   }
 
   @override
@@ -56,36 +54,36 @@ class _DeploymentsViewState extends State<DeploymentsView> {
                 return SegmentedButton<_DeploymentTab>(
                   segments: narrow
                       ? const <ButtonSegment<_DeploymentTab>>[
-                        ButtonSegment<_DeploymentTab>(
-                          value: _DeploymentTab.packages,
-                          icon: Icon(Icons.folder_zip_rounded),
-                        ),
-                        ButtonSegment<_DeploymentTab>(
-                          value: _DeploymentTab.tasks,
-                          icon: Icon(Icons.assignment_rounded),
-                        ),
-                        ButtonSegment<_DeploymentTab>(
-                          value: _DeploymentTab.history,
-                          icon: Icon(Icons.history_rounded),
-                        ),
-                      ]
+                          ButtonSegment<_DeploymentTab>(
+                            value: _DeploymentTab.packages,
+                            icon: Icon(Icons.folder_zip_rounded),
+                          ),
+                          ButtonSegment<_DeploymentTab>(
+                            value: _DeploymentTab.tasks,
+                            icon: Icon(Icons.assignment_rounded),
+                          ),
+                          ButtonSegment<_DeploymentTab>(
+                            value: _DeploymentTab.history,
+                            icon: Icon(Icons.history_rounded),
+                          ),
+                        ]
                       : const <ButtonSegment<_DeploymentTab>>[
-                        ButtonSegment<_DeploymentTab>(
-                          value: _DeploymentTab.packages,
-                          label: Text('部署包'),
-                          icon: Icon(Icons.folder_zip_rounded),
-                        ),
-                        ButtonSegment<_DeploymentTab>(
-                          value: _DeploymentTab.tasks,
-                          label: Text('部署任务'),
-                          icon: Icon(Icons.assignment_rounded),
-                        ),
-                        ButtonSegment<_DeploymentTab>(
-                          value: _DeploymentTab.history,
-                          label: Text('机台历史'),
-                          icon: Icon(Icons.history_rounded),
-                        ),
-                      ],
+                          ButtonSegment<_DeploymentTab>(
+                            value: _DeploymentTab.packages,
+                            label: Text('部署包'),
+                            icon: Icon(Icons.folder_zip_rounded),
+                          ),
+                          ButtonSegment<_DeploymentTab>(
+                            value: _DeploymentTab.tasks,
+                            label: Text('部署任务'),
+                            icon: Icon(Icons.assignment_rounded),
+                          ),
+                          ButtonSegment<_DeploymentTab>(
+                            value: _DeploymentTab.history,
+                            label: Text('机台历史'),
+                            icon: Icon(Icons.history_rounded),
+                          ),
+                        ],
                   selected: <_DeploymentTab>{_selectedTab},
                   onSelectionChanged: (Set<_DeploymentTab> value) {
                     _setTab(value.first);
@@ -198,9 +196,7 @@ class _PackagesTab extends StatelessWidget {
                           const SizedBox(height: 4),
                           Text(
                             '版本 ${pkg.version} · ${pkg.displayType}',
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodyMedium
+                            style: Theme.of(context).textTheme.bodyMedium
                                 ?.copyWith(color: AppPalette.muted),
                           ),
                         ],
@@ -243,7 +239,8 @@ class _PackagesTab extends StatelessWidget {
                         final confirmed = await showConfirmDialog(
                           context,
                           title: '删除部署包',
-                          message: '确认删除部署包 ${pkg.name} v${pkg.version} 吗？\n'
+                          message:
+                              '确认删除部署包 ${pkg.name} v${pkg.version} 吗？\n'
                               '已下发的任务和机台历史记录不会被删除。',
                           confirmLabel: '删除',
                         );
@@ -251,7 +248,9 @@ class _PackagesTab extends StatelessWidget {
                           return;
                         }
                         try {
-                          await controller.deleteDeploymentPackage(pkg.packageId);
+                          await controller.deleteDeploymentPackage(
+                            pkg.packageId,
+                          );
                           if (!context.mounted) {
                             return;
                           }
@@ -309,16 +308,16 @@ class _PackagesTab extends StatelessWidget {
                   if (!context.mounted) {
                     return;
                   }
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('部署包上传成功。')),
-                  );
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(const SnackBar(content: Text('部署包上传成功。')));
                 } catch (error) {
                   if (!context.mounted) {
                     return;
                   }
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text(describeError(error))),
-                  );
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(SnackBar(content: Text(describeError(error))));
                 }
               },
               icon: const Icon(Icons.upload_file_rounded),
@@ -344,11 +343,10 @@ class _PackagesTab extends StatelessWidget {
         const SizedBox(height: 16),
         if (controller.deploymentPackages.isEmpty)
           if (embedInParentScroll) emptyState else Expanded(child: emptyState)
+        else if (embedInParentScroll)
+          packagesList
         else
-          if (embedInParentScroll)
-            packagesList
-          else
-            Expanded(child: packagesList),
+          Expanded(child: packagesList),
       ],
     );
   }
@@ -432,15 +430,15 @@ class _UploadPackageDialogState extends State<_UploadPackageDialog> {
     final signer = _signerController.text.trim();
 
     if (name.isEmpty || version.isEmpty || signer.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请填写名称、版本和签名者。')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请填写名称、版本和签名者。')));
       return;
     }
     if (_packagePath == null || _signaturePath == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请选择 ZIP 包文件和签名文件。')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请选择 ZIP 包文件和签名文件。')));
       return;
     }
 
@@ -453,9 +451,9 @@ class _UploadPackageDialogState extends State<_UploadPackageDialog> {
       return;
     }
     if (!packageExists || !signatureExists) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('所选文件不存在。')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('所选文件不存在。')));
       return;
     }
 
@@ -465,88 +463,83 @@ class _UploadPackageDialogState extends State<_UploadPackageDialog> {
       return;
     }
 
-    Navigator.of(context).pop(_UploadPackageResult(
-      name: name,
-      version: version,
-      type: _type,
-      signer: signer,
-      packageBytes: packageBytes,
-      packageFileName: packageFile.uri.pathSegments.last,
-      signatureBytes: signatureBytes,
-      signatureFileName: signatureFile.uri.pathSegments.last,
-    ));
+    Navigator.of(context).pop(
+      _UploadPackageResult(
+        name: name,
+        version: version,
+        type: _type,
+        signer: signer,
+        packageBytes: packageBytes,
+        packageFileName: packageFile.uri.pathSegments.last,
+        signatureBytes: signatureBytes,
+        signatureFileName: signatureFile.uri.pathSegments.last,
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final dialogWidth = min(520.0, MediaQuery.of(context).size.width - 48);
     return AlertDialog(
       title: const Text('上传部署包'),
       content: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520),
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final available = constraints.maxWidth.isFinite
-                ? constraints.maxWidth
-                : 480.0;
-            final dropdownWidth = min(480.0, available);
-            return SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  TextField(
-                    controller: _nameController,
-                    decoration: const InputDecoration(labelText: '包名称'),
+        constraints: BoxConstraints(maxWidth: dialogWidth),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              TextField(
+                controller: _nameController,
+                decoration: const InputDecoration(labelText: '包名称'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _versionController,
+                decoration: const InputDecoration(labelText: '版本号'),
+              ),
+              const SizedBox(height: 12),
+              DropdownMenu<String>(
+                width: dialogWidth,
+                label: const Text('包类型'),
+                initialSelection: _type,
+                dropdownMenuEntries: const <DropdownMenuEntry<String>>[
+                  DropdownMenuEntry<String>(
+                    value: 'software-deploy',
+                    label: '软件部署包（含安装/卸载脚本）',
                   ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _versionController,
-                    decoration: const InputDecoration(labelText: '版本号'),
-                  ),
-                  const SizedBox(height: 12),
-                  DropdownMenu<String>(
-                    width: dropdownWidth,
-                    label: const Text('包类型'),
-                    initialSelection: _type,
-                    dropdownMenuEntries: const <DropdownMenuEntry<String>>[
-                      DropdownMenuEntry<String>(
-                        value: 'software-deploy',
-                        label: '软件部署包（含安装/卸载脚本）',
-                      ),
-                      DropdownMenuEntry<String>(
-                        value: 'file-deploy',
-                        label: '文件部署包（直接解压）',
-                      ),
-                    ],
-                    onSelected: (value) {
-                      if (value != null) {
-                        setState(() {
-                          _type = value;
-                        });
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _signerController,
-                    decoration: const InputDecoration(labelText: '签名者'),
-                  ),
-                  const SizedBox(height: 16),
-                  _buildFilePicker(
-                    label: 'ZIP 包文件',
-                    path: _packagePath,
-                    onPick: _pickPackageFile,
-                  ),
-                  const SizedBox(height: 12),
-                  _buildFilePicker(
-                    label: '签名文件 (.sig)',
-                    path: _signaturePath,
-                    onPick: _pickSignatureFile,
+                  DropdownMenuEntry<String>(
+                    value: 'file-deploy',
+                    label: '文件部署包（直接解压）',
                   ),
                 ],
+                onSelected: (value) {
+                  if (value != null) {
+                    setState(() {
+                      _type = value;
+                    });
+                  }
+                },
               ),
-            );
-          },
+              const SizedBox(height: 12),
+              TextField(
+                controller: _signerController,
+                decoration: const InputDecoration(labelText: '签名者'),
+              ),
+              const SizedBox(height: 16),
+              _buildFilePicker(
+                label: 'ZIP 包文件',
+                path: _packagePath,
+                onPick: _pickPackageFile,
+              ),
+              const SizedBox(height: 12),
+              _buildFilePicker(
+                label: '签名文件 (.sig)',
+                path: _signaturePath,
+                onPick: _pickSignatureFile,
+              ),
+            ],
+          ),
         ),
       ),
       actions: <Widget>[
@@ -554,10 +547,7 @@ class _UploadPackageDialogState extends State<_UploadPackageDialog> {
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('取消'),
         ),
-        FilledButton(
-          onPressed: _submit,
-          child: const Text('上传'),
-        ),
+        FilledButton(onPressed: _submit, child: const Text('上传')),
       ],
     );
   }
@@ -567,43 +557,53 @@ class _UploadPackageDialogState extends State<_UploadPackageDialog> {
     required String? path,
     required VoidCallback onPick,
   }) {
+    final availableWidth = MediaQuery.of(context).size.width - 48;
+    final narrow = availableWidth < 430;
+    final filePreview = Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.78),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppPalette.border.withValues(alpha: 0.7)),
+      ),
+      child: Text(
+        path?.split(Platform.pathSeparator).last ?? '未选择文件',
+        style: TextStyle(
+          color: path == null ? AppPalette.muted : AppPalette.ink,
+        ),
+        overflow: TextOverflow.ellipsis,
+      ),
+    );
+    final pickButton = OutlinedButton.icon(
+      onPressed: onPick,
+      icon: const Icon(Icons.folder_open_rounded),
+      label: Text(label),
+    );
+
+    if (narrow) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          filePreview,
+          const SizedBox(height: 10),
+          Align(alignment: Alignment.centerLeft, child: pickButton),
+        ],
+      );
+    }
+
     return Row(
       children: <Widget>[
-        Expanded(
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.78),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: AppPalette.border.withValues(alpha: 0.7),
-              ),
-            ),
-            child: Text(
-              path?.split(Platform.pathSeparator).last ?? '未选择文件',
-              style: TextStyle(
-                color: path == null ? AppPalette.muted : AppPalette.ink,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ),
+        Expanded(child: filePreview),
         const SizedBox(width: 10),
-        OutlinedButton.icon(
-          onPressed: onPick,
-          icon: const Icon(Icons.folder_open_rounded),
-          label: Text(label),
-        ),
+        pickButton,
       ],
     );
   }
 }
 
 class _TasksTab extends StatelessWidget {
-  const _TasksTab({
-    required this.controller,
-    this.embedInParentScroll = false,
-  });
+  const _TasksTab({required this.controller, this.embedInParentScroll = false});
 
   final AppController controller;
   final bool embedInParentScroll;
@@ -636,6 +636,8 @@ class _TasksTab extends StatelessWidget {
         switch (task.status) {
           case 'success':
             statusColor = AppPalette.mint;
+          case 'running':
+            statusColor = AppPalette.mintDeep;
           case 'failed':
             statusColor = AppPalette.coral;
           case 'downloading':
@@ -671,18 +673,13 @@ class _TasksTab extends StatelessWidget {
                           const SizedBox(height: 4),
                           Text(
                             '机台: ${task.machineId}',
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodyMedium
+                            style: Theme.of(context).textTheme.bodyMedium
                                 ?.copyWith(color: AppPalette.muted),
                           ),
                         ],
                       ),
                     ),
-                    StatusChip(
-                      label: task.displayStatus,
-                      color: statusColor,
-                    ),
+                    StatusChip(label: task.displayStatus, color: statusColor),
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -708,8 +705,10 @@ class _TasksTab extends StatelessWidget {
                 if (task.completedAt != null)
                   Text('完成时间: ${formatAuditTimestamp(task.completedAt!)}'),
                 if (task.errorMessage != null && task.errorMessage!.isNotEmpty)
-                  Text('错误: ${task.errorMessage}',
-                      style: const TextStyle(color: AppPalette.danger)),
+                  Text(
+                    '错误: ${task.errorMessage}',
+                    style: const TextStyle(color: AppPalette.danger),
+                  ),
                 const SizedBox(height: 16),
                 Wrap(
                   spacing: 10,
@@ -720,7 +719,8 @@ class _TasksTab extends StatelessWidget {
                         final confirmed = await showConfirmDialog(
                           context,
                           title: '删除部署任务',
-                          message: '确认删除任务 ${task.taskId} 吗？\n'
+                          message:
+                              '确认删除任务 ${task.taskId} 吗？\n'
                               '机台 ${task.machineId} 上的 ${task.displayType} 任务将被移除。',
                           confirmLabel: '删除',
                         );
@@ -795,9 +795,9 @@ class _TasksTab extends StatelessWidget {
                   if (!context.mounted) {
                     return;
                   }
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text(describeError(error))),
-                  );
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(SnackBar(content: Text(describeError(error))));
                 }
               },
               icon: const Icon(Icons.add_task_rounded),
@@ -813,11 +813,10 @@ class _TasksTab extends StatelessWidget {
         const SizedBox(height: 16),
         if (controller.deploymentTasks.isEmpty)
           if (embedInParentScroll) emptyState else Expanded(child: emptyState)
+        else if (embedInParentScroll)
+          tasksList
         else
-          if (embedInParentScroll)
-            tasksList
-          else
-            Expanded(child: tasksList),
+          Expanded(child: tasksList),
       ],
     );
   }
@@ -836,10 +835,7 @@ class _CreateTaskResult {
 }
 
 class _CreateTaskDialog extends StatefulWidget {
-  const _CreateTaskDialog({
-    required this.packages,
-    required this.machines,
-  });
+  const _CreateTaskDialog({required this.packages, required this.machines});
 
   final List<DeploymentPackage> packages;
   final List<MachineRecord> machines;
@@ -917,7 +913,9 @@ class _CreateTaskDialogState extends State<_CreateTaskDialog> {
                       spacing: 8,
                       runSpacing: 8,
                       children: widget.machines.map((machine) {
-                        final selected = _selectedMachineIds.contains(machine.machineId);
+                        final selected = _selectedMachineIds.contains(
+                          machine.machineId,
+                        );
                         return FilterChip(
                           label: Text(machine.machineId),
                           selected: selected,
@@ -957,11 +955,13 @@ class _CreateTaskDialogState extends State<_CreateTaskDialog> {
               ? null
               : () {
                   final scheduledAt = _scheduledAtController.text.trim();
-                  Navigator.of(context).pop(_CreateTaskResult(
-                    packageId: _selectedPackageId!,
-                    targetMachineIds: _selectedMachineIds.toList(),
-                    scheduledAt: scheduledAt.isEmpty ? null : scheduledAt,
-                  ));
+                  Navigator.of(context).pop(
+                    _CreateTaskResult(
+                      packageId: _selectedPackageId!,
+                      targetMachineIds: _selectedMachineIds.toList(),
+                      scheduledAt: scheduledAt.isEmpty ? null : scheduledAt,
+                    ),
+                  );
                 },
           child: const Text('创建任务'),
         ),
@@ -1033,7 +1033,9 @@ class _HistoryTabState extends State<_HistoryTab> {
                       icon: record.type == 'software-deploy'
                           ? Icons.install_desktop_rounded
                           : Icons.folder_copy_rounded,
-                      color: isUninstalled ? AppPalette.muted : AppPalette.coral,
+                      color: isUninstalled
+                          ? AppPalette.muted
+                          : AppPalette.coral,
                     ),
                     const SizedBox(width: 14),
                     Expanded(
@@ -1047,9 +1049,7 @@ class _HistoryTabState extends State<_HistoryTab> {
                           const SizedBox(height: 4),
                           Text(
                             '版本 ${record.version} · ${record.displayType}',
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodyMedium
+                            style: Theme.of(context).textTheme.bodyMedium
                                 ?.copyWith(color: AppPalette.muted),
                           ),
                         ],
@@ -1065,7 +1065,11 @@ class _HistoryTabState extends State<_HistoryTab> {
                 Text('包 ID: ${record.packageId}'),
                 Text('部署时间: ${formatAuditTimestamp(record.deployedAt)}'),
                 if (record.targetPath != null)
-                  Text('目标路径: ${record.targetPath}'),
+                  Text(
+                    record.type == 'software-deploy'
+                        ? '安装目录: ${record.targetPath}'
+                        : '目标路径: ${record.targetPath}',
+                  ),
                 if (record.uninstalledAt != null)
                   Text('卸载时间: ${formatAuditTimestamp(record.uninstalledAt!)}'),
                 if (!isUninstalled) ...<Widget>[
@@ -1075,7 +1079,8 @@ class _HistoryTabState extends State<_HistoryTab> {
                       final confirmed = await showConfirmDialog(
                         context,
                         title: '触发卸载',
-                        message: '确认对机台 ${_selectedMachineId ?? record.machineId} 上的 ${record.name} v${record.version} 执行卸载吗？',
+                        message:
+                            '确认对机台 ${_selectedMachineId ?? record.machineId} 上的 ${record.name} v${record.version} 执行卸载吗？',
                         confirmLabel: '卸载',
                       );
                       if (confirmed != true) {
@@ -1136,10 +1141,8 @@ class _HistoryTabState extends State<_HistoryTab> {
                     hintText: '全部机台',
                     dropdownMenuEntries: machineOptions
                         .map(
-                          (id) => DropdownMenuEntry<String>(
-                            value: id,
-                            label: id,
-                          ),
+                          (id) =>
+                              DropdownMenuEntry<String>(value: id, label: id),
                         )
                         .toList(),
                     onSelected: (value) async {
@@ -1156,8 +1159,8 @@ class _HistoryTabState extends State<_HistoryTab> {
                   onPressed: _selectedMachineId == null
                       ? null
                       : () => controller.loadMachineDeploymentHistory(
-                            _selectedMachineId!,
-                          ),
+                          _selectedMachineId!,
+                        ),
                   icon: const Icon(Icons.refresh_rounded),
                   label: const Text('刷新历史'),
                 ),
@@ -1187,12 +1190,15 @@ class LocalPackagerDialog extends StatefulWidget {
 }
 
 class _LocalPackagerDialogState extends State<LocalPackagerDialog> {
-  final TextEditingController _nameController =
-      TextEditingController(text: '配套工具');
-  final TextEditingController _versionController =
-      TextEditingController(text: '1.0.0');
-  final TextEditingController _signerController =
-      TextEditingController(text: 'admin');
+  final TextEditingController _nameController = TextEditingController(
+    text: '配套工具',
+  );
+  final TextEditingController _versionController = TextEditingController(
+    text: '1.0.0',
+  );
+  final TextEditingController _signerController = TextEditingController(
+    text: 'admin',
+  );
   final TextEditingController _installScriptController =
       TextEditingController();
   final TextEditingController _uninstallScriptController =
@@ -1322,6 +1328,13 @@ class _LocalPackagerDialogState extends State<LocalPackagerDialog> {
       });
       return;
     }
+    if (_type == 'software-deploy' && uninstallScriptPath.isEmpty) {
+      setState(() {
+        _resultMessage = 'software-deploy 类型必须提供卸载脚本';
+        _resultIsError = true;
+      });
+      return;
+    }
     if (_type == 'file-deploy') {
       if (targetPath.isEmpty) {
         setState(() {
@@ -1358,10 +1371,10 @@ class _LocalPackagerDialogState extends State<LocalPackagerDialog> {
       final packager = DeploymentPackager();
       final result = await packager.packAndSign(
         type: _type,
-        installScriptPath:
-            installScriptPath.isEmpty ? null : installScriptPath,
-        uninstallScriptPath:
-            uninstallScriptPath.isEmpty ? null : uninstallScriptPath,
+        installScriptPath: installScriptPath.isEmpty ? null : installScriptPath,
+        uninstallScriptPath: uninstallScriptPath.isEmpty
+            ? null
+            : uninstallScriptPath,
         payloadDir: payloadDir.isEmpty ? null : payloadDir,
         name: name,
         version: version,
@@ -1383,8 +1396,7 @@ class _LocalPackagerDialogState extends State<LocalPackagerDialog> {
       if (mounted) {
         setState(() {
           _isPacking = false;
-          _resultMessage =
-              '打包完成：\n${result.zipPath}\n${result.sigPath}';
+          _resultMessage = '打包完成：\n${result.zipPath}\n${result.sigPath}';
           _resultIsError = false;
         });
       }
@@ -1405,29 +1417,41 @@ class _LocalPackagerDialogState extends State<LocalPackagerDialog> {
     required VoidCallback onPick,
     bool isDirectory = false,
   }) {
+    final availableWidth = MediaQuery.of(context).size.width - 48;
+    final narrow = availableWidth < 430;
+    final field = TextField(
+      controller: controller,
+      decoration: InputDecoration(
+        labelText: label,
+        hintText: isDirectory ? '选择目录' : '选择文件',
+      ),
+      readOnly: true,
+    );
+    final button = OutlinedButton.icon(
+      onPressed: _isPacking ? null : onPick,
+      icon: Icon(
+        isDirectory ? Icons.folder_open_rounded : Icons.file_open_rounded,
+      ),
+      label: Text(isDirectory ? '浏览' : '选择'),
+    );
+
+    if (narrow) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          field,
+          const SizedBox(height: 10),
+          Align(alignment: Alignment.centerLeft, child: button),
+        ],
+      );
+    }
+
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        Expanded(
-          child: TextField(
-            controller: controller,
-            decoration: InputDecoration(
-              labelText: label,
-              hintText: isDirectory ? '选择目录' : '选择文件',
-            ),
-            readOnly: true,
-          ),
-        ),
+        Expanded(child: field),
         const SizedBox(width: 10),
-        OutlinedButton.icon(
-          onPressed: _isPacking ? null : onPick,
-          icon: Icon(
-            isDirectory
-                ? Icons.folder_open_rounded
-                : Icons.file_open_rounded,
-          ),
-          label: Text(isDirectory ? '浏览' : '选择'),
-        ),
+        button,
       ],
     );
   }
@@ -1435,39 +1459,44 @@ class _LocalPackagerDialogState extends State<LocalPackagerDialog> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final dialogWidth = min(600.0, MediaQuery.of(context).size.width - 48);
 
     return AlertDialog(
       title: const Text('本地打包器'),
       content: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 600),
+        constraints: BoxConstraints(maxWidth: dialogWidth),
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              DropdownMenu<String>(
-                initialSelection: _type,
-                label: const Text('包类型'),
-                enabled: !_isPacking,
-                dropdownMenuEntries: const <DropdownMenuEntry<String>>[
-                  DropdownMenuEntry<String>(
-                    value: 'software-deploy',
-                    label: '软件部署包（含安装/卸载脚本）',
-                  ),
-                  DropdownMenuEntry<String>(
-                    value: 'file-deploy',
-                    label: '文件部署包（直接解压）',
-                  ),
-                ],
-                onSelected: _isPacking
-                    ? null
-                    : (value) {
-                        if (value != null) {
-                          setState(() {
-                            _type = value;
-                          });
-                        }
-                      },
+              SizedBox(
+                width: dialogWidth,
+                child: DropdownMenu<String>(
+                  width: dialogWidth,
+                  initialSelection: _type,
+                  label: const Text('包类型'),
+                  enabled: !_isPacking,
+                  dropdownMenuEntries: const <DropdownMenuEntry<String>>[
+                    DropdownMenuEntry<String>(
+                      value: 'software-deploy',
+                      label: '软件部署包（含安装/卸载脚本）',
+                    ),
+                    DropdownMenuEntry<String>(
+                      value: 'file-deploy',
+                      label: '文件部署包（直接解压）',
+                    ),
+                  ],
+                  onSelected: _isPacking
+                      ? null
+                      : (value) {
+                          if (value != null) {
+                            setState(() {
+                              _type = value;
+                            });
+                          }
+                        },
+                ),
               ),
               const SizedBox(height: 12),
               _buildPathPicker(
@@ -1546,12 +1575,13 @@ class _LocalPackagerDialogState extends State<LocalPackagerDialog> {
               ),
               const SizedBox(height: 16),
               Text(
-                'software-deploy 类型必须包含 install.ps1；'
+                'software-deploy 类型必须同时包含 install.ps1 和 uninstall.ps1；'
                 'file-deploy 类型不含脚本，只解压文件。'
                 '输出文件为 name-version.zip 和 .zip.sig，'
                 '可手动上传到服务端。',
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: AppPalette.muted),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: AppPalette.muted,
+                ),
               ),
               if (_isPacking) ...<Widget>[
                 const SizedBox(height: 16),

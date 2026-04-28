@@ -4,6 +4,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vhd_mount_admin_flutter/app.dart';
 
 void main() {
+  void setNarrowViewport(WidgetTester tester) {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1.0;
+  }
+
   Future<void> openDialog(WidgetTester tester) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -91,10 +96,7 @@ void main() {
 
     // 清空默认值
     await tester.enterText(
-      find.ancestor(
-        of: find.text('配套工具'),
-        matching: find.byType(TextField),
-      ),
+      find.ancestor(of: find.text('配套工具'), matching: find.byType(TextField)),
       '',
     );
     await tester.pump();
@@ -108,5 +110,17 @@ void main() {
   testWidgets('进度条不在初始状态显示', (tester) async {
     await openDialog(tester);
     expect(find.byType(LinearProgressIndicator), findsNothing);
+  });
+
+  testWidgets('本地打包器在窄屏下不溢出', (tester) async {
+    setNarrowViewport(tester);
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    await openDialog(tester);
+    expect(find.text('本地打包器'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }

@@ -87,14 +87,16 @@ void main() {
   });
 
   test('完整打包 software-deploy 类型', () async {
-    final installScript =
-        '$tempDir${Platform.pathSeparator}install.ps1';
+    final installScript = '$tempDir${Platform.pathSeparator}install.ps1';
+    final uninstallScript = '$tempDir${Platform.pathSeparator}uninstall.ps1';
     await File(installScript).writeAsString('Write-Host "install"');
+    await File(uninstallScript).writeAsString('Write-Host "uninstall"');
 
     final packager = DeploymentPackager();
     final result = await packager.packAndSign(
       type: 'software-deploy',
       installScriptPath: installScript,
+      uninstallScriptPath: uninstallScript,
       payloadDir: payloadDir,
       name: 'TestApp',
       version: '2.0.0',
@@ -113,6 +115,7 @@ void main() {
     final fileNames = archive.map((f) => f.name).toList();
     expect(fileNames, contains('deploy.json'));
     expect(fileNames, contains('install.ps1'));
+    expect(fileNames, contains('uninstall.ps1'));
     expect(fileNames, contains('data.txt'));
     expect(fileNames, contains('subdir/nested.txt'));
   });
@@ -181,14 +184,16 @@ void main() {
   });
 
   test('deploy.json 字段正确', () async {
-    final installScript =
-        '$tempDir${Platform.pathSeparator}install.ps1';
+    final installScript = '$tempDir${Platform.pathSeparator}install.ps1';
+    final uninstallScript = '$tempDir${Platform.pathSeparator}uninstall.ps1';
     await File(installScript).writeAsString('Write-Host "install"');
+    await File(uninstallScript).writeAsString('Write-Host "uninstall"');
 
     final packager = DeploymentPackager();
     final result = await packager.packAndSign(
       type: 'software-deploy',
       installScriptPath: installScript,
+      uninstallScriptPath: uninstallScript,
       name: 'MyApp',
       version: '3.1.4',
       signer: 'tester',
@@ -199,9 +204,9 @@ void main() {
     final zipBytes = await File(result.zipPath).readAsBytes();
     final archive = ZipDecoder().decodeBytes(zipBytes);
     final deployFile = archive.firstWhere((f) => f.name == 'deploy.json');
-    final deployJson = jsonDecode(
-      utf8.decode(deployFile.content as List<int>),
-    ) as Map<String, dynamic>;
+    final deployJson =
+        jsonDecode(utf8.decode(deployFile.content as List<int>))
+            as Map<String, dynamic>;
 
     expect(deployJson['name'], 'MyApp');
     expect(deployJson['version'], '3.1.4');
@@ -209,6 +214,7 @@ void main() {
     expect(deployJson['signer'], 'tester');
     expect(deployJson['createdAt'], isNotNull);
     expect(deployJson['installScript'], 'install.ps1');
+    expect(deployJson['uninstallScript'], 'uninstall.ps1');
   });
 
   test('deploy.json 包含 targetPath 和 requiresAdmin', () async {
@@ -228,9 +234,9 @@ void main() {
     final zipBytes = await File(result.zipPath).readAsBytes();
     final archive = ZipDecoder().decodeBytes(zipBytes);
     final deployFile = archive.firstWhere((f) => f.name == 'deploy.json');
-    final deployJson = jsonDecode(
-      utf8.decode(deployFile.content as List<int>),
-    ) as Map<String, dynamic>;
+    final deployJson =
+        jsonDecode(utf8.decode(deployFile.content as List<int>))
+            as Map<String, dynamic>;
 
     expect(deployJson['targetPath'], r'C:\Games\MyGame');
     expect(deployJson['requiresAdmin'], isTrue);
@@ -330,6 +336,25 @@ void main() {
     );
   });
 
+  test('software-deploy 无 uninstall.ps1 抛出异常', () async {
+    final installScript = '$tempDir${Platform.pathSeparator}install.ps1';
+    await File(installScript).writeAsString('Write-Host "install"');
+
+    final packager = DeploymentPackager();
+    expect(
+      () => packager.packAndSign(
+        type: 'software-deploy',
+        installScriptPath: installScript,
+        name: 'test',
+        version: '1.0.0',
+        signer: 'test',
+        privateKeyPath: privateKeyPath,
+        outputDir: outputDir,
+      ),
+      throwsException,
+    );
+  });
+
   test('无效私钥文件抛出异常', () async {
     final packager = DeploymentPackager();
     expect(
@@ -338,8 +363,7 @@ void main() {
         name: 'test',
         version: '1.0.0',
         signer: 'test',
-        privateKeyPath:
-            '$tempDir${Platform.pathSeparator}nonexistent.pem',
+        privateKeyPath: '$tempDir${Platform.pathSeparator}nonexistent.pem',
         outputDir: outputDir,
       ),
       throwsException,

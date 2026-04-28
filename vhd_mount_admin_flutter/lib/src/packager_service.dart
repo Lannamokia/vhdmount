@@ -56,6 +56,11 @@ class DeploymentPackager {
           !await File(installScriptPath).exists()) {
         throw Exception('software-deploy 类型必须提供 install.ps1');
       }
+      if (uninstallScriptPath == null ||
+          uninstallScriptPath.isEmpty ||
+          !await File(uninstallScriptPath).exists()) {
+        throw Exception('software-deploy 类型必须提供 uninstall.ps1');
+      }
     }
     if (isFileDeploy) {
       if (targetPath == null || targetPath.trim().isEmpty) {
@@ -83,13 +88,15 @@ class DeploymentPackager {
 
     try {
       // 3. 复制文件负载
-      // software-deploy: 平铺到 staging 根目录,与 install.ps1 同级
+      // software-deploy: 负载与 install/uninstall 脚本平铺到 staging 根目录
       // file-deploy: 复制到 staging/payload/ 子目录,机台端按此约定查找
       final payloadFiles = <File>[];
       if (payloadDir != null &&
           payloadDir.isNotEmpty &&
           await Directory(payloadDir).exists()) {
-        await for (final entity in Directory(payloadDir).list(recursive: true)) {
+        await for (final entity in Directory(
+          payloadDir,
+        ).list(recursive: true)) {
           if (entity is File) payloadFiles.add(entity);
         }
       }
@@ -122,15 +129,10 @@ class DeploymentPackager {
             '${stagingDir.path}${Platform.pathSeparator}install.ps1';
         await File(installScriptPath).copy(destPath);
       }
-      if (isSoftwareDeploy &&
-          uninstallScriptPath != null &&
-          uninstallScriptPath.isNotEmpty) {
-        final uninstallFile = File(uninstallScriptPath);
-        if (await uninstallFile.exists()) {
-          final destPath =
-              '${stagingDir.path}${Platform.pathSeparator}uninstall.ps1';
-          await uninstallFile.copy(destPath);
-        }
+      if (isSoftwareDeploy && uninstallScriptPath != null) {
+        final destPath =
+            '${stagingDir.path}${Platform.pathSeparator}uninstall.ps1';
+        await File(uninstallScriptPath).copy(destPath);
       }
 
       // 5. 生成 deploy.json 元数据
@@ -145,6 +147,7 @@ class DeploymentPackager {
         if (trimmedTargetPath.isNotEmpty) 'targetPath': trimmedTargetPath,
         if (requiresAdmin) 'requiresAdmin': true,
         if (isSoftwareDeploy) 'installScript': 'install.ps1',
+        if (isSoftwareDeploy) 'uninstallScript': 'uninstall.ps1',
       };
       final manifestJson = const JsonEncoder.withIndent('  ').convert(manifest);
       final manifestPath =
@@ -154,10 +157,8 @@ class DeploymentPackager {
       // 6. 打包成 ZIP
       report(0.70, '打包 ZIP...');
       final safeName = _sanitizeFileName('$name-$version');
-      final zipPath =
-          '$outputDir${Platform.pathSeparator}$safeName.zip';
-      final sigPath =
-          '$outputDir${Platform.pathSeparator}$safeName.zip.sig';
+      final zipPath = '$outputDir${Platform.pathSeparator}$safeName.zip';
+      final sigPath = '$outputDir${Platform.pathSeparator}$safeName.zip.sig';
 
       await Directory(outputDir).create(recursive: true);
       if (await File(zipPath).exists()) {
@@ -183,14 +184,20 @@ class DeploymentPackager {
       final privateKey = _parsePkcs8PrivateKey(privateKeyBytes);
       final zipData = await File(zipPath).readAsBytes();
       final signature = _signPssSha256(Uint8List.fromList(zipData), privateKey);
-      await File(sigPath).writeAsString(base64Encode(signature), encoding: utf8);
+      await File(
+        sigPath,
+      ).writeAsString(base64Encode(signature), encoding: utf8);
 
       // 8. 输出
       report(0.95, '写入输出文件...');
       final zipSize = await File(zipPath).length();
 
       report(1.0, '完成');
-      return PackagerResult(zipPath: zipPath, sigPath: sigPath, zipSize: zipSize);
+      return PackagerResult(
+        zipPath: zipPath,
+        sigPath: sigPath,
+        zipSize: zipSize,
+      );
     } finally {
       try {
         if (await stagingDir.exists()) {
@@ -232,8 +239,7 @@ class DeploymentPackager {
     final rsaSeq = rsaParser.nextObject() as ASN1Sequence;
 
     final modulus = (rsaSeq.elements![1] as ASN1Integer).integer!;
-    final privateExponent =
-        (rsaSeq.elements![3] as ASN1Integer).integer!;
+    final privateExponent = (rsaSeq.elements![3] as ASN1Integer).integer!;
     final p = (rsaSeq.elements![4] as ASN1Integer).integer!;
     final q = (rsaSeq.elements![5] as ASN1Integer).integer!;
 

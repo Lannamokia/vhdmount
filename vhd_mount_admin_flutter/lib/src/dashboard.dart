@@ -95,13 +95,17 @@ class DashboardScreen extends StatelessWidget {
       builder: (context, constraints) {
         final mobile = constraints.maxWidth < 720;
         final compact =
-            mobile || constraints.maxWidth < 1100 || constraints.maxHeight < 720;
+            mobile ||
+            constraints.maxWidth < 1100 ||
+            constraints.maxHeight < 720;
         final extendBodyForBottomNav = mobile && compact;
         final showOverviewCaptions = !mobile;
         final overviewCards = <Widget>[
           OverviewStatCard(
             label: '数据库',
-            value: controller.serverStatus?.databaseReady == true ? '已连接' : '异常',
+            value: controller.serverStatus?.databaseReady == true
+                ? '已连接'
+                : '异常',
             icon: Icons.storage_rounded,
             color: controller.serverStatus?.databaseReady == true
                 ? AppPalette.mint
@@ -139,22 +143,10 @@ class DashboardScreen extends StatelessWidget {
             onOpenAuditForMachine: openAuditForMachine,
             embedInParentScroll: mobile,
           ),
-          MachineLogsView(
-            controller: controller,
-            embedInParentScroll: mobile,
-          ),
-          CertificatesView(
-            controller: controller,
-            embedInParentScroll: mobile,
-          ),
-          AuditView(
-            controller: controller,
-            embedInParentScroll: mobile,
-          ),
-          SettingsView(
-            controller: controller,
-            embedInParentScroll: mobile,
-          ),
+          MachineLogsView(controller: controller, embedInParentScroll: mobile),
+          CertificatesView(controller: controller, embedInParentScroll: mobile),
+          AuditView(controller: controller, embedInParentScroll: mobile),
+          SettingsView(controller: controller, embedInParentScroll: mobile),
           DeploymentsView(
             key: const Key('deployments_view'),
             controller: controller,
@@ -436,9 +428,7 @@ class MachinesView extends StatelessWidget {
                             machine.keyType == null
                                 ? '尚未提交注册密钥'
                                 : '密钥类型：${machine.keyType}',
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodyMedium
+                            style: Theme.of(context).textTheme.bodyMedium
                                 ?.copyWith(color: AppPalette.muted),
                           ),
                         ],
@@ -446,7 +436,9 @@ class MachinesView extends StatelessWidget {
                     ),
                     StatusChip(
                       label: machine.approved ? '已审批' : '待审批',
-                      color: machine.approved ? AppPalette.mint : AppPalette.sun,
+                      color: machine.approved
+                          ? AppPalette.mint
+                          : AppPalette.sun,
                     ),
                   ],
                 ),
@@ -503,7 +495,9 @@ class MachinesView extends StatelessWidget {
                           }
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
-                              content: Text(machine.approved ? '已取消审批。' : '已审批通过。'),
+                              content: Text(
+                                machine.approved ? '已取消审批。' : '已审批通过。',
+                              ),
                             ),
                           );
                         } catch (error) {
@@ -529,7 +523,9 @@ class MachinesView extends StatelessWidget {
                           }
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
-                              content: Text(machine.protectedState ? '已关闭保护。' : '已开启保护。'),
+                              content: Text(
+                                machine.protectedState ? '已关闭保护。' : '已开启保护。',
+                              ),
                             ),
                           );
                         } catch (error) {
@@ -546,7 +542,9 @@ class MachinesView extends StatelessWidget {
                     OutlinedButton(
                       onPressed: () async {
                         try {
-                          await controller.resetMachineRegistration(machine.machineId);
+                          await controller.resetMachineRegistration(
+                            machine.machineId,
+                          );
                         } catch (error) {
                           if (!context.mounted) {
                             return;
@@ -619,8 +617,9 @@ class MachinesView extends StatelessWidget {
                     ),
                     OutlinedButton(
                       onPressed: () async {
-                        final initialValue = machine.logRetentionActiveDaysOverride
-                            ?.toString() ??
+                        final initialValue =
+                            machine.logRetentionActiveDaysOverride
+                                ?.toString() ??
                             '';
                         final value = await showSingleInputDialog(
                           context,
@@ -701,10 +700,11 @@ class MachinesView extends StatelessWidget {
                           return;
                         }
                         try {
-                          final password = await controller.readPlainEvhdPassword(
-                            machine.machineId,
-                            reason.trim(),
-                          );
+                          final password = await controller
+                              .readPlainEvhdPassword(
+                                machine.machineId,
+                                reason.trim(),
+                              );
                           if (!context.mounted) {
                             return;
                           }
@@ -750,7 +750,9 @@ class MachinesView extends StatelessWidget {
                             return;
                           }
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('机台 ${machine.machineId} 已删除。')),
+                            SnackBar(
+                              content: Text('机台 ${machine.machineId} 已删除。'),
+                            ),
                           );
                         } catch (error) {
                           if (!context.mounted) {
@@ -821,11 +823,10 @@ class MachinesView extends StatelessWidget {
         const SizedBox(height: 16),
         if (controller.machines.isEmpty)
           if (embedInParentScroll) emptyState else Expanded(child: emptyState)
+        else if (embedInParentScroll)
+          machinesList
         else
-          if (embedInParentScroll)
-            machinesList
-          else
-            Expanded(child: machinesList),
+          Expanded(child: machinesList),
       ],
     );
   }
@@ -889,9 +890,7 @@ class CertificatesView extends StatelessWidget {
                           const SizedBox(height: 4),
                           Text(
                             certificate.subject,
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodyMedium
+                            style: Theme.of(context).textTheme.bodyMedium
                                 ?.copyWith(color: AppPalette.muted),
                           ),
                         ],
@@ -918,7 +917,9 @@ class CertificatesView extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
                 Text('Fingerprint: ${certificate.fingerprint256}'),
-                Text('Valid: ${certificate.validFrom} -> ${certificate.validTo}'),
+                Text(
+                  'Valid: ${certificate.validFrom} -> ${certificate.validTo}',
+                ),
               ],
             ),
           ),
@@ -989,11 +990,10 @@ class CertificatesView extends StatelessWidget {
           )
         else if (controller.certificates.isEmpty)
           if (embedInParentScroll) emptyState else Expanded(child: emptyState)
+        else if (embedInParentScroll)
+          certificatesList
         else
-          if (embedInParentScroll)
-            certificatesList
-          else
-            Expanded(child: certificatesList),
+          Expanded(child: certificatesList),
       ],
     );
   }
@@ -1202,7 +1202,9 @@ class _AuditViewState extends State<AuditView> {
                               children: <Widget>[
                                 Text(
                                   presentation.title,
-                                  style: Theme.of(context).textTheme.titleMedium,
+                                  style: Theme.of(
+                                    context,
+                                  ).textTheme.titleMedium,
                                 ),
                                 const SizedBox(height: 6),
                                 Text(
@@ -1215,7 +1217,10 @@ class _AuditViewState extends State<AuditView> {
                         ],
                       ),
                       const SizedBox(height: 10),
-                      Text('时间：${entry.localizedTimestamp}', style: Theme.of(context).textTheme.bodyMedium),
+                      Text(
+                        '时间：${entry.localizedTimestamp}',
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
                       const SizedBox(height: 2),
                       Text(
                         '操作主体：${entry.localizedActor} · 结果：${entry.localizedResult} · 来源：${entry.normalizedIp}',
@@ -1223,10 +1228,16 @@ class _AuditViewState extends State<AuditView> {
                       ),
                       if (entry.machineId != null) ...<Widget>[
                         const SizedBox(height: 2),
-                        Text('机台：${entry.machineId}', style: Theme.of(context).textTheme.bodyMedium),
+                        Text(
+                          '机台：${entry.machineId}',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
                       ],
                       const SizedBox(height: 2),
-                      Text('接口：${entry.displayPath}', style: Theme.of(context).textTheme.bodyMedium),
+                      Text(
+                        '接口：${entry.displayPath}',
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
                       const SizedBox(height: 2),
                       Text(
                         '事件键：${entry.type.isEmpty ? 'unknown' : entry.type}',
@@ -1378,9 +1389,10 @@ class _SettingsViewState extends State<SettingsView> {
       text: widget.controller.serverStatus?.defaultVhdKeyword ?? 'SDEZ',
     );
     _logRetentionDaysController = TextEditingController(
-      text: (widget.controller.logRetentionSettings?.defaultRetentionActiveDays ??
-              7)
-          .toString(),
+      text:
+          (widget.controller.logRetentionSettings?.defaultRetentionActiveDays ??
+                  7)
+              .toString(),
     );
     _logInspectionHourController = TextEditingController(
       text: (widget.controller.logRetentionSettings?.dailyInspectionHour ?? 3)
@@ -1523,12 +1535,16 @@ class _SettingsViewState extends State<SettingsView> {
                           if (!context.mounted) return;
                           if (!success) {
                             ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('无法打开系统验证器，请使用扫码或手动绑定。')),
+                              const SnackBar(
+                                content: Text('无法打开系统验证器，请使用扫码或手动绑定。'),
+                              ),
                             );
                           }
                         },
                         icon: const Icon(Icons.open_in_new_rounded),
-                        label: Text(Platform.isIOS ? '绑定到 iCloud 密码' : '绑定到验证器'),
+                        label: Text(
+                          Platform.isIOS ? '绑定到 iCloud 密码' : '绑定到验证器',
+                        ),
                       )
                     else
                       Text(
@@ -1582,339 +1598,293 @@ class _SettingsViewState extends State<SettingsView> {
     final logRetention = widget.controller.logRetentionSettings;
     final rotationPreparation = widget.controller.otpRotationPreparation;
     final children = <Widget>[
-        const PageHeader(
-          eyebrow: 'Security Settings',
-          title: '服务设置',
-          subtitle: '调整默认启动关键词、OTP 绑定与管理员密码。',
+      const PageHeader(
+        eyebrow: 'Security Settings',
+        title: '服务设置',
+        subtitle: '调整默认启动关键词、OTP 绑定与管理员密码。',
+      ),
+      const SizedBox(height: 18),
+      SectionPanel(
+        title: '日志保留策略',
+        subtitle: '按活动日志日配置全局默认值与每日巡检时间。',
+        icon: Icons.schedule_send_rounded,
+        color: AppPalette.sun,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            const InfoPanel(
+              title: '活动日志日说明',
+              body: Text(
+                '这里的保留单位不是自然日，而是“有日志写入的活动日”。机台长时间离线时，不会因为自然时间流逝而提前清理旧日志。',
+              ),
+              icon: Icons.calendar_month_rounded,
+              color: AppPalette.sun,
+            ),
+            const SizedBox(height: 12),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final narrow = constraints.maxWidth < 460;
+                final retentionField = TextField(
+                  controller: _logRetentionDaysController,
+                  decoration: const InputDecoration(labelText: '默认保留活动日数'),
+                );
+                final hourField = TextField(
+                  controller: _logInspectionHourController,
+                  decoration: const InputDecoration(labelText: '每日巡检小时'),
+                );
+                final minuteField = TextField(
+                  controller: _logInspectionMinuteController,
+                  decoration: const InputDecoration(labelText: '每日巡检分钟'),
+                );
+                if (narrow) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      retentionField,
+                      const SizedBox(height: 12),
+                      hourField,
+                      const SizedBox(height: 12),
+                      minuteField,
+                    ],
+                  );
+                }
+                return Row(
+                  children: <Widget>[
+                    Expanded(child: retentionField),
+                    const SizedBox(width: 12),
+                    Expanded(child: hourField),
+                    const SizedBox(width: 12),
+                    Expanded(child: minuteField),
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _logTimezoneController,
+              decoration: const InputDecoration(
+                labelText: '服务端时区',
+                hintText: 'UTC 或 Asia/Shanghai',
+                helperText:
+                    '仅支持 IANA 时区，不支持 China Standard Time 这类 Windows 时区名。',
+              ),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: () async {
+                final retentionDays = int.tryParse(
+                  _logRetentionDaysController.text.trim(),
+                );
+                final inspectionHour = int.tryParse(
+                  _logInspectionHourController.text.trim(),
+                );
+                final inspectionMinute = int.tryParse(
+                  _logInspectionMinuteController.text.trim(),
+                );
+                final timezone = _logTimezoneController.text.trim();
+
+                if (retentionDays == null || retentionDays <= 0) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('默认保留活动日数必须是正整数。')),
+                  );
+                  return;
+                }
+                if (inspectionHour == null ||
+                    inspectionHour < 0 ||
+                    inspectionHour > 23) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('每日巡检小时必须在 0-23 之间。')),
+                  );
+                  return;
+                }
+                if (inspectionMinute == null ||
+                    inspectionMinute < 0 ||
+                    inspectionMinute > 59) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('每日巡检分钟必须在 0-59 之间。')),
+                  );
+                  return;
+                }
+                if (timezone.isEmpty) {
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(const SnackBar(content: Text('服务端时区不能为空。')));
+                  return;
+                }
+                if (!_isLikelyIanaTimeZone(timezone)) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('服务端时区必须是 IANA 时区，例如 UTC 或 Asia/Shanghai。'),
+                    ),
+                  );
+                  return;
+                }
+
+                try {
+                  await widget.controller.updateLogRetentionSettings(
+                    defaultRetentionActiveDays: retentionDays,
+                    dailyInspectionHour: inspectionHour,
+                    dailyInspectionMinute: inspectionMinute,
+                    timezone: timezone,
+                  );
+                  if (!context.mounted) {
+                    return;
+                  }
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(const SnackBar(content: Text('日志保留策略已更新。')));
+                } catch (error) {
+                  if (!context.mounted) {
+                    return;
+                  }
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(SnackBar(content: Text(describeError(error))));
+                }
+              },
+              icon: const Icon(Icons.save_rounded),
+              label: const Text('保存日志保留策略'),
+            ),
+            if (logRetention != null) ...<Widget>[
+              const SizedBox(height: 12),
+              Text('当前默认保留：${logRetention.defaultRetentionActiveDays} 个活动日志日'),
+              Text(
+                '当前巡检时间：${logRetention.inspectionScheduleLabel} · 时区 ${logRetention.timezone}',
+              ),
+              Text('最近一次巡检：${logRetention.localizedLastInspectionAt}'),
+            ],
+          ],
         ),
-        const SizedBox(height: 18),
-        SectionPanel(
-          title: '日志保留策略',
-          subtitle: '按活动日志日配置全局默认值与每日巡检时间。',
-          icon: Icons.schedule_send_rounded,
-          color: AppPalette.sun,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
+      ),
+      const SizedBox(height: 16),
+      SectionPanel(
+        title: '服务设置',
+        subtitle: '更新默认启动关键词。',
+        icon: Icons.tune_rounded,
+        color: AppPalette.sky,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            TextField(
+              controller: _defaultVhdController,
+              decoration: const InputDecoration(labelText: '默认启动关键词'),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: () async {
+                try {
+                  await widget.controller.updateDefaultVhd(
+                    _defaultVhdController.text.trim().toUpperCase(),
+                  );
+                } catch (error) {
+                  if (!context.mounted) {
+                    return;
+                  }
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(SnackBar(content: Text(describeError(error))));
+                }
+              },
+              icon: const Icon(Icons.save_rounded),
+              label: const Text('保存默认启动关键词'),
+            ),
+            if (status != null) ...<Widget>[
+              const SizedBox(height: 12),
+              Text('数据库状态: ${status.databaseReady ? '正常' : '异常'}'),
+              Text('可信注册证书数量: ${status.trustedRegistrationCertificateCount}'),
+            ],
+          ],
+        ),
+      ),
+      const SizedBox(height: 16),
+      SectionPanel(
+        title: '更换 OTP 绑定密钥',
+        subtitle: '先验证旧 OTP，再导入并验证新的 OTP 绑定密钥。',
+        icon: Icons.qr_code_2_rounded,
+        color: AppPalette.coral,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            if (rotationPreparation == null)
               const InfoPanel(
-                title: '活动日志日说明',
+                title: '流程说明',
                 body: Text(
-                  '这里的保留单位不是自然日，而是“有日志写入的活动日”。机台长时间离线时，不会因为自然时间流逝而提前清理旧日志。',
+                  '提交旧 OTP 验证码后，系统会生成新的绑定密钥。只有在你使用新密钥生成的 OTP 验证成功后，旧绑定才会被替换。',
                 ),
-                icon: Icons.calendar_month_rounded,
+                icon: Icons.swap_horiz_rounded,
                 color: AppPalette.sun,
-              ),
-              const SizedBox(height: 12),
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  final narrow = constraints.maxWidth < 460;
-                  final retentionField = TextField(
-                    controller: _logRetentionDaysController,
-                    decoration: const InputDecoration(
-                      labelText: '默认保留活动日数',
-                    ),
-                  );
-                  final hourField = TextField(
-                    controller: _logInspectionHourController,
-                    decoration: const InputDecoration(labelText: '每日巡检小时'),
-                  );
-                  final minuteField = TextField(
-                    controller: _logInspectionMinuteController,
-                    decoration: const InputDecoration(labelText: '每日巡检分钟'),
-                  );
-                  if (narrow) {
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: <Widget>[
-                        retentionField,
-                        const SizedBox(height: 12),
-                        hourField,
-                        const SizedBox(height: 12),
-                        minuteField,
-                      ],
-                    );
-                  }
-                  return Row(
+              )
+            else
+              _buildOtpRotationImportPanel(rotationPreparation),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _otpRotateCurrentCodeController,
+              decoration: const InputDecoration(labelText: '旧 OTP 验证码'),
+            ),
+            const SizedBox(height: 12),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final narrow = constraints.maxWidth < 460;
+                final issuerField = TextField(
+                  controller: _otpRotateIssuerController,
+                  decoration: const InputDecoration(
+                    labelText: '新的 OTP Issuer（可选）',
+                  ),
+                );
+                final accountField = TextField(
+                  controller: _otpRotateAccountController,
+                  decoration: const InputDecoration(
+                    labelText: '新的 OTP Account（可选）',
+                  ),
+                );
+                if (narrow) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: <Widget>[
-                      Expanded(child: retentionField),
-                      const SizedBox(width: 12),
-                      Expanded(child: hourField),
-                      const SizedBox(width: 12),
-                      Expanded(child: minuteField),
+                      issuerField,
+                      const SizedBox(height: 12),
+                      accountField,
                     ],
                   );
-                },
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _logTimezoneController,
-                decoration: const InputDecoration(
-                  labelText: '服务端时区',
-                  hintText: 'UTC 或 Asia/Shanghai',
-                  helperText: '仅支持 IANA 时区，不支持 China Standard Time 这类 Windows 时区名。',
-                ),
-              ),
-              const SizedBox(height: 12),
-              FilledButton.icon(
-                onPressed: () async {
-                  final retentionDays = int.tryParse(
-                    _logRetentionDaysController.text.trim(),
-                  );
-                  final inspectionHour = int.tryParse(
-                    _logInspectionHourController.text.trim(),
-                  );
-                  final inspectionMinute = int.tryParse(
-                    _logInspectionMinuteController.text.trim(),
-                  );
-                  final timezone = _logTimezoneController.text.trim();
-
-                  if (retentionDays == null || retentionDays <= 0) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('默认保留活动日数必须是正整数。')),
-                    );
-                    return;
-                  }
-                  if (inspectionHour == null || inspectionHour < 0 || inspectionHour > 23) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('每日巡检小时必须在 0-23 之间。')),
-                    );
-                    return;
-                  }
-                  if (inspectionMinute == null || inspectionMinute < 0 || inspectionMinute > 59) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('每日巡检分钟必须在 0-59 之间。')),
-                    );
-                    return;
-                  }
-                  if (timezone.isEmpty) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('服务端时区不能为空。')),
-                    );
-                    return;
-                  }
-                  if (!_isLikelyIanaTimeZone(timezone)) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('服务端时区必须是 IANA 时区，例如 UTC 或 Asia/Shanghai。'),
-                      ),
-                    );
-                    return;
-                  }
-
-                  try {
-                    await widget.controller.updateLogRetentionSettings(
-                      defaultRetentionActiveDays: retentionDays,
-                      dailyInspectionHour: inspectionHour,
-                      dailyInspectionMinute: inspectionMinute,
-                      timezone: timezone,
-                    );
-                    if (!context.mounted) {
-                      return;
-                    }
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('日志保留策略已更新。')),
-                    );
-                  } catch (error) {
-                    if (!context.mounted) {
-                      return;
-                    }
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(describeError(error))),
-                    );
-                  }
-                },
-                icon: const Icon(Icons.save_rounded),
-                label: const Text('保存日志保留策略'),
-              ),
-              if (logRetention != null) ...<Widget>[
-                const SizedBox(height: 12),
-                Text('当前默认保留：${logRetention.defaultRetentionActiveDays} 个活动日志日'),
-                Text('当前巡检时间：${logRetention.inspectionScheduleLabel} · 时区 ${logRetention.timezone}'),
-                Text('最近一次巡检：${logRetention.localizedLastInspectionAt}'),
-              ],
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        SectionPanel(
-          title: '服务设置',
-          subtitle: '更新默认启动关键词。',
-          icon: Icons.tune_rounded,
-          color: AppPalette.sky,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              TextField(
-                controller: _defaultVhdController,
-                decoration: const InputDecoration(labelText: '默认启动关键词'),
-              ),
-              const SizedBox(height: 12),
-              FilledButton.icon(
-                onPressed: () async {
-                  try {
-                    await widget.controller.updateDefaultVhd(
-                      _defaultVhdController.text.trim().toUpperCase(),
-                    );
-                  } catch (error) {
-                    if (!context.mounted) {
-                      return;
-                    }
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(describeError(error))),
-                    );
-                  }
-                },
-                icon: const Icon(Icons.save_rounded),
-                label: const Text('保存默认启动关键词'),
-              ),
-              if (status != null) ...<Widget>[
-                const SizedBox(height: 12),
-                Text('数据库状态: ${status.databaseReady ? '正常' : '异常'}'),
-                Text('可信注册证书数量: ${status.trustedRegistrationCertificateCount}'),
-              ],
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        SectionPanel(
-          title: '更换 OTP 绑定密钥',
-          subtitle: '先验证旧 OTP，再导入并验证新的 OTP 绑定密钥。',
-          icon: Icons.qr_code_2_rounded,
-          color: AppPalette.coral,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              if (rotationPreparation == null)
-                const InfoPanel(
-                  title: '流程说明',
-                  body: Text(
-                    '提交旧 OTP 验证码后，系统会生成新的绑定密钥。只有在你使用新密钥生成的 OTP 验证成功后，旧绑定才会被替换。',
-                  ),
-                  icon: Icons.swap_horiz_rounded,
-                  color: AppPalette.sun,
-                )
-              else
-                _buildOtpRotationImportPanel(rotationPreparation),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _otpRotateCurrentCodeController,
-                decoration: const InputDecoration(labelText: '旧 OTP 验证码'),
-              ),
-              const SizedBox(height: 12),
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  final narrow = constraints.maxWidth < 460;
-                  final issuerField = TextField(
-                    controller: _otpRotateIssuerController,
-                    decoration: const InputDecoration(
-                      labelText: '新的 OTP Issuer（可选）',
-                    ),
-                  );
-                  final accountField = TextField(
-                    controller: _otpRotateAccountController,
-                    decoration: const InputDecoration(
-                      labelText: '新的 OTP Account（可选）',
-                    ),
-                  );
-                  if (narrow) {
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: <Widget>[
-                        issuerField,
-                        const SizedBox(height: 12),
-                        accountField,
-                      ],
-                    );
-                  }
-                  return Row(
-                    children: <Widget>[
-                      Expanded(child: issuerField),
-                      const SizedBox(width: 12),
-                      Expanded(child: accountField),
-                    ],
-                  );
-                },
-              ),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                children: <Widget>[
-                  FilledButton.icon(
-                    onPressed: () async {
-                      final currentCode = _otpRotateCurrentCodeController.text
-                          .trim();
-                      if (currentCode.isEmpty) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('请输入旧 OTP 验证码。')),
-                        );
-                        return;
-                      }
-                      try {
-                        await widget.controller.prepareOtpRotation(
-                          currentCode: currentCode,
-                          issuer: _otpRotateIssuerController.text.trim(),
-                          accountName: _otpRotateAccountController.text.trim(),
-                        );
-                        _otpRotateNewCodeController.clear();
-                        if (!context.mounted) {
-                          return;
-                        }
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('新的 OTP 绑定密钥已生成，请导入后验证新验证码。'),
-                          ),
-                        );
-                      } catch (error) {
-                        if (!context.mounted) {
-                          return;
-                        }
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text(describeError(error))),
-                        );
-                      }
-                    },
-                    icon: const Icon(Icons.qr_code_2_rounded),
-                    label: Text(
-                      rotationPreparation == null ? '生成新的绑定密钥' : '重新生成绑定密钥',
-                    ),
-                  ),
-                  if (rotationPreparation != null)
-                    TextButton.icon(
-                      onPressed: () {
-                        widget.controller.clearOtpRotationPreparation();
-                        _otpRotateNewCodeController.clear();
-                      },
-                      icon: const Icon(Icons.close_rounded),
-                      label: const Text('取消本次更换'),
-                    ),
-                ],
-              ),
-              if (rotationPreparation != null) ...<Widget>[
-                const SizedBox(height: 16),
-                TextField(
-                  controller: _otpRotateNewCodeController,
-                  decoration: const InputDecoration(labelText: '新 OTP 验证码'),
-                ),
-                const SizedBox(height: 12),
-                FilledButton.tonalIcon(
+                }
+                return Row(
+                  children: <Widget>[
+                    Expanded(child: issuerField),
+                    const SizedBox(width: 12),
+                    Expanded(child: accountField),
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: <Widget>[
+                FilledButton.icon(
                   onPressed: () async {
-                    final newCode = _otpRotateNewCodeController.text.trim();
-                    if (newCode.isEmpty) {
+                    final currentCode = _otpRotateCurrentCodeController.text
+                        .trim();
+                    if (currentCode.isEmpty) {
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('请输入新的 OTP 验证码。')),
+                        const SnackBar(content: Text('请输入旧 OTP 验证码。')),
                       );
                       return;
                     }
                     try {
-                      await widget.controller.completeOtpRotation(newCode);
-                      _otpRotateCurrentCodeController.clear();
+                      await widget.controller.prepareOtpRotation(
+                        currentCode: currentCode,
+                        issuer: _otpRotateIssuerController.text.trim(),
+                        accountName: _otpRotateAccountController.text.trim(),
+                      );
                       _otpRotateNewCodeController.clear();
                       if (!context.mounted) {
                         return;
                       }
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('OTP 绑定密钥已更换。')),
+                        const SnackBar(
+                          content: Text('新的 OTP 绑定密钥已生成，请导入后验证新验证码。'),
+                        ),
                       );
                     } catch (error) {
                       if (!context.mounted) {
@@ -1925,59 +1895,48 @@ class _SettingsViewState extends State<SettingsView> {
                       );
                     }
                   },
-                  icon: const Icon(Icons.verified_rounded),
-                  label: const Text('验证新绑定并替换旧绑定'),
+                  icon: const Icon(Icons.qr_code_2_rounded),
+                  label: Text(
+                    rotationPreparation == null ? '生成新的绑定密钥' : '重新生成绑定密钥',
+                  ),
                 ),
+                if (rotationPreparation != null)
+                  TextButton.icon(
+                    onPressed: () {
+                      widget.controller.clearOtpRotationPreparation();
+                      _otpRotateNewCodeController.clear();
+                    },
+                    icon: const Icon(Icons.close_rounded),
+                    label: const Text('取消本次更换'),
+                  ),
               ],
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        SectionPanel(
-          title: '修改管理员密码',
-          subtitle: '服务端要求新密码长度至少 12 位。',
-          icon: Icons.password_rounded,
-          color: AppPalette.mint,
-          child: Column(
-            children: <Widget>[
-              buildSecureTextField(
-                controller: _currentPasswordController,
-                autofillHints: const <String>[AutofillHints.password],
-                decoration: const InputDecoration(labelText: '当前密码'),
-              ),
-              const SizedBox(height: 12),
-              buildSecureTextField(
-                controller: _newPasswordController,
-                autofillHints: const <String>[AutofillHints.newPassword],
-                decoration: const InputDecoration(labelText: '新密码'),
-              ),
-              const SizedBox(height: 12),
-              buildSecureTextField(
-                controller: _confirmPasswordController,
-                autofillHints: const <String>[AutofillHints.newPassword],
-                decoration: const InputDecoration(labelText: '确认新密码'),
+            ),
+            if (rotationPreparation != null) ...<Widget>[
+              const SizedBox(height: 16),
+              TextField(
+                controller: _otpRotateNewCodeController,
+                decoration: const InputDecoration(labelText: '新 OTP 验证码'),
               ),
               const SizedBox(height: 12),
               FilledButton.tonalIcon(
                 onPressed: () async {
-                  if (_newPasswordController.text !=
-                      _confirmPasswordController.text) {
+                  final newCode = _otpRotateNewCodeController.text.trim();
+                  if (newCode.isEmpty) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('两次输入的新密码不一致。')),
+                      const SnackBar(content: Text('请输入新的 OTP 验证码。')),
                     );
                     return;
                   }
                   try {
-                    await widget.controller.changePassword(
-                      _currentPasswordController.text,
-                      _newPasswordController.text,
-                    );
+                    await widget.controller.completeOtpRotation(newCode);
+                    _otpRotateCurrentCodeController.clear();
+                    _otpRotateNewCodeController.clear();
                     if (!context.mounted) {
                       return;
                     }
-                    ScaffoldMessenger.of(
-                      context,
-                    ).showSnackBar(const SnackBar(content: Text('管理员密码已更新。')));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('OTP 绑定密钥已更换。')),
+                    );
                   } catch (error) {
                     if (!context.mounted) {
                       return;
@@ -1987,13 +1946,75 @@ class _SettingsViewState extends State<SettingsView> {
                     );
                   }
                 },
-                icon: const Icon(Icons.password_rounded),
-                label: const Text('更新密码'),
+                icon: const Icon(Icons.verified_rounded),
+                label: const Text('验证新绑定并替换旧绑定'),
               ),
             ],
-          ),
+          ],
         ),
-      ];
+      ),
+      const SizedBox(height: 16),
+      SectionPanel(
+        title: '修改管理员密码',
+        subtitle: '服务端要求新密码长度至少 12 位。',
+        icon: Icons.password_rounded,
+        color: AppPalette.mint,
+        child: Column(
+          children: <Widget>[
+            buildSecureTextField(
+              controller: _currentPasswordController,
+              autofillHints: const <String>[AutofillHints.password],
+              decoration: const InputDecoration(labelText: '当前密码'),
+            ),
+            const SizedBox(height: 12),
+            buildSecureTextField(
+              controller: _newPasswordController,
+              autofillHints: const <String>[AutofillHints.newPassword],
+              decoration: const InputDecoration(labelText: '新密码'),
+            ),
+            const SizedBox(height: 12),
+            buildSecureTextField(
+              controller: _confirmPasswordController,
+              autofillHints: const <String>[AutofillHints.newPassword],
+              decoration: const InputDecoration(labelText: '确认新密码'),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.tonalIcon(
+              onPressed: () async {
+                if (_newPasswordController.text !=
+                    _confirmPasswordController.text) {
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(const SnackBar(content: Text('两次输入的新密码不一致。')));
+                  return;
+                }
+                try {
+                  await widget.controller.changePassword(
+                    _currentPasswordController.text,
+                    _newPasswordController.text,
+                  );
+                  if (!context.mounted) {
+                    return;
+                  }
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(const SnackBar(content: Text('管理员密码已更新。')));
+                } catch (error) {
+                  if (!context.mounted) {
+                    return;
+                  }
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(SnackBar(content: Text(describeError(error))));
+                }
+              },
+              icon: const Icon(Icons.password_rounded),
+              label: const Text('更新密码'),
+            ),
+          ],
+        ),
+      ),
+    ];
 
     if (widget.embedInParentScroll) {
       return Column(
@@ -2173,12 +2194,9 @@ class StatusChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.of(context).size.width;
-    final showLabel = screenWidth >= 360;
+    final compact = screenWidth < 360;
     return Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: showLabel ? 12 : 6,
-        vertical: 8,
-      ),
+      padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 12, vertical: 8),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.14),
         border: Border.all(color: color.withValues(alpha: 0.22)),
@@ -2192,17 +2210,21 @@ class StatusChip extends StatelessWidget {
             height: 8,
             decoration: BoxDecoration(color: color, shape: BoxShape.circle),
           ),
-          if (showLabel) ...<Widget>[
-            const SizedBox(width: 8),
-            Text(
+          const SizedBox(width: 8),
+          ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: compact ? 112 : 180),
+            child: Text(
               label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 fontFamily: _miSansFamily700,
                 color: color,
                 fontWeight: FontWeight.w700,
+                fontSize: compact ? 11 : 13,
               ),
             ),
-          ],
+          ),
         ],
       ),
     );
