@@ -212,8 +212,8 @@ init_embedded_db() {
         su-exec postgres initdb -D "$POSTGRES_DATA_DIR" --auth-local=trust --auth-host=md5
         
         # 配置PostgreSQL
-        echo "host all all 0.0.0.0/0 md5" >> "$POSTGRES_DATA_DIR/pg_hba.conf"
-        echo "listen_addresses = '*'" >> "$POSTGRES_DATA_DIR/postgresql.conf"
+        echo "host all all 127.0.0.1/32 md5" >> "$POSTGRES_DATA_DIR/pg_hba.conf"
+        echo "listen_addresses = 'localhost'" >> "$POSTGRES_DATA_DIR/postgresql.conf"
         echo "port = $DB_PORT" >> "$POSTGRES_DATA_DIR/postgresql.conf"
         echo "max_connections = 100" >> "$POSTGRES_DATA_DIR/postgresql.conf"
         echo "shared_buffers = 128MB" >> "$POSTGRES_DATA_DIR/postgresql.conf"

@@ -268,8 +268,8 @@ function buildDeploymentRoutes(options = {}) {
         const destPath = deploymentStore.getPackageFilePath(pkg.packageId);
         const sigDestPath = deploymentStore.getSignatureFilePath(pkg.packageId);
 
-        fs.writeFileSync(destPath, pkgFile.data);
-        fs.writeFileSync(sigDestPath, sigFile.data);
+        fs.writeFileSync(destPath, pkgFile.tempFilePath ? fs.readFileSync(pkgFile.tempFilePath) : pkgFile.data);
+        fs.writeFileSync(sigDestPath, sigFile.tempFilePath ? fs.readFileSync(sigFile.tempFilePath) : sigFile.data);
 
         runtime.writeAudit(req, {
             type: 'deployment.package.upload',

@@ -356,6 +356,8 @@ async function createApp(options = {}) {
     app.use(fileUpload({
         limits: { fileSize: 2 * 1024 * 1024 * 1024 }, // 2GB
         abortOnLimit: true,
+        useTempFiles: true,
+        tempFileDir: '/tmp/',
     }));
 
     const apiLimiter = rateLimit({
