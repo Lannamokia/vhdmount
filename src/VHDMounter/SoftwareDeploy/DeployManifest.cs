@@ -19,6 +19,7 @@ namespace VHDMounter.SoftwareDeploy
         public string createdAt { get; set; } = string.Empty;
         public string expiresAt { get; set; } = string.Empty;
         public string installScript { get; set; } = string.Empty;
+        public string uninstallScript { get; set; } = "uninstall.ps1";
         public bool requiresAdmin { get; set; }
         public DeployPreCheck preCheck { get; set; } = new();
 

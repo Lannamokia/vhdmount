@@ -13,25 +13,34 @@ namespace VHDMounter.SoftwareDeploy
 
     public static class DeployUninstaller
     {
-        public static UninstallResult UninstallSoftware(string extractDir, DeployManifest manifest)
+        public static UninstallResult UninstallSoftware(DeployRecord record)
         {
             var result = new UninstallResult();
 
-            string uninstallScript = Path.Combine(extractDir, "uninstall.ps1");
+            if (string.IsNullOrWhiteSpace(record.targetPath))
+            {
+                result.ErrorMessage = "software-deploy 缺少本地安装目录";
+                return result;
+            }
+
+            string uninstallScriptName = string.IsNullOrWhiteSpace(record.uninstallScript)
+                ? "uninstall.ps1"
+                : record.uninstallScript;
+            string uninstallScript = Path.Combine(record.targetPath, uninstallScriptName);
             if (!File.Exists(uninstallScript))
             {
                 result.ErrorMessage = "uninstall.ps1 不存在";
                 return result;
             }
 
-            string deployJsonPath = Path.Combine(extractDir, "deploy.json");
+            string deployJsonPath = Path.Combine(record.targetPath, "deploy.json");
             var psi = new ProcessStartInfo
             {
                 FileName = "powershell.exe",
                 Arguments = $"-ExecutionPolicy Bypass -File \"{uninstallScript}\" -DeployJson \"{deployJsonPath}\"",
                 UseShellExecute = true,
-                Verb = manifest.requiresAdmin ? "runas" : null,
-                WorkingDirectory = extractDir,
+                Verb = record.requiresAdmin ? "runas" : null,
+                WorkingDirectory = record.targetPath,
                 RedirectStandardOutput = false,
                 RedirectStandardError = false,
             };
@@ -49,6 +58,10 @@ namespace VHDMounter.SoftwareDeploy
                 if (!result.Success)
                 {
                     result.ErrorMessage = $"uninstall.ps1 退出码: {process.ExitCode}";
+                }
+                else
+                {
+                    TryDeleteDirectory(record.targetPath);
                 }
             }
             catch (Exception ex)
@@ -99,6 +112,22 @@ namespace VHDMounter.SoftwareDeploy
 
             result.Success = true;
             return result;
+        }
+
+        private static void TryDeleteDirectory(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
+            {
+                return;
+            }
+
+            try
+            {
+                Directory.Delete(path, true);
+            }
+            catch
+            {
+            }
         }
     }
 }

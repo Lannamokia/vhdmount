@@ -11,11 +11,45 @@ namespace VHDMounter.SoftwareDeploy
         public bool Success { get; set; }
         public string ErrorMessage { get; set; } = string.Empty;
         public int ExitCode { get; set; }
+        public string DeploymentPath { get; set; } = string.Empty;
     }
 
     public static class DeployExecutor
     {
         public const long MaxDeployPayloadBytes = 2L * 1024 * 1024 * 1024; // 2GB
+        public const string DefaultSoftwareDeployRoot = @"C:\SOFT";
+
+        public static string GetSoftwareDeployRoot()
+        {
+            var overrideRoot = Environment.GetEnvironmentVariable("VHDMOUNT_SOFTWARE_DEPLOY_ROOT");
+            return string.IsNullOrWhiteSpace(overrideRoot) ? DefaultSoftwareDeployRoot : overrideRoot.Trim();
+        }
+
+        public static string GetSoftwareDeployDirectory(string packageId)
+        {
+            return Path.Combine(GetSoftwareDeployRoot(), SanitizePackagePathSegment(packageId));
+        }
+
+        public static string PrepareSoftwareDeployDirectory(string extractDir, string packageId)
+        {
+            var deployRoot = GetSoftwareDeployRoot();
+            Directory.CreateDirectory(deployRoot);
+
+            var finalDir = GetSoftwareDeployDirectory(packageId);
+            var stagingDir = finalDir + ".staging";
+
+            SafeDeleteDirectory(stagingDir);
+            SafeDeleteDirectory(finalDir);
+
+            CopyDirectory(extractDir, stagingDir);
+            Directory.Move(stagingDir, finalDir);
+            return finalDir;
+        }
+
+        public static void CleanupSoftwareDeployDirectory(string deploymentPath)
+        {
+            SafeDeleteDirectory(deploymentPath);
+        }
 
         public static bool CheckDiskSpace(string path, long requiredMB)
         {
@@ -49,7 +83,7 @@ namespace VHDMounter.SoftwareDeploy
             return allStopped;
         }
 
-        public static DeployExecutionResult ExecuteSoftwareDeploy(string extractDir, DeployManifest manifest)
+        public static DeployExecutionResult ExecuteSoftwareDeploy(string extractDir, string packageId, DeployManifest manifest)
         {
             var result = new DeployExecutionResult();
 
@@ -81,15 +115,28 @@ namespace VHDMounter.SoftwareDeploy
                 }
             }
 
+            string deploymentPath;
+            try
+            {
+                deploymentPath = PrepareSoftwareDeployDirectory(extractDir, packageId);
+                result.DeploymentPath = deploymentPath;
+            }
+            catch (Exception ex)
+            {
+                result.ErrorMessage = $"准备 software-deploy 目录失败: {ex.Message}";
+                return result;
+            }
+
             // 执行 PowerShell
-            string deployJsonPath = Path.Combine(extractDir, "deploy.json");
+            string deployJsonPath = Path.Combine(deploymentPath, "deploy.json");
+            string executionScriptPath = Path.Combine(deploymentPath, manifest.installScript);
             var psi = new ProcessStartInfo
             {
                 FileName = "powershell.exe",
-                Arguments = $"-ExecutionPolicy Bypass -File \"{scriptPath}\" -DeployJson \"{deployJsonPath}\"",
+                Arguments = $"-ExecutionPolicy Bypass -File \"{executionScriptPath}\" -DeployJson \"{deployJsonPath}\"",
                 UseShellExecute = true,
                 Verb = manifest.requiresAdmin ? "runas" : null,
-                WorkingDirectory = extractDir,
+                WorkingDirectory = deploymentPath,
                 RedirectStandardOutput = false,
                 RedirectStandardError = false,
             };
@@ -156,25 +203,32 @@ namespace VHDMounter.SoftwareDeploy
             return result;
         }
 
-        public static DeployExecutionResult RollbackSoftwareDeploy(string extractDir, DeployManifest manifest)
+        public static DeployExecutionResult RollbackSoftwareDeploy(string deploymentPath, DeployManifest manifest)
         {
             var result = new DeployExecutionResult();
+            result.DeploymentPath = deploymentPath;
 
-            string uninstallScript = Path.Combine(extractDir, "uninstall.ps1");
+            if (string.IsNullOrWhiteSpace(deploymentPath) || !Directory.Exists(deploymentPath))
+            {
+                result.ErrorMessage = "software-deploy 目录不存在，无法回滚";
+                return result;
+            }
+
+            string uninstallScript = Path.Combine(deploymentPath, manifest.uninstallScript);
             if (!File.Exists(uninstallScript))
             {
                 result.ErrorMessage = "uninstall.ps1 不存在，无法回滚";
                 return result;
             }
 
-            string deployJsonPath = Path.Combine(extractDir, "deploy.json");
+            string deployJsonPath = Path.Combine(deploymentPath, "deploy.json");
             var psi = new ProcessStartInfo
             {
                 FileName = "powershell.exe",
                 Arguments = $"-ExecutionPolicy Bypass -File \"{uninstallScript}\" -DeployJson \"{deployJsonPath}\"",
                 UseShellExecute = true,
                 Verb = manifest.requiresAdmin ? "runas" : null,
-                WorkingDirectory = extractDir,
+                WorkingDirectory = deploymentPath,
                 RedirectStandardOutput = false,
                 RedirectStandardError = false,
             };
@@ -212,6 +266,30 @@ namespace VHDMounter.SoftwareDeploy
                 string destSubDir = Path.Combine(destDir, Path.GetFileName(subDir));
                 CopyDirectory(subDir, destSubDir);
             }
+        }
+
+        static void SafeDeleteDirectory(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
+            {
+                return;
+            }
+
+            try
+            {
+                Directory.Delete(path, true);
+            }
+            catch
+            {
+            }
+        }
+
+        static string SanitizePackagePathSegment(string packageId)
+        {
+            var invalidChars = Path.GetInvalidFileNameChars();
+            var sanitized = string.Concat((packageId ?? string.Empty).Select(ch =>
+                invalidChars.Contains(ch) ? '_' : ch));
+            return string.IsNullOrWhiteSpace(sanitized) ? "unknown-package" : sanitized;
         }
 
         static bool IsSystemPath(string path)

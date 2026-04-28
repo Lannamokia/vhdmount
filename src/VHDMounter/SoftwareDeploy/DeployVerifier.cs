@@ -111,10 +111,17 @@ namespace VHDMounter.SoftwareDeploy
             // 6. 校验脚本存在性（software-deploy 必须包含 install.ps1）
             if (manifest.IsSoftwareDeploy)
             {
-                string scriptPath = Path.Combine(extractDir, manifest.installScript);
-                if (string.IsNullOrWhiteSpace(manifest.installScript) || !File.Exists(scriptPath))
+                string installScriptPath = Path.Combine(extractDir, manifest.installScript);
+                string uninstallScriptPath = Path.Combine(extractDir, manifest.uninstallScript);
+                if (string.IsNullOrWhiteSpace(manifest.installScript) || !File.Exists(installScriptPath))
                 {
                     result.ErrorMessage = "software-deploy 包缺少 install.ps1";
+                    Cleanup(extractDir);
+                    return result;
+                }
+                if (string.IsNullOrWhiteSpace(manifest.uninstallScript) || !File.Exists(uninstallScriptPath))
+                {
+                    result.ErrorMessage = "software-deploy 包缺少 uninstall.ps1";
                     Cleanup(extractDir);
                     return result;
                 }

@@ -73,6 +73,10 @@ namespace VHDMounter.SoftwareDeploy
                     return "software-deploy 必须指定 installScript";
                 if (!IsValidScriptName(manifest.installScript))
                     return $"不合法的脚本名: {manifest.installScript}";
+                if (string.IsNullOrWhiteSpace(manifest.uninstallScript))
+                    return "software-deploy 必须指定 uninstallScript";
+                if (!IsValidScriptName(manifest.uninstallScript))
+                    return $"不合法的脚本名: {manifest.uninstallScript}";
             }
 
             return null;

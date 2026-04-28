@@ -112,6 +112,7 @@ namespace VHDMounter.Tests
                 version = "1.0.0",
                 type = "software-deploy",
                 installScript = "install.ps1",
+                uninstallScript = "uninstall.ps1",
             };
             Assert.Null(DeploySecurityPolicy.ValidateManifest(manifest));
         }
@@ -119,7 +120,7 @@ namespace VHDMounter.Tests
         [Fact]
         public void ValidateManifest_MissingName()
         {
-            var manifest = new DeployManifest { name = "", version = "1.0", type = "software-deploy", installScript = "install.ps1" };
+            var manifest = new DeployManifest { name = "", version = "1.0", type = "software-deploy", installScript = "install.ps1", uninstallScript = "uninstall.ps1" };
             Assert.Equal("name 不能为空", DeploySecurityPolicy.ValidateManifest(manifest));
         }
 
@@ -135,6 +136,21 @@ namespace VHDMounter.Tests
         {
             var manifest = new DeployManifest { name = "Test", version = "1.0", type = "file-deploy", targetPath = @"C:\Windows" };
             Assert.Equal("targetPath 不合法或指向系统目录", DeploySecurityPolicy.ValidateManifest(manifest));
+        }
+
+        [Fact]
+        public void ValidateManifest_SoftwareDeployMissingUninstallScript()
+        {
+            var manifest = new DeployManifest
+            {
+                name = "Test",
+                version = "1.0.0",
+                type = "software-deploy",
+                installScript = "install.ps1",
+                uninstallScript = "",
+            };
+
+            Assert.Equal("software-deploy 必须指定 uninstallScript", DeploySecurityPolicy.ValidateManifest(manifest));
         }
 
         // ---------- DeployVerifier Tests ----------
@@ -184,6 +200,7 @@ namespace VHDMounter.Tests
                 version = "1.0.0",
                 type = "software-deploy",
                 installScript = "install.ps1",
+                uninstallScript = "uninstall.ps1",
                 signer = "test",
                 createdAt = DateTime.UtcNow.ToString("O"),
                 expiresAt = DateTime.UtcNow.AddDays(7).ToString("O"),
@@ -193,6 +210,7 @@ namespace VHDMounter.Tests
             Directory.CreateDirectory(pkgDir);
             WriteTempFile(Path.Combine("pkg", "deploy.json"), deployJson);
             WriteTempFile(Path.Combine("pkg", "install.ps1"), "Write-Host 'install'");
+            WriteTempFile(Path.Combine("pkg", "uninstall.ps1"), "Write-Host 'uninstall'");
 
             var zipPath = Path.Combine(_tempDir, "package.zip");
             ZipFile.CreateFromDirectory(pkgDir, zipPath);
@@ -232,6 +250,7 @@ namespace VHDMounter.Tests
                 version = "1.0.0",
                 type = "software-deploy",
                 installScript = "install.ps1",
+                uninstallScript = "uninstall.ps1",
                 expiresAt = DateTime.UtcNow.AddDays(-1).ToString("O"),
             });
 
@@ -239,6 +258,7 @@ namespace VHDMounter.Tests
             Directory.CreateDirectory(pkgDir);
             WriteTempFile(Path.Combine("pkg2", "deploy.json"), deployJson);
             WriteTempFile(Path.Combine("pkg2", "install.ps1"), "");
+            WriteTempFile(Path.Combine("pkg2", "uninstall.ps1"), "");
 
             var zipPath = Path.Combine(_tempDir, "package2.zip");
             ZipFile.CreateFromDirectory(pkgDir, zipPath);

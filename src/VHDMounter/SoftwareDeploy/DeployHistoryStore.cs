@@ -15,8 +15,11 @@ namespace VHDMounter.SoftwareDeploy
         public string version { get; set; } = string.Empty;
         public string type { get; set; } = string.Empty;
         public string deployedAt { get; set; } = string.Empty;
+        public string uninstalledAt { get; set; } = string.Empty;
         public string status { get; set; } = "success"; // success / failed / uninstalled
         public string targetPath { get; set; } = string.Empty;
+        public string uninstallScript { get; set; } = string.Empty;
+        public bool requiresAdmin { get; set; }
         public List<string> fileManifest { get; set; } = new();
     }
 
@@ -70,8 +73,14 @@ namespace VHDMounter.SoftwareDeploy
         public void AddRecord(DeployRecord record)
         {
             var history = Load();
-            // 同名包新版本覆盖旧版本记录
-            history.records.RemoveAll(r => r.name == record.name && r.status != "uninstalled");
+            // 只有新的成功部署才覆盖同名的现役记录；失败记录不应抹掉现有成功版本。
+            if (string.Equals(record.status, "success", StringComparison.OrdinalIgnoreCase))
+            {
+                history.records.RemoveAll(r =>
+                    r.name == record.name &&
+                    r.type == record.type &&
+                    string.Equals(r.status, "success", StringComparison.OrdinalIgnoreCase));
+            }
             history.records.Add(record);
             Save(history);
         }
@@ -85,6 +94,7 @@ namespace VHDMounter.SoftwareDeploy
                 record.status = status;
                 if (status == "uninstalled")
                 {
+                    record.uninstalledAt = DateTime.UtcNow.ToString("O");
                     record.fileManifest.Clear();
                 }
                 Save(history);
@@ -126,22 +136,22 @@ namespace VHDMounter.SoftwareDeploy
             if (!Directory.Exists(payloadDir)) return;
 
             var manifest = new List<string>();
-            CollectFiles(payloadDir, targetPath, manifest);
+            CollectFiles(payloadDir, payloadDir, targetPath, manifest);
             record.fileManifest = manifest;
             Save(history);
         }
 
-        private static void CollectFiles(string sourceDir, string targetBase, List<string> manifest)
+        private static void CollectFiles(string rootSourceDir, string sourceDir, string targetBase, List<string> manifest)
         {
             foreach (var file in Directory.GetFiles(sourceDir))
             {
-                string relative = Path.GetRelativePath(sourceDir, file);
+                string relative = Path.GetRelativePath(rootSourceDir, file);
                 string targetFile = Path.Combine(targetBase, relative);
                 manifest.Add(targetFile);
             }
             foreach (var subDir in Directory.GetDirectories(sourceDir))
             {
-                CollectFiles(subDir, targetBase, manifest);
+                CollectFiles(rootSourceDir, subDir, targetBase, manifest);
             }
         }
     }

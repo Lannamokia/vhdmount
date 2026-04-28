@@ -1,3 +1,4 @@
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -30,7 +31,12 @@ namespace VHDMounter.SoftwareDeploy
             _appVersion = version != null ? $"{version.Major}.{version.Minor}.{version.Build}" : "1.0.0";
         }
 
-        public async Task ReportStatusAsync(string taskId, bool success, string errorMessage)
+        public Task ReportStatusAsync(string taskId, bool success, string errorMessage)
+        {
+            return ReportTaskStateAsync(taskId, success ? "success" : "failed", errorMessage);
+        }
+
+        public async Task ReportTaskStateAsync(string taskId, string status, string? errorMessage = null)
         {
             try
             {
@@ -39,7 +45,7 @@ namespace VHDMounter.SoftwareDeploy
                 request.Headers.Add("User-Agent", $"{UA_PREFIX}{_appVersion}");
                 var bodyJson = JsonSerializer.Serialize(new
                 {
-                    status = success ? "success" : "failed",
+                    status,
                     errorMessage = errorMessage ?? "",
                 });
                 request.Content = new StringContent(bodyJson, Encoding.UTF8, "application/json");
@@ -50,7 +56,7 @@ namespace VHDMounter.SoftwareDeploy
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[DeployReporter] 上报状态失败: {ex.Message}");
+                Trace.WriteLine($"[DeployReporter] 上报任务状态失败 ({status}): {ex.Message}");
             }
         }
 

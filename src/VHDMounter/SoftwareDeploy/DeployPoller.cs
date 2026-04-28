@@ -128,7 +128,22 @@ namespace VHDMounter.SoftwareDeploy
                         }
                         catch (Exception ex)
                         {
-                            Trace.WriteLine($"[DeployPoller] 解密任务 AES 密钥失败 ({task.TaskId}): {ex.Message}");
+                            Trace.WriteLine($"[DeployPoller] 解密任务 ZIP AES 密钥失败 ({task.TaskId}): {ex.Message}");
+                        }
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(task.SignatureKeyCipher))
+                    {
+                        try
+                        {
+                            var keyCipherBytes = Convert.FromBase64String(task.SignatureKeyCipher);
+                            var aesKeyBase64 = rsa.Decrypt(keyCipherBytes, RSAEncryptionPadding.OaepSHA1);
+                            task.SignatureAesKey = Convert.FromBase64String(Encoding.UTF8.GetString(aesKeyBase64));
+                            task.SignatureIvBytes = Convert.FromBase64String(task.SignatureIv);
+                        }
+                        catch (Exception ex)
+                        {
+                            Trace.WriteLine($"[DeployPoller] 解密任务签名 AES 密钥失败 ({task.TaskId}): {ex.Message}");
                         }
                     }
                 }
@@ -171,14 +186,16 @@ namespace VHDMounter.SoftwareDeploy
 
             try
             {
-                if (task.AesKey == null || task.IvBytes == null)
+                if (task.AesKey == null || task.IvBytes == null || task.SignatureAesKey == null || task.SignatureIvBytes == null)
                 {
                     await _reporter.ReportStatusAsync(task.TaskId, false, "缺少 AES 解密密钥");
                     return;
                 }
 
-                // 下载（传入 AES 密钥和 IV 用于解密加密流）
-                var dlResult = await _downloader.DownloadAsync(_serverUrl, _machineId, task, task.AesKey, task.IvBytes, ct);
+                await _reporter.ReportTaskStateAsync(task.TaskId, "downloading");
+
+                // 下载（使用任务内分别解密 ZIP 与签名的参数）
+                var dlResult = await _downloader.DownloadAsync(_serverUrl, _machineId, task, ct);
                 if (!dlResult.Success)
                 {
                     await _reporter.ReportStatusAsync(task.TaskId, false, dlResult.ErrorMessage);
@@ -197,24 +214,30 @@ namespace VHDMounter.SoftwareDeploy
                 extractDir = verifyResult.ExtractPath;
                 var manifest = verifyResult.Manifest;
 
+                await _reporter.ReportTaskStateAsync(task.TaskId, "running");
+
                 // 执行
                 DeployExecutionResult execResult;
                 if (manifest.IsSoftwareDeploy)
                 {
-                    execResult = DeployExecutor.ExecuteSoftwareDeploy(extractDir, manifest);
+                    execResult = DeployExecutor.ExecuteSoftwareDeploy(extractDir, task.PackageId, manifest);
                 }
                 else
                 {
                     execResult = DeployExecutor.ExecuteFileDeploy(extractDir, manifest);
                 }
 
-                if (!execResult.Success && manifest.IsSoftwareDeploy)
+                if (!execResult.Success && manifest.IsSoftwareDeploy && !string.IsNullOrWhiteSpace(execResult.DeploymentPath))
                 {
                     // 回滚
-                    var rollbackResult = DeployExecutor.RollbackSoftwareDeploy(extractDir, manifest);
+                    var rollbackResult = DeployExecutor.RollbackSoftwareDeploy(execResult.DeploymentPath, manifest);
                     if (!rollbackResult.Success)
                     {
                         execResult.ErrorMessage += $"; 回滚也失败: {rollbackResult.ErrorMessage}";
+                    }
+                    else
+                    {
+                        DeployExecutor.CleanupSoftwareDeployDirectory(execResult.DeploymentPath);
                     }
                 }
 
@@ -228,7 +251,9 @@ namespace VHDMounter.SoftwareDeploy
                     type = manifest.type,
                     deployedAt = DateTime.UtcNow.ToString("O"),
                     status = execResult.Success ? "success" : "failed",
-                    targetPath = manifest.targetPath,
+                    targetPath = manifest.IsSoftwareDeploy ? execResult.DeploymentPath : manifest.targetPath,
+                    uninstallScript = manifest.uninstallScript,
+                    requiresAdmin = manifest.requiresAdmin,
                 };
                 _historyStore.AddRecord(record);
 
@@ -276,20 +301,19 @@ namespace VHDMounter.SoftwareDeploy
                 UninstallResult result;
                 if (record.type == "software-deploy")
                 {
-                    // software-deploy: 尝试从缓存的 ZIP 中解压 uninstall.ps1 执行
-                    // 简化处理：如果本地没有缓存 ZIP，直接标记为已卸载
-                    result = new UninstallResult
-                    {
-                        Success = true,
-                        ErrorMessage = "software-deploy 卸载需要本地 ZIP 缓存",
-                    };
+                    await _reporter.ReportTaskStateAsync(task.TaskId, "running");
+                    result = DeployUninstaller.UninstallSoftware(record);
                 }
                 else
                 {
+                    await _reporter.ReportTaskStateAsync(task.TaskId, "running");
                     result = DeployUninstaller.UninstallFiles("", record);
                 }
 
-                _historyStore.UpdateRecordStatus(record.recordId, "uninstalled");
+                if (result.Success)
+                {
+                    _historyStore.UpdateRecordStatus(record.recordId, "uninstalled");
+                }
                 await _reporter.ReportStatusAsync(task.TaskId, result.Success, result.ErrorMessage);
                 await _reporter.SyncRecordsAsync(_historyStore.GetRecordsForSync());
             }

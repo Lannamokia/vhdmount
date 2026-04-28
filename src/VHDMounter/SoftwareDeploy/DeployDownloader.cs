@@ -40,7 +40,7 @@ namespace VHDMounter.SoftwareDeploy
 
         public async Task<DownloadResult> DownloadAsync(
             string serverUrl, string machineId,
-            PendingTaskInfo task, byte[] aesKey, byte[] iv,
+            PendingTaskInfo task,
             CancellationToken ct)
         {
             var result = new DownloadResult();
@@ -54,6 +54,19 @@ namespace VHDMounter.SoftwareDeploy
 
             try
             {
+                if (task.AesKey == null || task.IvBytes == null)
+                {
+                    result.ErrorMessage = "缺少 ZIP 解密参数";
+                    Cleanup(tempDir);
+                    return result;
+                }
+                if (task.SignatureAesKey == null || task.SignatureIvBytes == null)
+                {
+                    result.ErrorMessage = "缺少签名文件解密参数";
+                    Cleanup(tempDir);
+                    return result;
+                }
+
                 // 下载加密 ZIP
                 bool zipOk = await DownloadWithRetryAsync(serverUrl, task.DownloadUrl, zipEncPath, machineId, ct);
                 if (!zipOk)
@@ -64,7 +77,7 @@ namespace VHDMounter.SoftwareDeploy
                 }
 
                 // CTR 解密 ZIP
-                await DecryptFileAsync(zipEncPath, zipPath, aesKey, iv, ct);
+                await DecryptFileAsync(zipEncPath, zipPath, task.AesKey, task.IvBytes, ct);
                 File.Delete(zipEncPath);
 
                 // 下载加密签名
@@ -77,7 +90,7 @@ namespace VHDMounter.SoftwareDeploy
                 }
 
                 // CTR 解密签名
-                await DecryptFileAsync(sigEncPath, sigPath, aesKey, iv, ct);
+                await DecryptFileAsync(sigEncPath, sigPath, task.SignatureAesKey, task.SignatureIvBytes, ct);
                 File.Delete(sigEncPath);
 
                 result.Success = true;
@@ -222,8 +235,16 @@ namespace VHDMounter.SoftwareDeploy
         [JsonPropertyName("iv")]
         public string Iv { get; set; } = string.Empty;
 
+        [JsonPropertyName("signatureKeyCipher")]
+        public string SignatureKeyCipher { get; set; } = string.Empty;
+
+        [JsonPropertyName("signatureIv")]
+        public string SignatureIv { get; set; } = string.Empty;
+
         // 由 DeployPoller 解密后填充，不来自 JSON 序列化
         public byte[]? AesKey { get; set; }
         public byte[]? IvBytes { get; set; }
+        public byte[]? SignatureAesKey { get; set; }
+        public byte[]? SignatureIvBytes { get; set; }
     }
 }
