@@ -2,8 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net.Http;
-using System.Net.Http.Json;
 using System.Reflection;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -15,13 +15,15 @@ namespace VHDMounter.SoftwareDeploy
         private readonly HttpClient _httpClient;
         private readonly string _serverUrl;
         private readonly string _machineId;
+        private readonly string _keyId;
         private readonly string _appVersion;
-        private const string UA_PREFIX = "VHDMount:";
+        private const string UA_PREFIX = "VHDMount/";
 
         public DeployReporter(string serverUrl, string machineId)
         {
             _serverUrl = serverUrl.TrimEnd('/');
             _machineId = machineId;
+            _keyId = DeployRequestSigner.BuildDefaultKeyId(machineId);
             _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
 
             var version = Assembly.GetExecutingAssembly().GetName().Version;
@@ -35,11 +37,13 @@ namespace VHDMounter.SoftwareDeploy
                 var request = new HttpRequestMessage(HttpMethod.Post,
                     $"{_serverUrl}/api/machines/{_machineId}/deployments/{taskId}/status");
                 request.Headers.Add("User-Agent", $"{UA_PREFIX}{_appVersion}");
-                request.Content = JsonContent.Create(new
+                var bodyJson = JsonSerializer.Serialize(new
                 {
                     status = success ? "success" : "failed",
                     errorMessage = errorMessage ?? "",
                 });
+                request.Content = new StringContent(bodyJson, Encoding.UTF8, "application/json");
+                DeployRequestSigner.Sign(request, _machineId, _keyId, bodyJson);
 
                 var response = await _httpClient.SendAsync(request);
                 response.EnsureSuccessStatusCode();
@@ -57,7 +61,9 @@ namespace VHDMounter.SoftwareDeploy
                 var request = new HttpRequestMessage(HttpMethod.Post,
                     $"{_serverUrl}/api/machines/{_machineId}/deployments/sync");
                 request.Headers.Add("User-Agent", $"{UA_PREFIX}{_appVersion}");
-                request.Content = JsonContent.Create(new { records });
+                var bodyJson = JsonSerializer.Serialize(new { records });
+                request.Content = new StringContent(bodyJson, Encoding.UTF8, "application/json");
+                DeployRequestSigner.Sign(request, _machineId, _keyId, bodyJson);
 
                 var response = await _httpClient.SendAsync(request);
                 response.EnsureSuccessStatusCode();

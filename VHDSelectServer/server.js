@@ -234,6 +234,7 @@ async function createApp(options = {}) {
         databaseError: null,
         initialized: false,
         logger,
+        deploymentRequestNonceCache: new Map(),
         machineLogBootstrapCache: new Map(),
         machineLogConnections: new Map(),
         machineLogDailyBytes: new Map(),
@@ -330,7 +331,12 @@ async function createApp(options = {}) {
         next();
     });
 
-    app.use(express.json({ limit: '256kb' }));
+    app.use(express.json({
+        limit: '256kb',
+        verify: (req, _res, buf) => {
+            req.rawBody = buf.toString('utf8');
+        },
+    }));
     app.use(express.urlencoded({ extended: false, limit: '64kb' }));
     app.use(session({
         name: 'vhdmount.sid',

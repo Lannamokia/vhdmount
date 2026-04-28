@@ -24,7 +24,7 @@ namespace VHDMounter.SoftwareDeploy
         private bool _disposed;
         private readonly HttpClient _httpClient;
         private readonly string _appVersion;
-        private const string UA_PREFIX = "VHDMount:";
+        private const string UA_PREFIX = "VHDMount/";
         private const int RETRY_INTERVAL_MS = 5000;
         private const int CONNECT_TIMEOUT_MS = 10000;
         private const int READ_TIMEOUT_MS = 30000;

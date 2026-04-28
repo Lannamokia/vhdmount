@@ -26,7 +26,8 @@ namespace VHDMounter.SoftwareDeploy
         private readonly CancellationTokenSource _cts;
         private Task? _pollTask;
         private readonly string _appVersion;
-        private const string UA_PREFIX = "VHDMount:";
+        private readonly string _keyId;
+        private const string UA_PREFIX = "VHDMount/";
         private const int POLL_INTERVAL_MS = 60000; // 60s
 
         public event EventHandler<string>? OnDeployStarted;
@@ -43,6 +44,7 @@ namespace VHDMounter.SoftwareDeploy
             _reporter = new DeployReporter(serverUrl, machineId);
             _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
             _cts = new CancellationTokenSource();
+            _keyId = DeployRequestSigner.BuildDefaultKeyId(machineId);
 
             var version = Assembly.GetExecutingAssembly().GetName().Version;
             _appVersion = version != null ? $"{version.Major}.{version.Minor}.{version.Build}" : "1.0.0";
@@ -103,6 +105,7 @@ namespace VHDMounter.SoftwareDeploy
                 var request = new HttpRequestMessage(HttpMethod.Get,
                     $"{_serverUrl}/api/machines/{_machineId}/deployments/pending");
                 request.Headers.Add("User-Agent", $"{UA_PREFIX}{_appVersion}");
+                DeployRequestSigner.Sign(request, _machineId, _keyId);
 
                 var response = await _httpClient.SendAsync(request, ct);
                 if (!response.IsSuccessStatusCode) return Array.Empty<PendingTaskInfo>();

@@ -6,7 +6,8 @@ const { DeploymentStore } = require('./deploymentStore');
 const { ValidationError } = require('./validators');
 
 const PACKAGE_MAX_BYTES = 2 * 1024 * 1024 * 1024; // 2GB
-const UA_PREFIX = 'VHDMount:';
+const MACHINE_REQUEST_SIGNATURE_WINDOW_MS = 5 * 60 * 1000;
+const UA_PREFIX = 'VHDMount/';
 
 function createJsonError(statusCode, message, extra = {}) {
     const error = new Error(message);
@@ -76,6 +77,137 @@ function createCtrCipher(key, iv, offset = 0) {
 function buildDeploymentRoutes(options = {}) {
     const deploymentStore = options.deploymentStore || new DeploymentStore();
     const encryptWithPublicKeyRSA = options.encryptWithPublicKeyRSA;
+
+    function isValidDeploymentUserAgent(value) {
+        const ua = String(value || '').trim();
+        return ua.startsWith(UA_PREFIX);
+    }
+
+    function buildMachineRequestSigningPayload({
+        machineId,
+        keyId,
+        method,
+        path,
+        timestamp,
+        nonce,
+        bodyHash,
+    }) {
+        return [
+            'VHDMountDeploymentRequestV1',
+            String(machineId || '').trim(),
+            String(keyId || '').trim(),
+            String(method || '').trim().toUpperCase(),
+            String(path || '').trim(),
+            String(timestamp || '').trim(),
+            String(nonce || '').trim(),
+            String(bodyHash || '').trim().toLowerCase(),
+        ].join('\n');
+    }
+
+    function computeRequestBodyHash(req) {
+        if (typeof req.rawBody === 'string') {
+            return crypto.createHash('sha256').update(req.rawBody, 'utf8').digest('hex');
+        }
+
+        if (req.body != null && Object.keys(req.body).length > 0) {
+            return crypto.createHash('sha256').update(JSON.stringify(req.body), 'utf8').digest('hex');
+        }
+
+        return crypto.createHash('sha256').update('', 'utf8').digest('hex');
+    }
+
+    function cleanupMachineRequestNonces(nonceCache) {
+        const cutoff = Date.now() - MACHINE_REQUEST_SIGNATURE_WINDOW_MS;
+        for (const [nonceKey, seenAt] of nonceCache.entries()) {
+            if (Number(seenAt) < cutoff) {
+                nonceCache.delete(nonceKey);
+            }
+        }
+    }
+
+    async function requireVerifiedMachineRequest(req, options = {}) {
+        const runtime = req.app.locals.runtime;
+        const machineId = assertMachineId(req.params.machineId);
+        const machine = await runtime.database.getMachine(machineId);
+        if (!machine) {
+            throw createJsonError(404, '机台不存在');
+        }
+        if (!machine.pubkey_pem) {
+            throw createJsonError(400, '机台未注册公钥');
+        }
+
+        if (options.requireApproved !== false) {
+            if (machine.revoked) {
+                throw createJsonError(403, '机台密钥已吊销');
+            }
+            if (!machine.approved) {
+                throw createJsonError(403, '机台密钥未审批');
+            }
+        }
+
+        const keyIdHeader = req.get('x-vhdm-keyid');
+        const timestampHeader = req.get('x-vhdm-timestamp');
+        const nonceHeader = req.get('x-vhdm-nonce');
+        const signatureHeader = req.get('x-vhdm-signature');
+        if (!keyIdHeader || !timestampHeader || !nonceHeader || !signatureHeader) {
+            throw createJsonError(401, '需要机台签名认证');
+        }
+
+        const keyId = assertString(keyIdHeader, 'x-vhdm-keyid', 1, 256);
+        const timestampRaw = assertString(timestampHeader, 'x-vhdm-timestamp', 1, 32);
+        const nonce = assertString(nonceHeader, 'x-vhdm-nonce', 16, 256);
+        const signatureBase64 = assertString(signatureHeader, 'x-vhdm-signature', 32, 8192);
+
+        if (machine.key_id && keyId !== machine.key_id) {
+            throw createJsonError(403, '机台 keyId 不匹配');
+        }
+
+        const timestamp = Number.parseInt(timestampRaw, 10);
+        if (!Number.isFinite(timestamp)) {
+            throw createJsonError(400, '机台签名时间戳无效');
+        }
+        if (Math.abs(Date.now() - timestamp) > MACHINE_REQUEST_SIGNATURE_WINDOW_MS) {
+            throw createJsonError(401, '机台签名已过期');
+        }
+
+        const bodyHash = computeRequestBodyHash(req);
+        const payload = buildMachineRequestSigningPayload({
+            machineId,
+            keyId,
+            method: req.method,
+            path: req.path,
+            timestamp,
+            nonce,
+            bodyHash,
+        });
+
+        let signatureBytes;
+        try {
+            signatureBytes = Buffer.from(signatureBase64, 'base64');
+        } catch {
+            throw createJsonError(400, '机台签名格式无效');
+        }
+
+        const verifier = crypto.createVerify('RSA-SHA256');
+        verifier.update(payload, 'utf8');
+        verifier.end();
+        if (!verifier.verify(machine.pubkey_pem, signatureBytes)) {
+            throw createJsonError(401, '机台签名校验失败');
+        }
+
+        cleanupMachineRequestNonces(runtime.deploymentRequestNonceCache);
+        const nonceKey = `${machineId}:${nonce}`;
+        if (runtime.deploymentRequestNonceCache.has(nonceKey)) {
+            throw createJsonError(409, '机台签名 nonce 重复');
+        }
+        runtime.deploymentRequestNonceCache.set(nonceKey, Date.now());
+
+        return {
+            machineId,
+            machine,
+            keyId,
+        };
+    }
 
     function asyncHandler(handler) {
         return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
@@ -254,17 +386,8 @@ function buildDeploymentRoutes(options = {}) {
 
     async function getPendingTasks(req, res) {
         const runtime = req.app.locals.runtime;
-        const machineId = assertMachineId(req.params.machineId);
-
+        const { machineId, machine } = await requireVerifiedMachineRequest(req);
         await runtime.database.updateMachineLastSeen(machineId);
-
-        const machine = await runtime.database.getMachine(machineId);
-        if (!machine) {
-            throw createJsonError(404, '机台不存在');
-        }
-        if (!machine.pubkey_pem) {
-            throw createJsonError(400, '机台未注册公钥');
-        }
 
         const pendingTasks = await deploymentStore.listPendingTasks(runtime.database, machineId);
         const tasks = [];
@@ -319,12 +442,21 @@ function buildDeploymentRoutes(options = {}) {
 
     async function reportTaskStatus(req, res) {
         const runtime = req.app.locals.runtime;
+        const { machineId } = await requireVerifiedMachineRequest(req);
         const taskId = assertString(req.params.taskId, 'taskId');
         const status = assertString(req.body?.status, 'status');
         const errorMessage = req.body?.errorMessage || null;
 
         if (!['success', 'failed'].includes(status)) {
             throw createJsonError(400, 'status 必须是 success 或 failed');
+        }
+
+        const currentTask = await deploymentStore.getTask(runtime.database, taskId);
+        if (!currentTask) {
+            throw createJsonError(404, '任务不存在');
+        }
+        if (currentTask.machineId !== machineId) {
+            throw createJsonError(403, '任务不属于该机台');
         }
 
         const task = await deploymentStore.updateTaskStatus(runtime.database, taskId, status, errorMessage);
@@ -337,7 +469,7 @@ function buildDeploymentRoutes(options = {}) {
 
     async function syncRecords(req, res) {
         const runtime = req.app.locals.runtime;
-        const machineId = assertMachineId(req.params.machineId);
+        const { machineId } = await requireVerifiedMachineRequest(req);
         const records = Array.isArray(req.body?.records) ? req.body.records : [];
 
         const synced = [];
@@ -411,8 +543,7 @@ function buildDeploymentRoutes(options = {}) {
         const token = assertString(req.query.token, 'token');
         const machineId = assertString(req.query.machineId, 'machineId');
 
-        const ua = String(req.get('user-agent') || '').trim();
-        if (!ua.startsWith(UA_PREFIX)) {
+        if (!isValidDeploymentUserAgent(req.get('user-agent'))) {
             res.status(403).json({ success: false, error: 'User-Agent 校验失败' });
             return;
         }
@@ -477,8 +608,7 @@ function buildDeploymentRoutes(options = {}) {
         const token = assertString(req.query.token, 'token');
         const machineId = assertString(req.query.machineId, 'machineId');
 
-        const ua = String(req.get('user-agent') || '').trim();
-        if (!ua.startsWith(UA_PREFIX)) {
+        if (!isValidDeploymentUserAgent(req.get('user-agent'))) {
             res.status(403).json({ success: false, error: 'User-Agent 校验失败' });
             return;
         }
