@@ -161,6 +161,36 @@ namespace VHDMounter.Tests
             Assert.Null(result);
         }
 
+        [Fact]
+        public async Task RequestTeardownAsync_ReturnsTrueWhenNoActionsRequested()
+        {
+            var result = await manager.RequestTeardownAsync(
+                VHDManager.TeardownReason.UserExit,
+                detachVhd: false,
+                stopEvhd: false,
+                removeDrive: false);
+
+            Assert.True(result);
+        }
+
+        [Fact]
+        public async Task RequestTeardownAsync_IsIdempotentWhenNoMountedPathExists()
+        {
+            var first = await manager.RequestTeardownAsync(
+                VHDManager.TeardownReason.UserExit,
+                detachVhd: true,
+                stopEvhd: false,
+                removeDrive: false);
+            var second = await manager.RequestTeardownAsync(
+                VHDManager.TeardownReason.DisposeFallback,
+                detachVhd: true,
+                stopEvhd: false,
+                removeDrive: false);
+
+            Assert.True(first);
+            Assert.True(second);
+        }
+
         private static T GetPrivateField<T>(object instance, string fieldName)
         {
             var field = instance.GetType().GetField(fieldName, BindingFlags.NonPublic | BindingFlags.Instance);

@@ -504,15 +504,7 @@ namespace VHDMounter
                 {
                     try
                     {
-                        await vhdManager.UnmountVHD();
-                    }
-                    catch
-                    {
-                    }
-
-                    try
-                    {
-                        vhdManager.StopEncryptedEvhdMount();
+                        await vhdManager.RequestTeardownAsync(VHDManager.TeardownReason.DisposeFallback);
                     }
                     catch
                     {
@@ -540,8 +532,7 @@ namespace VHDMounter
             {
                 // 收到关机信号，解除VHD挂载
                 OnStatusChanged("检测到系统关机，正在解除VHD挂载...");
-                await vhdManager.UnmountVHD();
-                vhdManager.StopEncryptedEvhdMount();
+                await vhdManager.RequestTeardownAsync(VHDManager.TeardownReason.SessionEnding);
                 OnStatusChanged("VHD解除挂载完成，程序即将退出");
             }
             catch (Exception ex)
@@ -555,9 +546,7 @@ namespace VHDMounter
             try
             {
                 // 确保在退出前解除VHD挂载
-                await vhdManager.UnmountVHD();
-                // 然后结束加密EVHD挂载进程
-                vhdManager.StopEncryptedEvhdMount();
+                await vhdManager.RequestTeardownAsync(VHDManager.TeardownReason.UserExit);
             }
             catch (Exception ex)
             {

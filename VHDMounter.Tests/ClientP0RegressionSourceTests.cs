@@ -62,6 +62,37 @@ namespace VHDMounter.Tests
             Assert.Contains("string.Equals(errorCode, \"MACHINE_NOT_REGISTERED\"", source, StringComparison.Ordinal);
         }
 
+        [Fact]
+        public void MainWindow_ShutdownPathsUseUnifiedTeardownEntry()
+        {
+            var source = ReadSource("src/VHDMounter/MainWindow.xaml.cs");
+
+            Assert.Contains("RequestTeardownAsync(VHDManager.TeardownReason.DisposeFallback)", source, StringComparison.Ordinal);
+            Assert.Contains("RequestTeardownAsync(VHDManager.TeardownReason.SessionEnding)", source, StringComparison.Ordinal);
+            Assert.Contains("RequestTeardownAsync(VHDManager.TeardownReason.UserExit)", source, StringComparison.Ordinal);
+            Assert.DoesNotContain("await vhdManager.UnmountVHD();", source, StringComparison.Ordinal);
+            Assert.DoesNotContain("vhdManager.StopEncryptedEvhdMount();", source, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void HidMenuPowerAction_UsesUnifiedTeardownEntry()
+        {
+            var source = ReadSource("src/VHDMounter/MainWindow.HidMenuFeatures.cs");
+
+            Assert.Contains("RequestTeardownAsync(VHDManager.TeardownReason.PowerAction)", source, StringComparison.Ordinal);
+            Assert.DoesNotContain("await vhdManager.UnmountVHD();", source, StringComparison.Ordinal);
+            Assert.DoesNotContain("vhdManager.StopEncryptedEvhdMount();", source, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void VhdManager_MountFlowUsesUnifiedMountSwitchTeardown()
+        {
+            var source = ReadSource("src/VHDMounter/VHDManager.cs");
+
+            Assert.Contains("TeardownReason.MountSwitch", source, StringComparison.Ordinal);
+            Assert.Contains("RequestTeardownAsync(", source, StringComparison.Ordinal);
+        }
+
         private static string ReadSource(string relativePath)
         {
             var root = FindRepositoryRoot();

@@ -86,9 +86,21 @@ namespace VHDMounter
         private bool protectionWasRunning = false;
         private bool hasLocalEvhdFiles;
         private string activeMountedVhdPath;
+        private readonly SemaphoreSlim teardownSemaphore = new SemaphoreSlim(1, 1);
 
         // 加密EVHD挂载进程（需保持常驻直到主程序退出）
         private Process evhdMountProcess;
+
+        public enum TeardownReason
+        {
+            MountSwitch,
+            UserExit,
+            SessionEnding,
+            PowerAction,
+            FatalError,
+            MountFailureCleanup,
+            DisposeFallback,
+        }
         
         // 构造函数
         public VHDManager()
@@ -2329,19 +2341,33 @@ namespace VHDMounter
             catch (Exception ex)
             {
                 Trace.WriteLine($"EVHD_MOUNT_EXCEPTION: {ex}");
+                try
+                {
+                    await RequestTeardownAsync(
+                        TeardownReason.MountFailureCleanup,
+                        detachVhd: true,
+                        stopEvhd: true,
+                        removeDrive: true);
+                }
+                catch
+                {
+                }
                 await ShowStatusAndWait($"挂载EVHD失败: {ex.Message}");
                 return false;
             }
         }
 
         // 结束加密EVHD挂载进程（在主程序退出时调用）
-        public void StopEncryptedEvhdMount()
+        private bool StopEncryptedEvhdMountCore(bool logStatus)
         {
             try
             {
                 if (evhdMountProcess != null && !evhdMountProcess.HasExited)
                 {
-                    StatusChanged?.Invoke("正在结束加密VHD挂载工具...");
+                    if (logStatus)
+                    {
+                        StatusChanged?.Invoke("正在结束加密VHD挂载工具...");
+                    }
                     try
                     {
                         // 尝试优雅结束
@@ -2355,14 +2381,68 @@ namespace VHDMounter
                         try { evhdMountProcess.Kill(); } catch { }
                     }
                 }
+
+                return true;
             }
             catch (Exception ex)
             {
-                StatusChanged?.Invoke($"结束加密VHD挂载工具时发生异常: {ex.Message}");
+                if (logStatus)
+                {
+                    StatusChanged?.Invoke($"结束加密VHD挂载工具时发生异常: {ex.Message}");
+                }
+                return false;
             }
             finally
             {
                 evhdMountProcess = null;
+            }
+        }
+
+        public void StopEncryptedEvhdMount()
+        {
+            StopEncryptedEvhdMountCore(logStatus: true);
+        }
+
+        public async Task<bool> RequestTeardownAsync(
+            TeardownReason reason,
+            bool detachVhd = true,
+            bool stopEvhd = true,
+            bool removeDrive = true,
+            string vhdPathOverride = null)
+        {
+            await teardownSemaphore.WaitAsync();
+            try
+            {
+                Trace.WriteLine(
+                    $"TEARDOWN_BEGIN: Reason={reason}, RemoveDrive={removeDrive}, DetachVhd={detachVhd}, StopEvhd={stopEvhd}, PathOverride={SanitizeSensitiveText(vhdPathOverride ?? string.Empty)}");
+
+                bool success = true;
+
+                if (removeDrive)
+                {
+                    success &= await UnmountDrive();
+                }
+
+                if (detachVhd)
+                {
+                    var pathToDetach = string.IsNullOrWhiteSpace(vhdPathOverride)
+                        ? activeMountedVhdPath
+                        : vhdPathOverride;
+                    success &= await UnmountVHD(pathToDetach);
+                }
+
+                if (stopEvhd)
+                {
+                    success &= StopEncryptedEvhdMountCore(logStatus: true);
+                }
+
+                Trace.WriteLine(
+                    $"TEARDOWN_END: Reason={reason}, Success={success}, ActiveMountedVhdPath={SanitizeSensitiveText(activeMountedVhdPath ?? string.Empty)}, EvhdRunning={IsEncryptedEvhdMountProcessRunning()}");
+                return success;
+            }
+            finally
+            {
+                teardownSemaphore.Release();
             }
         }
         
@@ -2459,21 +2539,18 @@ namespace VHDMounter
                     return false;
                 }
 
-                activeMountedVhdPath = vhdPath;
-
                 if (!await WaitForVhdFileReadyAsync(vhdPath, 10000))
                 {
                     await ShowStatusAndWait($"挂载失败: 解密后的VHD文件未在预期时间内就绪 ({Path.GetFileName(vhdPath)})");
                     return false;
                 }
 
-                // 先清理盘符并分离可能已挂载的VHD，避免冲突
-                if (!await UnmountDrive())
-                {
-                    return false;
-                }
-
-                if (!await UnmountVHD(vhdPath))
+                // 先清理当前盘符、当前已挂载的VHD以及可能残留的EVHD挂载工具，避免切换冲突
+                if (!await RequestTeardownAsync(
+                    TeardownReason.MountSwitch,
+                    detachVhd: true,
+                    stopEvhd: IsEncryptedEvhdMountProcessRunning(),
+                    removeDrive: true))
                 {
                     return false;
                 }
@@ -2520,6 +2597,7 @@ exit";
                 }
 
                 await ShowStatusAndWait("盘符 M 分配成功");
+                activeMountedVhdPath = vhdPath;
                 return true;
             }
             catch (Exception ex)
@@ -4456,11 +4534,6 @@ exit";
                 var pathToDetach = string.IsNullOrWhiteSpace(vhdPath) ? activeMountedVhdPath : vhdPath;
                 if (string.IsNullOrWhiteSpace(pathToDetach))
                 {
-                    if (await TryRebootForStaleDetachedVhdStateAsync("未记录当前VHD路径且无法完成分离", -1, string.Empty, string.Empty))
-                    {
-                        return false;
-                    }
-
                     StatusChanged?.Invoke("未记录当前VHD路径，跳过VHD分离");
                     return true;
                 }

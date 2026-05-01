@@ -271,20 +271,11 @@ namespace VHDMounter
 
             try
             {
-                await vhdManager.UnmountVHD();
+                await vhdManager.RequestTeardownAsync(VHDManager.TeardownReason.PowerAction);
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"SERVICE_MENU_UNMOUNT_FAILED: {ex}");
-            }
-
-            try
-            {
-                vhdManager.StopEncryptedEvhdMount();
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"SERVICE_MENU_STOP_EVHD_FAILED: {ex}");
+                Trace.WriteLine($"SERVICE_MENU_TEARDOWN_FAILED: {ex}");
             }
 
             try
