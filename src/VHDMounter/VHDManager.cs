@@ -1372,8 +1372,14 @@ namespace VHDMounter
             {
                 key = CngKey.Open(keyName, CngProvider.MicrosoftPlatformCryptoProvider);
             }
-            catch
+            catch (CryptographicException ex) when (
+                ex.HResult == unchecked((int)0x80090016) /* NTE_BAD_KEYSET：密钥不存在 */
+                || (ex.Message != null && (
+                    ex.Message.Contains("不存在", StringComparison.OrdinalIgnoreCase)
+                    || ex.Message.Contains("not exist", StringComparison.OrdinalIgnoreCase))))
             {
+                // 仅"密钥不存在"才创建新密钥；其他 CryptographicException（TPM 不可用、权限不足等）应上抛
+                Trace.WriteLine($"[VHDManager] TPM 密钥不存在，创建新密钥: {keyName}");
                 var creation = new CngKeyCreationParameters
                 {
                     Provider = CngProvider.MicrosoftPlatformCryptoProvider,
@@ -1381,11 +1387,25 @@ namespace VHDMounter
                     ExportPolicy = CngExportPolicies.None,
                     KeyCreationOptions = CngKeyCreationOptions.None
                 };
+                // 创建时直接指定 2048 位长度，避免对已有密钥修改 KeySize（部分 TPM 提供程序会抛异常）
+                creation.Parameters.Add(new CngProperty(
+                    "Length",
+                    BitConverter.GetBytes(2048),
+                    CngPropertyOptions.None));
                 key = CngKey.Create(CngAlgorithm.Rsa, keyName, creation);
             }
-            var rsa = new RSACng(key);
-            if (rsa.KeySize < 2048) rsa.KeySize = 2048;
-            return rsa;
+            catch (CryptographicException ex)
+            {
+                // TPM 不可用、权限不足等不可恢复错误：必须上抛，否则上层只能看到 NRE 难以诊断
+                Trace.WriteLine($"[VHDManager] 打开 TPM 密钥失败（非\"密钥不存在\"错误）: HResult=0x{ex.HResult:X8} {ex.Message}");
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[VHDManager] 打开 TPM 密钥发生未知异常: {ex.GetType().Name} {ex.Message}");
+                throw;
+            }
+            return new RSACng(key);
         }
 
         internal static string ExportPublicKeyPem(RSA rsa)
