@@ -29,8 +29,15 @@ namespace VHDMounter
             Approved,
         }
 
-        public static RegistrationState CurrentState { get; private set; } = RegistrationState.Unknown;
+        public static RegistrationState CurrentState
+        {
+            get { lock (_stateLock) return _currentState; }
+            private set { lock (_stateLock) _currentState = value; }
+        }
         public static bool IsRegisteredAndApproved => CurrentState == RegistrationState.Approved;
+
+        private static readonly object _stateLock = new object();
+        private static RegistrationState _currentState = RegistrationState.Unknown;
 
         /// <summary>
         /// 阻塞式统一注册入口。
