@@ -121,17 +121,27 @@ namespace VHDMounter
                 }
 
                 var body = await response.Content.ReadAsStringAsync(ct);
-                string err = null;
-                try
-                {
-                    using var doc = JsonDocument.Parse(body);
-                    if (doc.RootElement.TryGetProperty("error", out var ee)) err = ee.GetString();
-                }
-                catch { }
+                var (errorCode, errorMessage) = ParseErrorPayload(body);
 
-                if ((int)response.StatusCode == 400 && (err ?? string.Empty).Contains("未注册公钥"))
+                if ((int)response.StatusCode == 400)
                 {
-                    return RegistrationState.NotRegistered;
+                    // 优先识别结构化错误码；服务端尚未升级时回退到中文/英文关键词
+                    if (string.Equals(errorCode, "MACHINE_NOT_REGISTERED", StringComparison.OrdinalIgnoreCase)
+                        || ContainsNotRegisteredHint(errorMessage))
+                    {
+                        return RegistrationState.NotRegistered;
+                    }
+                    return RegistrationState.Submitted;
+                }
+
+                if ((int)response.StatusCode == 429)
+                {
+                    // 探针被限流时退避，避免每 2 秒一次轮询持续触发限流
+                    var retryAfter = ParseRetryAfter(response, body);
+                    var wait = retryAfter ?? TimeSpan.FromSeconds(60);
+                    Trace.WriteLine($"[MachineKeyRegistration] 探针 429 限流，退避 {wait.TotalSeconds:F0}s");
+                    await Task.Delay(wait, ct);
+                    return RegistrationState.Unknown; // 让上层重新探测
                 }
 
                 // 403（未审批/已吊销）或其他错误，统一视为已提交但尚未通过
@@ -141,11 +151,40 @@ namespace VHDMounter
             {
                 throw;
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 Trace.WriteLine($"[MachineKeyRegistration] 探测服务端状态异常: {ex.Message}");
                 return RegistrationState.Unknown;
             }
+        }
+
+        private static (string errorCode, string errorMessage) ParseErrorPayload(string body)
+        {
+            string errorCode = null;
+            string errorMessage = null;
+            if (string.IsNullOrWhiteSpace(body)) return (errorCode, errorMessage);
+            try
+            {
+                using var doc = JsonDocument.Parse(body);
+                if (doc.RootElement.TryGetProperty("errorCode", out var ec) && ec.ValueKind == JsonValueKind.String)
+                    errorCode = ec.GetString();
+                if (doc.RootElement.TryGetProperty("error", out var ee) && ee.ValueKind == JsonValueKind.String)
+                    errorMessage = ee.GetString();
+            }
+            catch { }
+            return (errorCode, errorMessage);
+        }
+
+        private static bool ContainsNotRegisteredHint(string errorMessage)
+        {
+            if (string.IsNullOrEmpty(errorMessage)) return false;
+            return errorMessage.Contains("未注册公钥")
+                || errorMessage.Contains("not registered", StringComparison.OrdinalIgnoreCase)
+                || errorMessage.Contains("未注册", StringComparison.Ordinal);
         }
 
         /// <summary>
