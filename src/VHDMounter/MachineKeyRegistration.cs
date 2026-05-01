@@ -105,14 +105,14 @@ namespace VHDMounter
 
         /// <summary>
         /// 轻量级探测服务端注册状态。
-        /// 复用 /api/evhd-envelope 端点作为探针（不需要签名，只传 machineId）。
+        /// 复用 /api/machine-log-bootstrap 端点作为探针（不需要 EVHD 密码，只要求机台已注册且审批）。
         /// </summary>
         private static async Task<RegistrationState> ProbeServerStateAsync(
             string baseUrl, string machineId, CancellationToken ct)
         {
             try
             {
-                var url = $"{baseUrl}/api/evhd-envelope?machineId={Uri.EscapeDataString(machineId)}";
+                var url = $"{baseUrl}/api/machine-log-bootstrap?machineId={Uri.EscapeDataString(machineId)}";
                 var response = await HttpClient.GetAsync(url, ct);
 
                 if (response.IsSuccessStatusCode)
@@ -351,5 +351,14 @@ namespace VHDMounter
 
             return null;
         }
-    }
+
+        internal static void ResetStateForTests()
+        {
+            lock (_stateLock)
+            {
+                _currentState = RegistrationState.Unknown;
+            }
+            _nextRegistrationAttempt = null;
+        }
+        }
 }

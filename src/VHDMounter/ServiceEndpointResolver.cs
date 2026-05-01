@@ -10,6 +10,7 @@ namespace VHDMounter
 
         private const string BootImageSelectPath = "api/boot-image-select";
         private const string EvhdEnvelopePath = "api/evhd-envelope";
+        private const string MachineLogBootstrapPath = "api/machine-log-bootstrap";
         private const string ProtectionCheckPath = "api/protect";
         private const string MachineLogWebSocketPath = "ws/machine-log";
 
@@ -57,6 +58,11 @@ namespace VHDMounter
         public static string ResolveEvhdEnvelopeUrl(IReadOnlyDictionary<string, string> config)
         {
             return CombineHttpEndpoint(ResolveServerBaseUrl(config), EvhdEnvelopePath);
+        }
+
+        public static string ResolveMachineLogBootstrapUrl(IReadOnlyDictionary<string, string> config)
+        {
+            return CombineHttpEndpoint(ResolveServerBaseUrl(config), MachineLogBootstrapPath);
         }
 
         public static string ResolveProtectionCheckUrl(IReadOnlyDictionary<string, string> config)

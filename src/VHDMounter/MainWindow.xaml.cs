@@ -367,7 +367,7 @@ namespace VHDMounter
                 var ext = System.IO.Path.GetExtension(vhdPath)?.ToLowerInvariant();
                 bool isEvhd = ext == ".evhd";
                 bool mounted = isEvhd
-                    ? await vhdManager.MountEVHDAndAttachDecryptedVHD(vhdPath)
+                    ? await vhdManager.MountEVHDAndAttachDecryptedVHD(vhdPath, _appLifetimeToken)
                     : await vhdManager.MountVHD(vhdPath);
                 if (!mounted)
                 {

@@ -54,9 +54,9 @@ namespace VHDMounter
 
         public string SpoolPath => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "machine-log-spool.jsonl");
 
-        public string ResolveEnvelopeUrl()
+        public string ResolveMachineLogBootstrapUrl()
         {
-            return ServiceEndpointResolver.CombineHttpEndpoint(ServerBaseUrl, "api/evhd-envelope");
+            return ServiceEndpointResolver.CombineHttpEndpoint(ServerBaseUrl, "api/machine-log-bootstrap");
         }
 
         public Uri ResolveWebSocketUri()

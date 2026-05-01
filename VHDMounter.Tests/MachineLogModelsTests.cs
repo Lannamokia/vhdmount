@@ -159,14 +159,14 @@ ServerBaseUrl = http://server.com
         }
 
         [Fact]
-        public void ResolveEnvelopeUrl_BuildsCorrectUrl()
+        public void ResolveMachineLogBootstrapUrl_BuildsCorrectUrl()
         {
             var configPath = Path.Combine(tempDir, "test-config.ini");
             File.WriteAllText(configPath, "ServerBaseUrl = http://192.168.1.100:8080\n", Encoding.UTF8);
 
             var config = MachineLogClientConfiguration.Load(configPath);
 
-            Assert.Equal("http://192.168.1.100:8080/api/evhd-envelope", config.ResolveEnvelopeUrl());
+            Assert.Equal("http://192.168.1.100:8080/api/machine-log-bootstrap", config.ResolveMachineLogBootstrapUrl());
         }
 
         [Fact]

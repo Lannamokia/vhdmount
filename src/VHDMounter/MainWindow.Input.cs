@@ -114,7 +114,7 @@ namespace VHDMounter
             }
 #endif
 
-            Dispatcher.Invoke(() =>
+            _ = Dispatcher.InvokeAsync(() =>
             {
                 WindowState = WindowState.Minimized;
                 ShowInTaskbar = false;

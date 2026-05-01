@@ -178,6 +178,19 @@ namespace VHDMounter.Tests
         }
 
         [Fact]
+        public void ResolveMachineLogBootstrapUrl_BuildsCorrectUrl()
+        {
+            var config = new Dictionary<string, string>
+            {
+                { "ServerBaseUrl", "http://192.168.1.100:8080" },
+            };
+
+            var result = ServiceEndpointResolver.ResolveMachineLogBootstrapUrl(config);
+
+            Assert.Equal("http://192.168.1.100:8080/api/machine-log-bootstrap", result);
+        }
+
+        [Fact]
         public void ResolveProtectionCheckUrl_BuildsCorrectUrl()
         {
             var config = new Dictionary<string, string>

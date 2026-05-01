@@ -2139,7 +2139,13 @@ namespace VHDMounter
         }
 
         // 挂载EVHD到N盘，并从其中提取解密后的VHD再挂载
-        public async Task<bool> MountEVHDAndAttachDecryptedVHD(string evhdPath)
+        public Task<bool> MountEVHDAndAttachDecryptedVHD(string evhdPath)
+        {
+            return MountEVHDAndAttachDecryptedVHD(evhdPath, CancellationToken.None);
+        }
+
+        // 挂载EVHD到N盘，并从其中提取解密后的VHD再挂载
+        public async Task<bool> MountEVHDAndAttachDecryptedVHD(string evhdPath, CancellationToken ct)
         {
             try
             {
@@ -2150,7 +2156,7 @@ namespace VHDMounter
                 }
 
                 // 获取密码
-                var password = await GetEvhdPasswordFromServerWithBlockingRetry();
+                var password = await GetEvhdPasswordFromServerWithBlockingRetry(ct);
                 if (string.IsNullOrEmpty(password))
                 {
                     await ShowStatusAndWait("未能获取EVHD密码，挂载终止");

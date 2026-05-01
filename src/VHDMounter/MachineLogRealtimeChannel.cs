@@ -433,13 +433,13 @@ namespace VHDMounter
                 return cachedBootstrap;
             }
 
-            var envelopeUrl = configuration.ResolveEnvelopeUrl();
-            var envelopeRequestUri = new UriBuilder(envelopeUrl)
+            var bootstrapUrl = configuration.ResolveMachineLogBootstrapUrl();
+            var bootstrapRequestUri = new UriBuilder(bootstrapUrl)
             {
                 Query = $"machineId={Uri.EscapeDataString(machineId)}",
             }.Uri;
 
-            using var response = await SharedHttpClient.GetAsync(envelopeRequestUri, cancellationToken).ConfigureAwait(false);
+            using var response = await SharedHttpClient.GetAsync(bootstrapRequestUri, cancellationToken).ConfigureAwait(false);
             var responseBody = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
             if (!response.IsSuccessStatusCode)
