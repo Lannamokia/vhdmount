@@ -8,6 +8,10 @@ const TOKEN_EXPIRY_MINUTES = 60;
 const DEFAULT_TASK_LEASE_SECONDS = Number(process.env.DEPLOYMENT_TASK_LEASE_SECONDS || 30 * 60);
 const PACKAGES_SUBDIR = 'deployment-packages';
 
+function copyFileIntoPlace(sourcePath, destPath) {
+    fs.copyFileSync(sourcePath, destPath);
+}
+
 function generateId() {
     return crypto.randomBytes(16).toString('hex');
 }
@@ -51,6 +55,36 @@ class DeploymentStore {
             createdAt: result.created_at,
             expiresAt: result.expires_at,
         };
+    }
+
+    async createPackageWithFiles(database, packageMeta, { packageSourcePath, signatureSourcePath }) {
+        return database.withTransaction(async (client) => {
+            const packageId = `pkg-${generateId()}`;
+            const filePath = this.getPackageFilePath(packageId);
+            const signaturePath = this.getSignatureFilePath(packageId);
+
+            try {
+                copyFileIntoPlace(packageSourcePath, filePath);
+                copyFileIntoPlace(signatureSourcePath, signaturePath);
+
+                const res = await client.query(`
+                    INSERT INTO deployment_packages (package_id, name, version, type, signer, file_path, file_size, expires_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + INTERVAL '30 days')
+                    RETURNING *
+                `, [packageId, packageMeta.name, packageMeta.version, packageMeta.type, packageMeta.signer, filePath, packageMeta.fileSize]);
+                return this._mapPackageRow(res.rows[0]);
+            } catch (error) {
+                try {
+                    if (fs.existsSync(filePath)) {
+                        fs.unlinkSync(filePath);
+                    }
+                    if (fs.existsSync(signaturePath)) {
+                        fs.unlinkSync(signaturePath);
+                    }
+                } catch { }
+                throw error;
+            }
+        });
     }
 
     async getPackage(database, packageId) {
@@ -119,6 +153,22 @@ class DeploymentStore {
         });
 
         return this._mapTaskRow(result);
+    }
+
+    async createTasks(database, { packageId, machineIds, taskType = 'deploy', scheduledAt = null }) {
+        return database.withTransaction(async (client) => {
+            const createdTasks = [];
+            for (const machineId of machineIds) {
+                const taskId = `task-${generateId()}`;
+                const res = await client.query(`
+                    INSERT INTO deployment_tasks (task_id, package_id, machine_id, task_type, status, scheduled_at)
+                    VALUES ($1, $2, $3, $4, 'pending', $5)
+                    RETURNING *
+                `, [taskId, packageId, machineId, taskType, scheduledAt]);
+                createdTasks.push(this._mapTaskRow(res.rows[0]));
+            }
+            return createdTasks;
+        });
     }
 
     async getTask(database, taskId) {

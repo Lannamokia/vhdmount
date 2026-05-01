@@ -295,7 +295,7 @@ async function createApp(options = {}) {
     }
 
     const app = express();
-    app.set('trust proxy', options.trustProxy ?? 1);
+    app.set('trust proxy', options.trustProxy ?? false);
     app.locals.runtime = runtime;
 
     app.use(helmet({
@@ -650,7 +650,7 @@ async function createApp(options = {}) {
         });
     });
 
-    app.post('/api/auth/change-password', requireAuth, asyncHandler(async (req, res) => {
+    app.post('/api/auth/change-password', requireAuth, requireOtpStepUp, asyncHandler(async (req, res) => {
         const currentPassword = String(req.body?.currentPassword || '');
         const newPassword = String(req.body?.newPassword || '');
         const confirmPassword = String(req.body?.confirmPassword || '');
@@ -1185,7 +1185,7 @@ async function createApp(options = {}) {
         });
     }));
 
-    app.post('/api/machines/:machineId/approve', requireAuth, requireDatabase, asyncHandler(async (req, res) => {
+    app.post('/api/machines/:machineId/approve', requireAuth, requireOtpStepUp, requireDatabase, asyncHandler(async (req, res) => {
         const machineId = assertMachineId(req.params.machineId);
         const approved = typeof req.body?.approved === 'boolean' ? req.body.approved : true;
         const machine = await runtime.database.approveMachine(machineId, approved);
@@ -1211,7 +1211,7 @@ async function createApp(options = {}) {
         });
     }));
 
-    app.post('/api/machines/:machineId/revoke', requireAuth, requireDatabase, asyncHandler(async (req, res) => {
+    app.post('/api/machines/:machineId/revoke', requireAuth, requireOtpStepUp, requireDatabase, asyncHandler(async (req, res) => {
         const machineId = assertMachineId(req.params.machineId);
         const machine = await runtime.database.revokeMachineKey(machineId);
         if (!machine) {
@@ -1573,21 +1573,21 @@ async function createApp(options = {}) {
     // ---------- 部署模块路由 ----------
     const deploymentRoutes = buildDeploymentRoutes({ encryptWithPublicKeyRSA, configDir });
 
-    app.post('/api/deployments/packages', deploymentRoutes.requireAuth, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.uploadPackage));
-    app.get('/api/deployments/packages', deploymentRoutes.requireAuth, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.listPackages));
-    app.get('/api/deployments/packages/:id', deploymentRoutes.requireAuth, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.getPackage));
-    app.delete('/api/deployments/packages/:id', deploymentRoutes.requireAuth, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.deletePackage));
+    app.post('/api/deployments/packages', requireAuth, requireOtpStepUp, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.uploadPackage));
+    app.get('/api/deployments/packages', requireAuth, requireOtpStepUp, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.listPackages));
+    app.get('/api/deployments/packages/:id', requireAuth, requireOtpStepUp, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.getPackage));
+    app.delete('/api/deployments/packages/:id', requireAuth, requireOtpStepUp, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.deletePackage));
 
-    app.post('/api/deployments/tasks', deploymentRoutes.requireAuth, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.createTask));
-    app.get('/api/deployments/tasks', deploymentRoutes.requireAuth, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.listTasks));
-    app.delete('/api/deployments/tasks/:id', deploymentRoutes.requireAuth, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.deleteTask));
+    app.post('/api/deployments/tasks', requireAuth, requireOtpStepUp, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.createTask));
+    app.get('/api/deployments/tasks', requireAuth, requireOtpStepUp, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.listTasks));
+    app.delete('/api/deployments/tasks/:id', requireAuth, requireOtpStepUp, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.deleteTask));
 
     app.get('/api/machines/:machineId/deployments/pending', deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.getPendingTasks));
     app.post('/api/machines/:machineId/deployments/:taskId/status', deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.reportTaskStatus));
     app.post('/api/machines/:machineId/deployments/sync', deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.syncRecords));
 
-    app.get('/api/machines/:machineId/deployments/history', deploymentRoutes.requireAuth, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.getMachineHistory));
-    app.post('/api/machines/:machineId/deployments/:recordId/uninstall', deploymentRoutes.requireAuth, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.triggerUninstall));
+    app.get('/api/machines/:machineId/deployments/history', requireAuth, requireOtpStepUp, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.getMachineHistory));
+    app.post('/api/machines/:machineId/deployments/:recordId/uninstall', requireAuth, requireOtpStepUp, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.triggerUninstall));
 
     app.get('/api/deployments/packages/:id/download', deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.downloadPackage));
     app.get('/api/deployments/packages/:id/signature', deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.downloadSignature));

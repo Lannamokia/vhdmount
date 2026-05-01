@@ -532,8 +532,8 @@ class PostgresDatabase {
                         pubkey_pem = NULL,
                         approved = FALSE,
                         approved_at = NULL,
-                        revoked = FALSE,
-                        revoked_at = NULL,
+                        revoked = TRUE,
+                        revoked_at = CURRENT_TIMESTAMP,
                         registration_cert_fingerprint = NULL,
                         registration_cert_subject = NULL,
                         updated_at = CURRENT_TIMESTAMP

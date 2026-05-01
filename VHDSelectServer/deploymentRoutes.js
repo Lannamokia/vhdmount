@@ -49,6 +49,26 @@ function assertNonEmptyStringArray(value, name) {
     return arr.map((v) => String(v || '').trim()).filter(Boolean);
 }
 
+function assertDeploymentRecordStatus(value) {
+    const status = String(value || '').trim();
+    if (!['success', 'failed', 'uninstalled'].includes(status)) {
+        throw new ValidationError('status 必须是 success、failed 或 uninstalled');
+    }
+    return status;
+}
+
+function assertOptionalIsoTimestamp(value, name) {
+    if (value == null || String(value).trim() === '') {
+        return null;
+    }
+    const timestamp = String(value).trim();
+    const parsed = Date.parse(timestamp);
+    if (!Number.isFinite(parsed)) {
+        throw new ValidationError(`${name} 必须是合法的 ISO 时间`);
+    }
+    return new Date(parsed).toISOString();
+}
+
 function computeFileHash(filePath) {
     const hash = crypto.createHash('sha256');
     const data = fs.readFileSync(filePath);
@@ -259,17 +279,17 @@ function buildDeploymentRoutes(options = {}) {
         const type = assertPackageType(req.body?.type);
         const signer = assertString(req.body?.signer, 'signer');
 
-        const pkg = await deploymentStore.createPackage(runtime.database, {
+        if (!pkgFile.tempFilePath || !sigFile.tempFilePath) {
+            throw createJsonError(500, '上传临时文件不可用');
+        }
+
+        const pkg = await deploymentStore.createPackageWithFiles(runtime.database, {
             name, version, type, signer,
-            fileName: pkgFile.name,
             fileSize: pkgFile.size,
+        }, {
+            packageSourcePath: pkgFile.tempFilePath,
+            signatureSourcePath: sigFile.tempFilePath,
         });
-
-        const destPath = deploymentStore.getPackageFilePath(pkg.packageId);
-        const sigDestPath = deploymentStore.getSignatureFilePath(pkg.packageId);
-
-        fs.writeFileSync(destPath, pkgFile.tempFilePath ? fs.readFileSync(pkgFile.tempFilePath) : pkgFile.data);
-        fs.writeFileSync(sigDestPath, sigFile.tempFilePath ? fs.readFileSync(sigFile.tempFilePath) : sigFile.data);
 
         runtime.writeAudit(req, {
             type: 'deployment.package.upload',
@@ -331,15 +351,12 @@ function buildDeploymentRoutes(options = {}) {
             throw createJsonError(404, '部署包不存在');
         }
 
-        const tasks = [];
-        for (const machineId of targetMachineIds) {
-            const task = await deploymentStore.createTask(runtime.database, {
-                packageId,
-                machineId: assertMachineId(machineId),
-                scheduledAt,
-            });
-            tasks.push(task);
-        }
+        const machineIds = targetMachineIds.map((machineId) => assertMachineId(machineId));
+        const tasks = await deploymentStore.createTasks(runtime.database, {
+            packageId,
+            machineIds,
+            scheduledAt,
+        });
 
         runtime.writeAudit(req, {
             type: 'deployment.task.create',
@@ -493,9 +510,9 @@ function buildDeploymentRoutes(options = {}) {
                 version: assertString(record.version, 'version', 1, 64),
                 type: assertPackageType(record.type),
                 targetPath: record.targetPath || null,
-                status: record.status || 'success',
-                deployedAt: record.deployedAt || new Date().toISOString(),
-                uninstalledAt: record.uninstalledAt || null,
+                status: assertDeploymentRecordStatus(record.status || 'success'),
+                deployedAt: assertOptionalIsoTimestamp(record.deployedAt, 'deployedAt') || new Date().toISOString(),
+                uninstalledAt: assertOptionalIsoTimestamp(record.uninstalledAt, 'uninstalledAt'),
             });
             synced.push(syncedRecord);
         }

@@ -625,7 +625,7 @@ function waitForWsJsonMessage(ws) {
     });
 }
 
-async function registerApprovedMachine(client, machineId, machineKeyPair) {
+async function registerApprovedMachine(client, machineId, machineKeyPair, totpSecret) {
     const keyId = `VHDMounterKey_${machineId}`;
     const keyType = 'RSA';
     const pubkeyPem = machineKeyPair.publicKey.export({ type: 'spki', format: 'pem' });
@@ -637,6 +637,7 @@ async function registerApprovedMachine(client, machineId, machineKeyPair) {
         .expect(202);
 
     await client.post('/api/auth/login').send({ password: 'ComplexPassword123!' }).expect(200);
+    await client.post('/api/auth/otp/verify').send({ code: authenticator.generate(totpSecret) }).expect(200);
     await client.post(`/api/machines/${machineId}/approve`).send({ approved: true }).expect(200);
 
     const bootstrapResponse = await client
@@ -1200,6 +1201,7 @@ test('机台注册必须使用可信证书签名且拒绝 nonce 重放', async (
         .expect(401);
 
     await client.post('/api/auth/login').send({ password: 'ComplexPassword123!' }).expect(200);
+    await client.post('/api/auth/otp/verify').send({ code: authenticator.generate(totpSecret) }).expect(200);
     await client.post(`/api/machines/${machineId}/approve`).send({ approved: true }).expect(200);
     await client
         .post(`/api/machines/${machineId}/evhd-password`)
@@ -1237,6 +1239,28 @@ test('机台注册必须使用可信证书签名且拒绝 nonce 重放', async (
     assert.equal('logChannelBootstrapExpiresAt' in envelopeResponse.body, false);
 });
 
+test('默认不信任 X-Forwarded-For 头部', async (t) => {
+    const { app, client } = await createInitializedHarness(t);
+
+    await client
+        .post('/api/auth/login')
+        .send({ password: 'ComplexPassword123!' })
+        .expect(200);
+
+    await client
+        .post('/api/machines')
+        .set('X-Forwarded-For', '203.0.113.99')
+        .send({ machineId: 'M-TRUST', vhdKeyword: 'SAFEBOOT', protected: false })
+        .expect(201);
+
+    const audit = await client
+        .get('/api/audit')
+        .expect(200);
+
+    const machineCreate = audit.body.entries.find((entry) => entry.type === 'machine.create');
+    assert.notEqual(machineCreate.ip, '203.0.113.99');
+});
+
 test('已审批机台即使未配置 EVHD 密码也可获取日志 bootstrap', async (t) => {
     const { client } = await createInitializedHarness(t);
     const machineId = 'MACHINE-LOG-BOOT-ONLY';
@@ -1270,7 +1294,7 @@ test('已审批机台即使未配置 EVHD 密码也可获取日志 bootstrap', a
 });
 
 test('机台日志 WebSocket 握手按原始 ECDH shared secret 完成认证', async (t) => {
-    const { app, client, runtime } = await createInitializedHarness(t);
+    const { app, client, runtime, totpSecret } = await createInitializedHarness(t);
     const server = http.createServer(app);
     attachMachineLogWebSocketServer({
         server,
@@ -1291,7 +1315,7 @@ test('机台日志 WebSocket 握手按原始 ECDH shared secret 完成认证', a
 
     const rawMachineKeyPair = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
     const rawMachineId = 'MACHINE-WS-RAW-01';
-    const rawMachine = await registerApprovedMachine(client, rawMachineId, rawMachineKeyPair);
+    const rawMachine = await registerApprovedMachine(client, rawMachineId, rawMachineKeyPair, totpSecret);
     await performMachineLogHandshake({
         port,
         machineId: rawMachineId,
@@ -1302,7 +1326,7 @@ test('机台日志 WebSocket 握手按原始 ECDH shared secret 完成认证', a
 });
 
 test('机台日志 WebSocket 会拒绝非原始 ECDH shared secret 的 client_finish', async (t) => {
-    const { app, client, runtime } = await createInitializedHarness(t);
+    const { app, client, runtime, totpSecret } = await createInitializedHarness(t);
     const server = http.createServer(app);
     attachMachineLogWebSocketServer({
         server,
@@ -1323,7 +1347,7 @@ test('机台日志 WebSocket 会拒绝非原始 ECDH shared secret 的 client_fi
 
     const machineKeyPair = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
     const machineId = 'MACHINE-WS-RAW-FAIL-01';
-    const machine = await registerApprovedMachine(client, machineId, machineKeyPair);
+    const machine = await registerApprovedMachine(client, machineId, machineKeyPair, totpSecret);
     await performMachineLogHandshake({
         port,
         machineId,

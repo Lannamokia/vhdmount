@@ -5,6 +5,7 @@ const os = require('os');
 const path = require('path');
 const test = require('node:test');
 
+const { authenticator } = require('otplib');
 const request = require('supertest');
 const { createApp } = require('../server');
 
@@ -324,22 +325,23 @@ async function createInitializedHarness(t) {
         disableSignalHandlers: true,
     });
 
-    // Initialize security store with a password for auth
-    const securityStore = runtime.securityStore;
-    securityStore.saveSecurityConfig({
-        passwordHash: '$2a$10$testhashtesthashtesthashtesthashtesthash',
-        sessionSecret: 'test-session-secret-test-session-secret',
-        totpSecret: 'JBSWY3DPEHPK3PXP',
-        totpIssuer: 'Test',
-        totpAccountName: 'admin',
-        dbConfig: { host: 'localhost', database: 'test', user: 'test', password: 'test' },
-        allowedOrigins: ['http://localhost:3000'],
-        trustedRegistrationCertificates: [],
-    });
-    fs.writeFileSync(securityStore.getPaths().lockFile, '');
-    runtime.initialized = true;
-    runtime.securityConfig = securityStore.loadSecurityConfig();
-    runtime.database = fakeDatabase;
+    const client = request.agent(app);
+    const prepareResponse = await client
+        .post('/api/init/prepare')
+        .send({ issuer: 'VHDMountTest', accountName: 'admin' })
+        .expect(201);
+
+    const totpSecret = prepareResponse.body.totpSecret;
+    await client
+        .post('/api/init/complete')
+        .send({
+            adminPassword: 'ComplexPassword123!',
+            sessionSecret: '0123456789abcdef0123456789abcdef',
+            totpCode: authenticator.generate(totpSecret),
+            dbConfig: { host: 'localhost', port: 5432, database: 'test', user: 'test', password: 'test' },
+            defaultVhdKeyword: 'SAFEBOOT',
+        })
+        .expect(201);
 
     // 注册一个带公钥的测试机台，供部署加密流程使用
     const { generateKeyPairSync } = require('crypto');
@@ -350,7 +352,7 @@ async function createInitializedHarness(t) {
         revoked: false,
     });
 
-    return { app, runtime, tempDir, database: fakeDatabase, testKeyPair, testKeyId };
+    return { app, runtime, tempDir, database: fakeDatabase, testKeyPair, testKeyId, totpSecret };
 }
 
 test('GET /api/deployments/packages 需要认证', async (t) => {
@@ -360,6 +362,20 @@ test('GET /api/deployments/packages 需要认证', async (t) => {
     assert.strictEqual(res.body.requireAuth, true);
 });
 
+async function loginAndVerifyOtp(client, app) {
+    await client
+        .post('/api/auth/login')
+        .send({ password: 'ComplexPassword123!' })
+        .expect(200);
+
+    const runtime = app.locals.runtime;
+    const secret = runtime.securityConfig.totpSecret;
+    await client
+        .post('/api/auth/otp/verify')
+        .send({ code: authenticator.generate(secret) })
+        .expect(200);
+}
+
 test('POST /api/deployments/tasks 需要认证', async (t) => {
     const { app } = await createInitializedHarness(t);
     const res = await request(app).post('/api/deployments/tasks').send({
@@ -367,6 +383,23 @@ test('POST /api/deployments/tasks 需要认证', async (t) => {
         targetMachineIds: ['machine-001'],
     });
     assert.strictEqual(res.status, 401);
+});
+
+test('部署管理高敏接口要求 OTP step-up', async (t) => {
+    const { app } = await createInitializedHarness(t);
+    const client = request.agent(app);
+
+    await client
+        .post('/api/auth/login')
+        .send({ password: 'ComplexPassword123!' })
+        .expect(200);
+
+    await client.get('/api/deployments/packages').expect(403);
+    await client.post('/api/deployments/tasks').send({
+        packageId: 'pkg-test',
+        targetMachineIds: ['machine-001'],
+    }).expect(403);
+    await client.post('/api/machines/machine-001/deployments/rec-test/uninstall').expect(403);
 });
 
 test('POST /api/machines/:machineId/deployments/:recordId/uninstall 需要认证', async (t) => {
@@ -575,6 +608,118 @@ test('POST /api/machines/:machineId/deployments/sync 允许签名机台同步自
     assert.strictEqual(res.status, 200);
     assert.strictEqual(res.body.success, true);
     assert.strictEqual(res.body.synced, 1);
+});
+
+test('POST /api/machines/:machineId/deployments/sync 非法状态返回 400', async (t) => {
+    const { app, testKeyPair, testKeyId } = await createInitializedHarness(t);
+    const path = '/api/machines/machine-001/deployments/sync';
+    const body = JSON.stringify({
+        records: [{
+            recordId: 'rec-001',
+            packageId: 'pkg-001',
+            name: 'Test',
+            version: '1.0.0',
+            type: 'software-deploy',
+            status: 'running',
+            deployedAt: new Date().toISOString(),
+        }],
+    });
+    const res = await request(app)
+        .post(path)
+        .set('Content-Type', 'application/json')
+        .set(createMachineAuthHeaders({
+            privateKey: testKeyPair.privateKey,
+            machineId: 'machine-001',
+            keyId: testKeyId,
+            method: 'POST',
+            path,
+            body,
+        }))
+        .send(body);
+
+    assert.strictEqual(res.status, 400);
+});
+
+test('POST /api/machines/:machineId/deployments/sync 非法时间返回 400', async (t) => {
+    const { app, testKeyPair, testKeyId } = await createInitializedHarness(t);
+    const path = '/api/machines/machine-001/deployments/sync';
+    const body = JSON.stringify({
+        records: [{
+            recordId: 'rec-001',
+            packageId: 'pkg-001',
+            name: 'Test',
+            version: '1.0.0',
+            type: 'software-deploy',
+            status: 'success',
+            deployedAt: 'not-a-date',
+        }],
+    });
+    const res = await request(app)
+        .post(path)
+        .set('Content-Type', 'application/json')
+        .set(createMachineAuthHeaders({
+            privateKey: testKeyPair.privateKey,
+            machineId: 'machine-001',
+            keyId: testKeyId,
+            method: 'POST',
+            path,
+            body,
+        }))
+        .send(body);
+
+    assert.strictEqual(res.status, 400);
+});
+
+test('POST /api/deployments/packages 上传后保留文件并返回包记录', async (t) => {
+    const { app, tempDir } = await createInitializedHarness(t);
+    const client = request.agent(app);
+    await loginAndVerifyOtp(client, app);
+
+    const pkgPath = path.join(tempDir, 'upload-test.zip');
+    const sigPath = path.join(tempDir, 'upload-test.sig');
+    fs.writeFileSync(pkgPath, crypto.randomBytes(32));
+    fs.writeFileSync(sigPath, crypto.randomBytes(16));
+
+    const res = await client
+        .post('/api/deployments/packages')
+        .field('name', 'UploadPkg')
+        .field('version', '1.0.0')
+        .field('type', 'software-deploy')
+        .field('signer', 'admin')
+        .attach('package', pkgPath)
+        .attach('signature', sigPath)
+        .expect(201);
+
+    assert.equal(res.body.success, true);
+    const storedPath = res.body.package.filePath;
+    assert.equal(fs.existsSync(storedPath), true);
+    assert.equal(fs.existsSync(`${storedPath}.sig`), true);
+});
+
+test('POST /api/deployments/tasks 批量创建在单个非法机台 ID 时整体失败', async (t) => {
+    const { app, database, tempDir } = await createInitializedHarness(t);
+    const client = request.agent(app);
+    await loginAndVerifyOtp(client, app);
+
+    const zipPath = path.join(tempDir, 'batch-test.zip');
+    fs.writeFileSync(zipPath, crypto.randomBytes(24));
+    await database.query(
+        'INSERT INTO deployment_packages (package_id, name, version, type, signer, file_path, file_size, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+        ['pkg-batch-001', 'BatchPkg', '1.0.0', 'software-deploy', 'test', zipPath, 24, new Date(Date.now() + 30 * 86400000).toISOString()]
+    );
+
+    await client
+        .post('/api/deployments/tasks')
+        .send({
+            packageId: 'pkg-batch-001',
+            targetMachineIds: ['machine-001', 'X'.repeat(65)],
+        })
+        .expect(400);
+
+    const listRes = await client
+        .get('/api/deployments/tasks')
+        .expect(200);
+    assert.deepStrictEqual(listRes.body.tasks, []);
 });
 
 test('下载接口拒绝无 UA 的请求', async (t) => {

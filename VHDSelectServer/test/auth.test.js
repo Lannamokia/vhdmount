@@ -99,17 +99,22 @@ test('POST /api/auth/change-password rejects wrong current password', async (t) 
             newPassword: 'NewPassword456!',
             confirmPassword: 'NewPassword456!',
         })
-        .expect(401);
+        .expect(403);
 
-    assert.equal(response.body.success, false);
+    assert.equal(response.body.requireOtp, true);
 });
 
 test('POST /api/auth/change-password rejects short new password', async (t) => {
-    const { client } = await createInitializedHarness(t);
+    const { client, totpSecret } = await createInitializedHarness(t);
 
     await client
         .post('/api/auth/login')
         .send({ password: 'ComplexPassword123!' })
+        .expect(200);
+
+    await client
+        .post('/api/auth/otp/verify')
+        .send({ code: authenticator.generate(totpSecret) })
         .expect(200);
 
     const response = await client
@@ -125,11 +130,16 @@ test('POST /api/auth/change-password rejects short new password', async (t) => {
 });
 
 test('POST /api/auth/change-password rejects mismatched confirm', async (t) => {
-    const { client } = await createInitializedHarness(t);
+    const { client, totpSecret } = await createInitializedHarness(t);
 
     await client
         .post('/api/auth/login')
         .send({ password: 'ComplexPassword123!' })
+        .expect(200);
+
+    await client
+        .post('/api/auth/otp/verify')
+        .send({ code: authenticator.generate(totpSecret) })
         .expect(200);
 
     const response = await client
@@ -145,11 +155,16 @@ test('POST /api/auth/change-password rejects mismatched confirm', async (t) => {
 });
 
 test('POST /api/auth/change-password succeeds with valid input', async (t) => {
-    const { client } = await createInitializedHarness(t);
+    const { client, totpSecret } = await createInitializedHarness(t);
 
     await client
         .post('/api/auth/login')
         .send({ password: 'ComplexPassword123!' })
+        .expect(200);
+
+    await client
+        .post('/api/auth/otp/verify')
+        .send({ code: authenticator.generate(totpSecret) })
         .expect(200);
 
     const response = await client
