@@ -257,6 +257,18 @@ namespace VHDMounter
                 Trace.WriteLine($"[MachineKeyRegistration] 公钥注册提交失败: {(int)response.StatusCode} {body}");
                 return false;
             }
+            catch (FileNotFoundException ex)
+            {
+                // 永久性错误：证书文件不存在，不设置退避，每次循环都会再次失败但不会触发限流
+                Trace.WriteLine($"[MachineKeyRegistration] 注册证书文件缺失（永久错误，不退避）: {ex.Message}");
+                return false;
+            }
+            catch (InvalidOperationException ex)
+            {
+                // 永久性错误：未配置注册证书路径或证书无私钥，不设置退避
+                Trace.WriteLine($"[MachineKeyRegistration] 注册证书配置错误（永久错误，不退避）: {ex.Message}");
+                return false;
+            }
             catch (Exception ex)
             {
                 _nextRegistrationAttempt = DateTimeOffset.UtcNow.AddSeconds(30);
