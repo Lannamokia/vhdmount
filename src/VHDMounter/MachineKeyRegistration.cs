@@ -43,7 +43,7 @@ namespace VHDMounter
             Action<string> statusCallback,
             CancellationToken ct)
         {
-            var rsa = VHDManager.EnsureOrCreateTpmRsa(machineId);
+            using var rsa = VHDManager.EnsureOrCreateTpmRsa(machineId);
             var pubPem = VHDManager.ExportPublicKeyPem(rsa);
             var baseUrl = serverUrl.TrimEnd('/');
 

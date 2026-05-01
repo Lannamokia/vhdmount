@@ -1170,7 +1170,7 @@ namespace VHDMounter
                         var b64 = cipherElement.GetString();
                         if (!string.IsNullOrWhiteSpace(b64))
                         {
-                            var rsa = EnsureOrCreateTpmRsa(machineId);
+                            using var rsa = EnsureOrCreateTpmRsa(machineId);
                             var cipherBytes = Convert.FromBase64String(b64);
                             var plainBytes = rsa.Decrypt(cipherBytes, RSAEncryptionPadding.OaepSHA1);
                             var plain = Encoding.UTF8.GetString(plainBytes);
@@ -1223,7 +1223,7 @@ namespace VHDMounter
                 var config = ReadConfig();
                 var url = ServiceEndpointResolver.ResolveEvhdEnvelopeUrl(config);
 
-                var rsa = EnsureOrCreateTpmRsa(machineId);
+                using var rsa = EnsureOrCreateTpmRsa(machineId);
 
                 var requestUrl = $"{url}?machineId={Uri.EscapeDataString(machineId)}";
                 StatusChanged?.Invoke($"正在从远程获取EVHD封装信封: {requestUrl}");
