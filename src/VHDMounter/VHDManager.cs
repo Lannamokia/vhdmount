@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Management;
 using System.Net;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Text.RegularExpressions;
 using System.Net.Http;
@@ -77,7 +78,7 @@ namespace VHDMounter
         private string configFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "vhdmonter_config.ini");
         
         // 保护检查相关字段
-        private Timer protectionTimer;
+        private System.Timers.Timer protectionTimer;
         private string machineId;
         private bool isProtectionCheckEnabled;
         private string protectionCheckUrl;
@@ -139,7 +140,7 @@ namespace VHDMounter
                 protectionTimer.Dispose();
             }
             
-            protectionTimer = new Timer(protectionCheckInterval);
+            protectionTimer = new System.Timers.Timer(protectionCheckInterval);
             protectionTimer.Elapsed += async (sender, e) => await CheckProtectionStatus();
             protectionTimer.AutoReset = true;
             protectionTimer.Start();
@@ -1216,7 +1217,8 @@ namespace VHDMounter
         }
 
         // 远程获取EVHD密码（失败则阻塞并每秒轮询状态，仅在400未注册时注册公钥）
-        public async Task<string> GetEvhdPasswordFromServerWithBlockingRetry()
+        // 接收 CancellationToken 后可以从外部优雅取消阻塞循环（C13）
+        public async Task<string> GetEvhdPasswordFromServerWithBlockingRetry(CancellationToken ct = default)
         {
             try
             {
@@ -1227,10 +1229,10 @@ namespace VHDMounter
 
                 var requestUrl = $"{url}?machineId={Uri.EscapeDataString(machineId)}";
                 StatusChanged?.Invoke($"正在从远程获取EVHD封装信封: {requestUrl}");
-                var response = await httpClient.GetAsync(requestUrl);
+                var response = await httpClient.GetAsync(requestUrl, ct);
                 if (response.IsSuccessStatusCode)
                 {
-                    var jsonContent = await response.Content.ReadAsStringAsync();
+                    var jsonContent = await response.Content.ReadAsStringAsync(ct);
                     var jsonDoc = JsonDocument.Parse(jsonContent);
                     if (jsonDoc.RootElement.TryGetProperty("ciphertext", out var cipherElement))
                     {
@@ -1245,15 +1247,15 @@ namespace VHDMounter
                     }
                 }
 
-                // 进入阻塞模式并开始轮询
+                // 进入阻塞模式并开始轮询，受 CancellationToken 控制
                 EnterBlockingMode("正在等待EVHD加密参数下发...");
-                while (true)
+                while (!ct.IsCancellationRequested)
                 {
                     try
                     {
                         // 每次轮询直接拉取封装信封，仅在400未注册时执行注册
-                        var pollResponse = await httpClient.GetAsync(requestUrl);
-                        var body = await pollResponse.Content.ReadAsStringAsync();
+                        var pollResponse = await httpClient.GetAsync(requestUrl, ct);
+                        var body = await pollResponse.Content.ReadAsStringAsync(ct);
 
                         if (pollResponse.IsSuccessStatusCode)
                         {
@@ -1317,13 +1319,33 @@ namespace VHDMounter
                             }
                         }
                     }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                    {
+                        ExitBlockingMode();
+                        return null;
+                    }
                     catch (Exception ex)
                     {
                         StatusChanged?.Invoke($"重试中: {ex.Message}");
                     }
 
-                    await Task.Delay(1000);
+                    try
+                    {
+                        await Task.Delay(1000, ct);
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                    {
+                        ExitBlockingMode();
+                        return null;
+                    }
                 }
+
+                ExitBlockingMode();
+                return null;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return null;
             }
             catch (Exception ex)
             {
@@ -4500,8 +4522,10 @@ exit";
         // IDisposable实现
         public void Dispose()
         {
-            StopProtectionCheck();
-            httpClient?.Dispose();
+            // 主程序崩溃/异常退出时由 Dispose 兜底，避免加密挂载子进程残留（C14）
+            try { StopEncryptedEvhdMount(); } catch { }
+            try { StopProtectionCheck(); } catch { }
+            try { httpClient?.Dispose(); } catch { }
         }
         
         // 析构函数
