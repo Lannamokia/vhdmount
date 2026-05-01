@@ -21,15 +21,22 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  dotnet-test:
+  dotnet-build-base:
     runs-on: windows-latest
-    strategy:
-      matrix:
-        enable_hid_menu_features: [false, true]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
-      - name: Test VHDMounter
-        run: dotnet test ./VHDMounter.Tests/VHDMounter.Tests.csproj -p:EnableHidMenuFeatures=${{ matrix.enable_hid_menu_features }} --verbosity normal
+      - name: Build VHDMounter Base
+        run: dotnet build ./VHDMounter.csproj -p:EnableHidMenuFeatures=false --configuration Release
+
+  dotnet-test-maimoller:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Test VHDMounter Maimoller
+        run: dotnet test ./VHDMounter.Tests/VHDMounter.Tests.csproj -p:EnableHidMenuFeatures=true --verbosity normal
