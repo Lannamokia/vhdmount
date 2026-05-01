@@ -50,49 +50,57 @@ namespace VHDMounter
             Action<string> statusCallback,
             CancellationToken ct)
         {
-            using var rsa = VHDManager.EnsureOrCreateTpmRsa(machineId);
-            var pubPem = VHDManager.ExportPublicKeyPem(rsa);
-            var baseUrl = serverUrl.TrimEnd('/');
-
-            while (!ct.IsCancellationRequested)
+            try
             {
-                var state = await ProbeServerStateAsync(baseUrl, machineId, ct);
-                CurrentState = state;
+                using var rsa = VHDManager.EnsureOrCreateTpmRsa(machineId);
+                var pubPem = VHDManager.ExportPublicKeyPem(rsa);
+                var baseUrl = serverUrl.TrimEnd('/');
 
-                if (state == RegistrationState.Approved)
+                while (!ct.IsCancellationRequested)
                 {
-                    Trace.WriteLine("[MachineKeyRegistration] 机台已注册且已审批");
-                    return true;
-                }
+                    var state = await ProbeServerStateAsync(baseUrl, machineId, ct);
+                    CurrentState = state;
 
-                if (state == RegistrationState.NotRegistered)
-                {
+                    if (state == RegistrationState.Approved)
+                    {
+                        Trace.WriteLine("[MachineKeyRegistration] 机台已注册且已审批");
+                        return true;
+                    }
+
+                    if (state == RegistrationState.NotRegistered)
+                    {
+                        statusCallback?.Invoke("请联系管理员注册机台，正等待注册结果回传");
+
+                        // 遵守退避间隔，避免触发服务端限流
+                        if (_nextRegistrationAttempt.HasValue && DateTimeOffset.UtcNow < _nextRegistrationAttempt.Value)
+                        {
+                            var wait = _nextRegistrationAttempt.Value - DateTimeOffset.UtcNow;
+                            Trace.WriteLine($"[MachineKeyRegistration] 退避中，{wait.TotalSeconds:F0} 秒后重试提交注册");
+                            await Task.Delay(wait, ct);
+                        }
+
+                        var submitted = await SubmitRegistrationAsync(baseUrl, machineId, pubPem, ct);
+                        if (!submitted)
+                        {
+                            // 提交失败，等 5 秒后重新探测
+                            await Task.Delay(5000, ct);
+                            continue;
+                        }
+                        CurrentState = RegistrationState.Submitted;
+                    }
+
+                    // 已提交或未审批，继续阻塞等待
                     statusCallback?.Invoke("请联系管理员注册机台，正等待注册结果回传");
-
-                    // 遵守退避间隔，避免触发服务端限流
-                    if (_nextRegistrationAttempt.HasValue && DateTimeOffset.UtcNow < _nextRegistrationAttempt.Value)
-                    {
-                        var wait = _nextRegistrationAttempt.Value - DateTimeOffset.UtcNow;
-                        Trace.WriteLine($"[MachineKeyRegistration] 退避中，{wait.TotalSeconds:F0} 秒后重试提交注册");
-                        await Task.Delay(wait, ct);
-                    }
-
-                    var submitted = await SubmitRegistrationAsync(baseUrl, machineId, pubPem, ct);
-                    if (!submitted)
-                    {
-                        // 提交失败，等 5 秒后重新探测
-                        await Task.Delay(5000, ct);
-                        continue;
-                    }
-                    CurrentState = RegistrationState.Submitted;
+                    await Task.Delay(2000, ct);
                 }
 
-                // 已提交或未审批，继续阻塞等待
-                statusCallback?.Invoke("请联系管理员注册机台，正等待注册结果回传");
-                await Task.Delay(2000, ct);
+                return false;
             }
-
-            return false;
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                Trace.WriteLine("[MachineKeyRegistration] 注册流程被取消");
+                return false;
+            }
         }
 
         /// <summary>

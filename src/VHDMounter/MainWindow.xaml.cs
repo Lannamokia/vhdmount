@@ -233,6 +233,11 @@ namespace VHDMounter
                 SetStage(UiStage.PreLaunchDelay, "准备完成，开始初始化");
                 await StartMainProcess();
             }
+            catch (OperationCanceledException) when (_appLifetimeToken.IsCancellationRequested)
+            {
+                Trace.WriteLine("MAINWINDOW: 启动流程被取消");
+                // 应用关闭时静默退出，不弹错误
+            }
             catch (Exception ex)
             {
                 OnStatusChanged($"延迟启动过程中发生错误: {ex.Message}");
