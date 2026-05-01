@@ -228,4 +228,143 @@ void main() {
     expect(controller.serverStatus, isNotNull);
     expect(controller.errorMessage, contains('本地配置文件 JSON 已损坏'));
   });
+
+  test('bootstrap clears stale deployment state after logout/server change', () async {
+    final api = FakeAdminApi(
+      serverStatus: _readyServerStatus,
+      authStatus: _authenticatedStatus,
+      machines: const <MachineRecord>[
+        MachineRecord(
+          machineId: 'M-01',
+          protectedState: false,
+          vhdKeyword: 'SAFEBOOT',
+          evhdPasswordConfigured: true,
+          approved: true,
+          revoked: false,
+          keyId: 'key-01',
+          keyType: 'RSA',
+          registrationCertFingerprint: 'ABC123',
+          logRetentionActiveDaysOverride: null,
+          lastSeen: '2026-04-03T08:00:00Z',
+        ),
+      ],
+    );
+    final controller = AppController(
+      api: api,
+      clientConfigStore: FakeClientConfigStore(),
+    );
+
+    await controller.bootstrap();
+    controller.deploymentPackages = <DeploymentPackage>[
+      const DeploymentPackage(
+        packageId: 'pkg-01',
+        name: 'pkg',
+        version: '1.0.0',
+        type: 'software-deploy',
+        signer: 'admin',
+        fileName: 'pkg-01.zip',
+        fileSize: 1,
+        createdAt: '2026-04-03T08:00:00Z',
+      ),
+    ];
+    controller.deploymentTasks = <DeploymentTask>[
+      const DeploymentTask(
+        taskId: 'task-01',
+        packageId: 'pkg-01',
+        machineId: 'M-01',
+        taskType: 'deploy',
+        status: 'pending',
+        errorMessage: null,
+        createdAt: '2026-04-03T08:00:00Z',
+        scheduledAt: null,
+        completedAt: null,
+        packageName: 'pkg',
+        packageVersion: '1.0.0',
+      ),
+    ];
+    controller.deploymentRecords = <DeploymentRecord>[
+      const DeploymentRecord(
+        recordId: 'rec-01',
+        packageId: 'pkg-01',
+        machineId: 'M-01',
+        name: 'pkg',
+        version: '1.0.0',
+        type: 'software-deploy',
+        targetPath: 'C:\\SOFT\\pkg-01',
+        status: 'success',
+        deployedAt: '2026-04-03T08:00:00Z',
+        uninstalledAt: null,
+        syncedAt: '2026-04-03T08:00:00Z',
+      ),
+    ];
+    controller.deploymentSelectedMachineId = 'M-01';
+    controller.deploymentTaskStatusFilter = 'pending';
+    controller.deploymentSelectedTab = 'history';
+
+    api.authStatus = _unauthenticatedStatus;
+    await controller.bootstrap();
+
+    expect(controller.deploymentPackages, isEmpty);
+    expect(controller.deploymentTasks, isEmpty);
+    expect(controller.deploymentRecords, isEmpty);
+    expect(controller.deploymentSelectedMachineId, isNull);
+    expect(controller.deploymentTaskStatusFilter, isNull);
+    expect(controller.deploymentSelectedTab, 'packages');
+  });
+
+  test('loadMachineDeploymentHistory ignores stale slower responses', () async {
+    final api = FakeAdminApi(
+      serverStatus: _readyServerStatus,
+      authStatus: _authenticatedStatus,
+      machineDeploymentHistory: <String, List<DeploymentRecord>>{
+        'M-01': const <DeploymentRecord>[
+          DeploymentRecord(
+            recordId: 'rec-01',
+            packageId: 'pkg-01',
+            machineId: 'M-01',
+            name: 'pkg-old',
+            version: '1.0.0',
+            type: 'software-deploy',
+            targetPath: 'C:\\SOFT\\pkg-old',
+            status: 'success',
+            deployedAt: '2026-04-03T08:00:00Z',
+            uninstalledAt: null,
+            syncedAt: '2026-04-03T08:00:00Z',
+          ),
+        ],
+        'M-02': const <DeploymentRecord>[
+          DeploymentRecord(
+            recordId: 'rec-02',
+            packageId: 'pkg-02',
+            machineId: 'M-02',
+            name: 'pkg-new',
+            version: '2.0.0',
+            type: 'software-deploy',
+            targetPath: 'C:\\SOFT\\pkg-new',
+            status: 'success',
+            deployedAt: '2026-04-03T09:00:00Z',
+            uninstalledAt: null,
+            syncedAt: '2026-04-03T09:00:00Z',
+          ),
+        ],
+      },
+    );
+    api.deploymentHistoryDelays['M-01'] = const Duration(milliseconds: 50);
+    api.deploymentHistoryDelays['M-02'] = const Duration(milliseconds: 1);
+    final controller = AppController(
+      api: api,
+      clientConfigStore: FakeClientConfigStore(),
+    );
+
+    await controller.bootstrap();
+    final first = controller.loadMachineDeploymentHistory('M-01');
+    final second = controller.loadMachineDeploymentHistory('M-02');
+
+    await Future.wait<void>(<Future<void>>[first, second]);
+
+    expect(controller.deploymentSelectedMachineId, 'M-02');
+    expect(controller.deploymentRecords, hasLength(1));
+    expect(controller.deploymentRecords.single.machineId, 'M-02');
+    expect(controller.deploymentRecords.single.name, 'pkg-new');
+  });
 }

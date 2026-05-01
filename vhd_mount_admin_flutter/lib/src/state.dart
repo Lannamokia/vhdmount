@@ -43,6 +43,7 @@ class AppController extends ChangeNotifier {
   String? deploymentSelectedMachineId;
   String? deploymentTaskStatusFilter;
   String deploymentSelectedTab = 'packages';
+  int _deploymentHistoryRequestId = 0;
 
   void setDeploymentSelectedTab(String tab) {
     deploymentSelectedTab = tab;
@@ -79,6 +80,19 @@ class AppController extends ChangeNotifier {
     machineLogTo = null;
     machineLogCursor = null;
     machineLogHasMore = false;
+    if (notify) {
+      notifyListeners();
+    }
+  }
+
+  void _clearDeploymentState({bool notify = true}) {
+    deploymentPackages = <DeploymentPackage>[];
+    deploymentTasks = <DeploymentTask>[];
+    deploymentRecords = <DeploymentRecord>[];
+    deploymentSelectedMachineId = null;
+    deploymentTaskStatusFilter = null;
+    deploymentSelectedTab = 'packages';
+    _deploymentHistoryRequestId += 1;
     if (notify) {
       notifyListeners();
     }
@@ -218,6 +232,7 @@ class AppController extends ChangeNotifier {
         auditEntries = <AuditEntry>[];
         logRetentionSettings = null;
         _clearMachineLogState(notify: false);
+        _clearDeploymentState(notify: false);
       }
     } catch (error) {
       serverStatus = null;
@@ -229,6 +244,7 @@ class AppController extends ChangeNotifier {
       auditEntries = <AuditEntry>[];
       logRetentionSettings = null;
       _clearMachineLogState(notify: false);
+      _clearDeploymentState(notify: false);
       _clearOtpVerification(notify: false);
       errorMessage = describeError(error);
     } finally {
@@ -290,6 +306,7 @@ class AppController extends ChangeNotifier {
     otpRotationPreparation = null;
     logRetentionSettings = null;
     _clearMachineLogState(notify: false);
+    _clearDeploymentState(notify: false);
     await bootstrap();
   }
 
@@ -633,9 +650,9 @@ class AppController extends ChangeNotifier {
     required String version,
     required String type,
     required String signer,
-    required List<int> packageBytes,
+    required String packagePath,
     required String packageFileName,
-    required List<int> signatureBytes,
+    required String signaturePath,
     required String signatureFileName,
   }) async {
     await _runAction(() => api.uploadDeploymentPackage(
@@ -643,9 +660,9 @@ class AppController extends ChangeNotifier {
       version: version,
       type: type,
       signer: signer,
-      packageBytes: packageBytes,
+      packagePath: packagePath,
       packageFileName: packageFileName,
-      signatureBytes: signatureBytes,
+      signaturePath: signaturePath,
       signatureFileName: signatureFileName,
     ));
     await loadDeploymentPackages();
@@ -683,10 +700,19 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> loadMachineDeploymentHistory(String machineId) async {
-    deploymentSelectedMachineId = machineId.trim().isEmpty ? null : machineId.trim();
-    deploymentRecords = await _runAction(
+    final normalizedMachineId = machineId.trim();
+    deploymentSelectedMachineId = normalizedMachineId.isEmpty
+        ? null
+        : normalizedMachineId;
+    final requestId = ++_deploymentHistoryRequestId;
+    final records = await _runAction(
       () => api.getMachineDeploymentHistory(machineId),
     );
+    if (requestId != _deploymentHistoryRequestId ||
+        deploymentSelectedMachineId != normalizedMachineId) {
+      return;
+    }
+    deploymentRecords = records;
     notifyListeners();
   }
 

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 
 import 'package:vhd_mount_admin_flutter/app.dart';
 
@@ -18,6 +19,7 @@ class FakeAdminApi implements AdminApi {
     ),
     this.machineLogSessions = const <MachineLogSession>[],
     this.machineLogEntries = const <MachineLogEntry>[],
+    this.machineDeploymentHistory = const <String, List<DeploymentRecord>>{},
     this.getOtpStatusResponse,
     this.verifyOtpResponse,
     this.prepareOtpRotationResponse,
@@ -41,6 +43,7 @@ class FakeAdminApi implements AdminApi {
   LogRetentionSettings logRetentionSettings;
   List<MachineLogSession> machineLogSessions;
   List<MachineLogEntry> machineLogEntries;
+  Map<String, List<DeploymentRecord>> machineDeploymentHistory;
   OtpStatus? getOtpStatusResponse;
   OtpStatus? verifyOtpResponse;
   InitializationPreparation? prepareOtpRotationResponse;
@@ -55,6 +58,7 @@ class FakeAdminApi implements AdminApi {
   Object? getMachineLogsError;
   Object? exportMachineLogsError;
   Object? getTrustedCertificatesError;
+  final Map<String, Duration> deploymentHistoryDelays = <String, Duration>{};
 
   int getServerStatusCalls = 0;
   int getAuthStatusCalls = 0;
@@ -613,9 +617,9 @@ class FakeAdminApi implements AdminApi {
     required String version,
     required String type,
     required String signer,
-    required List<int> packageBytes,
+    required String packagePath,
     required String packageFileName,
-    required List<int> signatureBytes,
+    required String signaturePath,
     required String signatureFileName,
   }) async {}
 
@@ -642,8 +646,13 @@ class FakeAdminApi implements AdminApi {
   @override
   Future<List<DeploymentRecord>> getMachineDeploymentHistory(
     String machineId,
-  ) async =>
-      <DeploymentRecord>[];
+  ) async {
+    final delay = deploymentHistoryDelays[machineId];
+    if (delay != null) {
+      await Future<void>.delayed(delay);
+    }
+    return machineDeploymentHistory[machineId] ?? <DeploymentRecord>[];
+  }
 
   @override
   Future<void> triggerUninstall(String machineId, String recordId) async {}

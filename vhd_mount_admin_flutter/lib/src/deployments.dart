@@ -300,9 +300,9 @@ class _PackagesTab extends StatelessWidget {
                     version: result.version,
                     type: result.type,
                     signer: result.signer,
-                    packageBytes: result.packageBytes,
+                    packagePath: result.packagePath,
                     packageFileName: result.packageFileName,
-                    signatureBytes: result.signatureBytes,
+                    signaturePath: result.signaturePath,
                     signatureFileName: result.signatureFileName,
                   );
                   if (!context.mounted) {
@@ -358,9 +358,9 @@ class _UploadPackageResult {
     required this.version,
     required this.type,
     required this.signer,
-    required this.packageBytes,
+    required this.packagePath,
     required this.packageFileName,
-    required this.signatureBytes,
+    required this.signaturePath,
     required this.signatureFileName,
   });
 
@@ -368,9 +368,9 @@ class _UploadPackageResult {
   final String version;
   final String type;
   final String signer;
-  final List<int> packageBytes;
+  final String packagePath;
   final String packageFileName;
-  final List<int> signatureBytes;
+  final String signaturePath;
   final String signatureFileName;
 }
 
@@ -457,21 +457,15 @@ class _UploadPackageDialogState extends State<_UploadPackageDialog> {
       return;
     }
 
-    final packageBytes = await packageFile.readAsBytes();
-    final signatureBytes = await signatureFile.readAsBytes();
-    if (!mounted) {
-      return;
-    }
-
     Navigator.of(context).pop(
       _UploadPackageResult(
         name: name,
         version: version,
         type: _type,
         signer: signer,
-        packageBytes: packageBytes,
+        packagePath: packageFile.path,
         packageFileName: packageFile.uri.pathSegments.last,
-        signatureBytes: signatureBytes,
+        signaturePath: signatureFile.path,
         signatureFileName: signatureFile.uri.pathSegments.last,
       ),
     );

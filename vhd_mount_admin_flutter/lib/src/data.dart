@@ -554,9 +554,9 @@ class CookieStoreException implements Exception {
 }
 
 abstract class CookieStore {
-  Future<Map<String, Cookie>> load();
+  Future<Map<String, Map<String, Cookie>>> load();
 
-  Future<void> save(Map<String, Cookie> cookies);
+  Future<void> save(Map<String, Map<String, Cookie>> cookiesByOrigin);
 
   Future<void> clear();
 }
@@ -570,78 +570,103 @@ class SecureCookieStore implements CookieStore {
   final FlutterSecureStorage _secureStorage;
 
   @override
-  Future<Map<String, Cookie>> load() async {
+  Future<Map<String, Map<String, Cookie>>> load() async {
     try {
       final content = await _secureStorage.read(key: _storageKey);
       if (content == null || content.trim().isEmpty) {
-        return <String, Cookie>{};
+        return <String, Map<String, Cookie>>{};
       }
 
       final decoded = jsonDecode(content);
       if (decoded is! Map<String, dynamic>) {
-        return <String, Cookie>{};
+        return <String, Map<String, Cookie>>{};
       }
 
-      final cookiesJson = decoded['cookies'];
+      final cookiesJson = decoded['cookiesByOrigin'];
       if (cookiesJson is! Map<String, dynamic>) {
-        return <String, Cookie>{};
+        return <String, Map<String, Cookie>>{};
       }
 
-      final result = <String, Cookie>{};
-      for (final entry in cookiesJson.entries) {
-        final cookieData = entry.value;
-        if (cookieData is! Map<String, dynamic>) {
+      final result = <String, Map<String, Cookie>>{};
+      for (final originEntry in cookiesJson.entries) {
+        final origin = originEntry.key.trim();
+        final originCookies = originEntry.value;
+        if (origin.isEmpty || originCookies is! Map<String, dynamic>) {
           continue;
         }
-        final name = cookieData['name'] as String?;
-        final value = cookieData['value'] as String?;
-        if (name == null || value == null) {
-          continue;
-        }
-        final cookie = Cookie(name, value);
-        final expiresStr = cookieData['expires'] as String?;
-        if (expiresStr != null && expiresStr.isNotEmpty) {
-          final expires = DateTime.tryParse(expiresStr);
-          if (expires != null) {
-            cookie.expires = expires;
+
+        final scopedCookies = <String, Cookie>{};
+        for (final entry in originCookies.entries) {
+          final cookieData = entry.value;
+          if (cookieData is! Map<String, dynamic>) {
+            continue;
           }
+          final name = cookieData['name'] as String?;
+          final value = cookieData['value'] as String?;
+          if (name == null || value == null) {
+            continue;
+          }
+          final cookie = Cookie(name, value);
+          final expiresStr = cookieData['expires'] as String?;
+          if (expiresStr != null && expiresStr.isNotEmpty) {
+            final expires = DateTime.tryParse(expiresStr);
+            if (expires != null) {
+              cookie.expires = expires;
+            }
+          }
+          final domain = cookieData['domain'] as String?;
+          if (domain != null && domain.isNotEmpty) {
+            cookie.domain = domain;
+          }
+          final path = cookieData['path'] as String?;
+          if (path != null && path.isNotEmpty) {
+            cookie.path = path;
+          }
+          scopedCookies[name] = cookie;
         }
-        final domain = cookieData['domain'] as String?;
-        if (domain != null && domain.isNotEmpty) {
-          cookie.domain = domain;
+
+        if (scopedCookies.isNotEmpty) {
+          result[origin] = scopedCookies;
         }
-        final path = cookieData['path'] as String?;
-        if (path != null && path.isNotEmpty) {
-          cookie.path = path;
-        }
-        result[name] = cookie;
       }
 
       return result;
     } on FormatException {
-      return <String, Cookie>{};
+      return <String, Map<String, Cookie>>{};
     } catch (error) {
       throw CookieStoreException('读取持久化 Cookie 失败: $error');
     }
   }
 
   @override
-  Future<void> save(Map<String, Cookie> cookies) async {
+  Future<void> save(Map<String, Map<String, Cookie>> cookiesByOrigin) async {
     try {
       final cookiesJson = <String, dynamic>{};
-      for (final entry in cookies.entries) {
-        final cookie = entry.value;
-        cookiesJson[entry.key] = <String, dynamic>{
-          'name': cookie.name,
-          'value': cookie.value,
-          if (cookie.expires != null)
-            'expires': cookie.expires!.toUtc().toIso8601String(),
-          if (cookie.domain != null) 'domain': cookie.domain,
-          if (cookie.path != null) 'path': cookie.path,
-        };
+      for (final originEntry in cookiesByOrigin.entries) {
+        final origin = originEntry.key.trim();
+        if (origin.isEmpty) {
+          continue;
+        }
+
+        final scopedCookies = <String, dynamic>{};
+        for (final entry in originEntry.value.entries) {
+          final cookie = entry.value;
+          scopedCookies[entry.key] = <String, dynamic>{
+            'name': cookie.name,
+            'value': cookie.value,
+            if (cookie.expires != null)
+              'expires': cookie.expires!.toUtc().toIso8601String(),
+            if (cookie.domain != null) 'domain': cookie.domain,
+            if (cookie.path != null) 'path': cookie.path,
+          };
+        }
+
+        if (scopedCookies.isNotEmpty) {
+          cookiesJson[origin] = scopedCookies;
+        }
       }
 
-      final data = <String, dynamic>{'cookies': cookiesJson};
+      final data = <String, dynamic>{'cookiesByOrigin': cookiesJson};
       await _secureStorage.write(
         key: _storageKey,
         value: jsonEncode(data),
@@ -1412,9 +1437,9 @@ abstract class AdminApi {
     required String version,
     required String type,
     required String signer,
-    required List<int> packageBytes,
+    required String packagePath,
     required String packageFileName,
-    required List<int> signatureBytes,
+    required String signaturePath,
     required String signatureFileName,
   });
 
@@ -1441,12 +1466,12 @@ abstract class AdminApi {
 class _MultipartFile {
   const _MultipartFile({
     required this.fileName,
-    required this.bytes,
+    required this.file,
     required this.contentType,
   });
 
   final String fileName;
-  final List<int> bytes;
+  final File file;
   final String contentType;
 }
 
@@ -1460,25 +1485,43 @@ class HttpAdminApi implements AdminApi {
        _client = HttpClient()..connectionTimeout = requestTimeout;
 
   final HttpClient _client;
-  final Map<String, Cookie> _cookies = <String, Cookie>{};
+  final Map<String, Map<String, Cookie>> _cookiesByOrigin =
+      <String, Map<String, Cookie>>{};
   final Duration _requestTimeout;
   String _baseUrl;
   final Random _random = Random.secure();
   final CookieStore? cookieStore;
 
+  String get _cookieOrigin {
+    final normalizedBase = _baseUrl.isEmpty
+        ? 'http://localhost:8080'
+        : normalizeBaseUrl(_baseUrl);
+    final uri = Uri.parse(normalizedBase);
+    final port = uri.hasPort
+        ? uri.port
+        : (uri.scheme == 'https' ? 443 : 80);
+    return '${uri.scheme}://${uri.host}:$port';
+  }
+
   Future<void> _persistCookies() async {
-    if (cookieStore == null || _cookies.isEmpty) {
+    if (cookieStore == null || _cookiesByOrigin.isEmpty) {
       return;
     }
     try {
-      await cookieStore!.save(Map<String, Cookie>.unmodifiable(_cookies));
+      final snapshot = <String, Map<String, Cookie>>{};
+      for (final entry in _cookiesByOrigin.entries) {
+        snapshot[entry.key] = Map<String, Cookie>.unmodifiable(entry.value);
+      }
+      await cookieStore!.save(
+        Map<String, Map<String, Cookie>>.unmodifiable(snapshot),
+      );
     } catch (_) {
       // 静默失败，Cookie 持久化失败时不阻塞请求。
     }
   }
 
   Future<void> clearCookies() async {
-    _cookies.clear();
+    _cookiesByOrigin.clear();
     if (cookieStore != null) {
       try {
         await cookieStore!.clear();
@@ -1504,21 +1547,26 @@ class HttpAdminApi implements AdminApi {
   }
 
   void _applyCookies(HttpClientRequest request) {
-    if (_cookies.isEmpty) {
+    final scopedCookies = _cookiesByOrigin[_cookieOrigin];
+    if (scopedCookies == null || scopedCookies.isEmpty) {
       return;
     }
     request.headers.set(
       HttpHeaders.cookieHeader,
-      _cookies.values
+      scopedCookies.values
           .map((cookie) => '${cookie.name}=${cookie.value}')
           .join('; '),
     );
   }
 
   void _storeCookies(HttpClientResponse response) {
+    final scopedCookies = _cookiesByOrigin.putIfAbsent(
+      _cookieOrigin,
+      () => <String, Cookie>{},
+    );
     var changed = false;
     for (final cookie in response.cookies) {
-      _cookies[cookie.name] = cookie;
+      scopedCookies[cookie.name] = cookie;
       changed = true;
     }
     if (changed) {
@@ -1713,7 +1761,9 @@ class HttpAdminApi implements AdminApi {
     try {
       final loaded = await cookieStore!.load();
       if (loaded.isNotEmpty) {
-        _cookies.addAll(loaded);
+        _cookiesByOrigin
+          ..clear()
+          ..addAll(loaded);
       }
     } catch (_) {
       // 静默失败，Cookie 恢复失败时不阻塞启动流程。
@@ -2042,32 +2092,6 @@ class HttpAdminApi implements AdminApi {
     required Map<String, _MultipartFile> files,
   }) async {
     final boundary = '----FlutterFormBoundary${_random.nextInt(999999)}';
-    final body = BytesBuilder();
-
-    for (final entry in fields.entries) {
-      body.add(utf8.encode('--$boundary\r\n'));
-      body.add(
-        utf8.encode(
-          'Content-Disposition: form-data; name="${entry.key}"\r\n\r\n',
-        ),
-      );
-      body.add(utf8.encode('${entry.value}\r\n'));
-    }
-
-    for (final entry in files.entries) {
-      body.add(utf8.encode('--$boundary\r\n'));
-      body.add(
-        utf8.encode(
-          'Content-Disposition: form-data; name="${entry.key}"; '
-          'filename="${entry.value.fileName}"\r\n',
-        ),
-      );
-      body.add(utf8.encode('Content-Type: ${entry.value.contentType}\r\n\r\n'));
-      body.add(entry.value.bytes);
-      body.add(utf8.encode('\r\n'));
-    }
-
-    body.add(utf8.encode('--$boundary--\r\n'));
 
     final request = await _client.postUrl(_resolve(path));
     request.headers.set(
@@ -2075,7 +2099,31 @@ class HttpAdminApi implements AdminApi {
       'multipart/form-data; boundary=$boundary',
     );
     _applyCookies(request);
-    request.add(body.toBytes());
+
+    for (final entry in fields.entries) {
+      request.add(utf8.encode('--$boundary\r\n'));
+      request.add(
+        utf8.encode(
+          'Content-Disposition: form-data; name="${entry.key}"\r\n\r\n',
+        ),
+      );
+      request.add(utf8.encode('${entry.value}\r\n'));
+    }
+
+    for (final entry in files.entries) {
+      request.add(utf8.encode('--$boundary\r\n'));
+      request.add(
+        utf8.encode(
+          'Content-Disposition: form-data; name="${entry.key}"; '
+          'filename="${entry.value.fileName}"\r\n',
+        ),
+      );
+      request.add(utf8.encode('Content-Type: ${entry.value.contentType}\r\n\r\n'));
+      await entry.value.file.openRead().pipe(request);
+      request.add(utf8.encode('\r\n'));
+    }
+
+    request.add(utf8.encode('--$boundary--\r\n'));
 
     final response = await request.close();
     _storeCookies(response);
@@ -2130,9 +2178,9 @@ class HttpAdminApi implements AdminApi {
     required String version,
     required String type,
     required String signer,
-    required List<int> packageBytes,
+    required String packagePath,
     required String packageFileName,
-    required List<int> signatureBytes,
+    required String signaturePath,
     required String signatureFileName,
   }) async {
     await _uploadMultipart(
@@ -2146,12 +2194,12 @@ class HttpAdminApi implements AdminApi {
       files: <String, _MultipartFile>{
         'package': _MultipartFile(
           fileName: packageFileName,
-          bytes: packageBytes,
+          file: File(packagePath),
           contentType: 'application/zip',
         ),
         'signature': _MultipartFile(
           fileName: signatureFileName,
-          bytes: signatureBytes,
+          file: File(signaturePath),
           contentType: 'application/octet-stream',
         ),
       },

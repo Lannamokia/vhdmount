@@ -95,6 +95,56 @@ void main() {
     expect(find.text('当前仅显示机台 MACHINE-01 的审计记录。'), findsOneWidget);
   });
 
+  testWidgets('trusted certificate delete requires confirmation', (
+    tester,
+  ) async {
+    _setDesktopViewport(tester, const Size(1600, 960));
+    addTearDown(() => _resetViewport(tester));
+
+    final controller = AppController(
+      api: FakeAdminApi(
+        serverStatus: _readyServerStatus,
+        authStatus: _authenticatedStatus,
+        certificates: const <TrustedCertificateRecord>[
+          TrustedCertificateRecord(
+            name: 'cert-01',
+            fingerprint256: 'ABC123',
+            subject: 'CN=Test',
+            validFrom: '2026-04-01T00:00:00Z',
+            validTo: '2027-04-01T00:00:00Z',
+            certificatePem:
+                '-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----',
+          ),
+        ],
+      ),
+      clientConfigStore: FakeClientConfigStore(),
+    );
+
+    await controller.bootstrap();
+    await tester.pumpWidget(AdminApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('证书'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.delete_outline_rounded).first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('删除可信证书'), findsOneWidget);
+    expect(controller.certificates, hasLength(1));
+
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(controller.certificates, hasLength(1));
+
+    await tester.tap(find.byIcon(Icons.delete_outline_rounded).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('删除'));
+    await tester.pumpAndSettle();
+
+    expect(controller.certificates, isEmpty);
+  });
+
   testWidgets('opening machine logs from machine card preserves machine filter', (
     tester,
   ) async {

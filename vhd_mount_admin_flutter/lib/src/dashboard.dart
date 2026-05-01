@@ -898,6 +898,28 @@ class CertificatesView extends StatelessWidget {
                     ),
                     IconButton(
                       onPressed: () async {
+                        final confirmed = await showDialog<bool>(
+                          context: context,
+                          builder: (context) => AlertDialog(
+                            title: const Text('删除可信证书'),
+                            content: Text(
+                              '确认删除证书 ${certificate.name} 吗？删除后将影响后续机台注册审批链路。',
+                            ),
+                            actions: <Widget>[
+                              TextButton(
+                                onPressed: () => Navigator.of(context).pop(false),
+                                child: const Text('取消'),
+                              ),
+                              FilledButton(
+                                onPressed: () => Navigator.of(context).pop(true),
+                                child: const Text('删除'),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (confirmed != true || !context.mounted) {
+                          return;
+                        }
                         try {
                           await controller.removeTrustedCertificate(
                             certificate.fingerprint256,
@@ -2195,8 +2217,12 @@ class StatusChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.of(context).size.width;
     final compact = screenWidth < 360;
+    final ultraCompact = screenWidth < 220;
     return Container(
-      padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 12, vertical: 8),
+      padding: EdgeInsets.symmetric(
+        horizontal: ultraCompact ? 4 : (compact ? 8 : 12),
+        vertical: 8,
+      ),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.14),
         border: Border.all(color: color.withValues(alpha: 0.22)),
@@ -2210,21 +2236,22 @@ class StatusChip extends StatelessWidget {
             height: 8,
             decoration: BoxDecoration(color: color, shape: BoxShape.circle),
           ),
-          const SizedBox(width: 8),
-          ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: compact ? 112 : 180),
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontFamily: _miSansFamily700,
-                color: color,
-                fontWeight: FontWeight.w700,
-                fontSize: compact ? 11 : 13,
+          if (!ultraCompact) ...<Widget>[
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontFamily: _miSansFamily700,
+                  color: color,
+                  fontWeight: FontWeight.w700,
+                  fontSize: compact ? 11 : 13,
+                ),
               ),
             ),
-          ),
+          ],
         ],
       ),
     );
