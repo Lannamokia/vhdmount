@@ -82,7 +82,8 @@ namespace VHDMounter
                 Trace.WriteLine($"MAINWINDOW: SetStage {stage} OverrideText={overrideText ?? "<null>"}");
             }
             catch { }
-            Dispatcher.Invoke(() =>
+            // 用 InvokeAsync 取代 Invoke，避免在 async 上下文中同步阻塞 UI 线程造成死锁（C7）
+            Dispatcher.InvokeAsync(() =>
             {
                 switch (stage)
                 {
@@ -159,7 +160,8 @@ namespace VHDMounter
 
         private void OnReplaceProgress(FileReplaceProgress progress)
         {
-            Dispatcher.Invoke(() =>
+            // 进度条更新不需要同步等待，使用 InvokeAsync 避免阻塞工作线程（C7）
+            Dispatcher.InvokeAsync(() =>
             {
                 // 仅更新进度条，不显示文件名，避免泄露细节
                 double aggregated = 0;
@@ -195,7 +197,7 @@ namespace VHDMounter
                     var registered = await MachineKeyRegistration.EnsureRegisteredAsync(
                         deployConfig.machineId,
                         deployConfig.serverUrl,
-                        msg => Dispatcher.Invoke(() => SetStage(UiStage.PreLaunchDelay, msg)),
+                        msg => Dispatcher.InvokeAsync(() => SetStage(UiStage.PreLaunchDelay, msg)),
                         _appLifetimeToken);
 
                     if (registered)
@@ -327,7 +329,7 @@ namespace VHDMounter
 
         private void OnBlockingChanged(bool blocking, string message)
         {
-            Dispatcher.Invoke(() =>
+            Dispatcher.InvokeAsync(() =>
             {
                 try
                 {
@@ -340,7 +342,7 @@ namespace VHDMounter
         private void ShowVHDSelector(List<string> vhdFiles)
         {
             isProcessing = false;
-            Dispatcher.Invoke(() =>
+            Dispatcher.InvokeAsync(() =>
             {
                 VHDListBox.ItemsSource = vhdFiles.Select(f => System.IO.Path.GetFileName(f)).ToList();
                 VHDListBox.SelectedIndex = 0;
@@ -353,7 +355,7 @@ namespace VHDMounter
         {
             try
             {
-                Dispatcher.Invoke(() =>
+                _ = Dispatcher.InvokeAsync(() =>
                 {
                     VHDSelector.Visibility = Visibility.Collapsed;
                 });
@@ -590,11 +592,11 @@ namespace VHDMounter
                 deployPoller = new SoftwareDeploy.DeployPoller(config.serverUrl, config.machineId, trustedKeysPath, AppContext.BaseDirectory);
                 deployPoller.OnDeployStarted += (sender, message) =>
                 {
-                    Dispatcher.Invoke(() => ShowDeployOverlay(message));
+                    Dispatcher.InvokeAsync(() => ShowDeployOverlay(message));
                 };
                 deployPoller.OnDeployCompleted += (sender, taskId) =>
                 {
-                    Dispatcher.Invoke(() => HideDeployOverlay());
+                    Dispatcher.InvokeAsync(() => HideDeployOverlay());
                 };
                 deployPoller.Start();
                 Trace.WriteLine("[Deploy] 部署轮询已启动");
