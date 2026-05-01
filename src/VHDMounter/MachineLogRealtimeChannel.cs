@@ -39,8 +39,6 @@ namespace VHDMounter
         private CancellationTokenSource lifetimeCts;
         private bool disposed;
         private MachineLogBootstrapToken cachedBootstrap;
-        private DateTimeOffset? nextRegistrationAttemptUtc;
-        private string pendingRegistrationBackoffMessage;
 
         public MachineLogRealtimeChannel(
             MachineLogClientConfiguration configuration,
@@ -60,6 +58,12 @@ namespace VHDMounter
         {
             if (disposed || backgroundTask != null || !configuration.EnableLogUpload)
             {
+                return;
+            }
+
+            if (!MachineKeyRegistration.IsRegisteredAndApproved)
+            {
+                diagnostics?.Invoke("机台密钥未注册或审批，跳过日志通道启动");
                 return;
             }
 
@@ -443,10 +447,8 @@ namespace VHDMounter
                 var parsedError = ParseResponseError(responseBody);
                 if ((int)response.StatusCode == 400 && parsedError.Contains("未注册公钥", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (await TryRegisterPublicKeyAsync(envelopeUrl, cancellationToken).ConfigureAwait(false))
-                    {
-                        return await FetchBootstrapAfterRegistrationAsync(envelopeRequestUri, cancellationToken).ConfigureAwait(false);
-                    }
+                    diagnostics?.Invoke("获取机台日志 bootstrap 失败: 机台公钥未注册");
+                    return null;
                 }
 
                 diagnostics?.Invoke($"获取机台日志 bootstrap 失败: {(int)response.StatusCode} {parsedError}");
@@ -454,20 +456,6 @@ namespace VHDMounter
             }
 
             cachedBootstrap = ParseBootstrapToken(responseBody);
-            return cachedBootstrap;
-        }
-
-        private async Task<MachineLogBootstrapToken> FetchBootstrapAfterRegistrationAsync(Uri envelopeRequestUri, CancellationToken cancellationToken)
-        {
-            using var retryResponse = await SharedHttpClient.GetAsync(envelopeRequestUri, cancellationToken).ConfigureAwait(false);
-            var retryBody = await retryResponse.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            if (!retryResponse.IsSuccessStatusCode)
-            {
-                diagnostics?.Invoke($"注册公钥后获取机台日志 bootstrap 仍失败: {(int)retryResponse.StatusCode} {ParseResponseError(retryBody)}");
-                return null;
-            }
-
-            cachedBootstrap = ParseBootstrapToken(retryBody);
             return cachedBootstrap;
         }
 
@@ -495,75 +483,6 @@ namespace VHDMounter
                 bootstrapId,
                 GetRequiredString(payload, "bootstrapSecret"),
                 ParseDateTimeOffset(bootstrapExpiresAt));
-        }
-
-        private async Task<bool> TryRegisterPublicKeyAsync(string envelopeUrl, CancellationToken cancellationToken)
-        {
-            var now = DateTimeOffset.UtcNow;
-            if (nextRegistrationAttemptUtc.HasValue && now < nextRegistrationAttemptUtc.Value)
-            {
-                if (!string.IsNullOrWhiteSpace(pendingRegistrationBackoffMessage))
-                {
-                    diagnostics?.Invoke(pendingRegistrationBackoffMessage);
-                    pendingRegistrationBackoffMessage = null;
-                }
-                return false;
-            }
-
-            using var machineRsa = VHDManager.EnsureOrCreateTpmRsa(machineId);
-            var publicKeyPem = VHDManager.ExportPublicKeyPem(machineRsa);
-            using var registrationCertificate = VHDManager.LoadRegistrationCertificate(LoadConfigValues(configuration.ConfigPath));
-            using var registrationPrivateKey = registrationCertificate.GetRSAPrivateKey();
-            if (registrationPrivateKey == null)
-            {
-                throw new InvalidOperationException("注册证书不包含 RSA 私钥");
-            }
-
-            var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            var nonce = VHDManager.GenerateRegistrationNonce();
-            var normalizedPublicKeyPem = VHDManager.NormalizePemText(publicKeyPem);
-            var signingPayload = VHDManager.BuildRegistrationSigningPayload(
-                machineId,
-                keyId,
-                "RSA",
-                normalizedPublicKeyPem,
-                timestamp,
-                nonce);
-            var signatureBytes = registrationPrivateKey.SignData(
-                Encoding.UTF8.GetBytes(signingPayload),
-                HashAlgorithmName.SHA256,
-                RSASignaturePadding.Pkcs1);
-
-            var baseUri = ResolveServiceBaseUri(envelopeUrl);
-            var requestUri = new Uri(baseUri, $"/api/machines/{Uri.EscapeDataString(machineId)}/keys");
-            var payload = new
-            {
-                keyId,
-                keyType = "RSA",
-                pubkeyPem = normalizedPublicKeyPem,
-                registrationCertificatePem = ExportCertificatePem(registrationCertificate),
-                signature = Convert.ToBase64String(signatureBytes),
-                timestamp,
-                nonce,
-            };
-
-            using var content = new StringContent(JsonSerializer.Serialize(payload, jsonOptions), Encoding.UTF8, "application/json");
-            using var response = await SharedHttpClient.PostAsync(requestUri, content, cancellationToken).ConfigureAwait(false);
-            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-
-            if (response.IsSuccessStatusCode)
-            {
-                nextRegistrationAttemptUtc = null;
-                pendingRegistrationBackoffMessage = null;
-                diagnostics?.Invoke("已提交机台公钥签名注册，等待管理员审批");
-                return true;
-            }
-
-            var retryDelay = TryGetRetryAfter(response, body) ?? TimeSpan.FromMinutes(1);
-            nextRegistrationAttemptUtc = DateTimeOffset.UtcNow.Add(retryDelay);
-            pendingRegistrationBackoffMessage = $"机台公钥注册失败，{FormatRetryDelay(retryDelay)}后重试: {ParseResponseError(body)}";
-            diagnostics?.Invoke(pendingRegistrationBackoffMessage);
-            return false;
         }
 
         private static async Task SendTextMessageAsync(ClientWebSocket webSocket, string text, CancellationToken cancellationToken)

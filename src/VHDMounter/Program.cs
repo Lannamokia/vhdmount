@@ -279,7 +279,7 @@ namespace VHDMounter
                 };
 
                 Trace.WriteLine("准备创建 MainWindow");
-                var mainWindow = new MainWindow();
+                var mainWindow = new MainWindow(machineLogRealtimeChannel, cts.Token);
                 Trace.WriteLine("MainWindow 创建完成，进入消息循环");
                 app.Run(mainWindow);
 

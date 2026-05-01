@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
@@ -18,6 +19,8 @@ namespace VHDMounter
         private bool isProcessing = false;
         private string currentPackagePath;
         private SoftwareDeploy.DeployPoller? deployPoller;
+        private readonly MachineLogRealtimeChannel? _machineLogChannel;
+        private readonly CancellationToken _appLifetimeToken;
         // 三次 Delete 关闭程序的检测
         private int delPressCount = 0;
         private DateTime lastDelPressTime = DateTime.MinValue;
@@ -36,8 +39,11 @@ namespace VHDMounter
 
         private UiStage currentStage = UiStage.PreLaunchDelay;
 
-        public MainWindow()
+        internal MainWindow(MachineLogRealtimeChannel? machineLogChannel, CancellationToken appLifetimeToken)
         {
+            _machineLogChannel = machineLogChannel;
+            _appLifetimeToken = appLifetimeToken;
+
             Trace.WriteLine("MAINWINDOW: ctor begin");
             InitializeComponent();
             Trace.WriteLine("MAINWINDOW: InitializeComponent completed");
@@ -59,14 +65,11 @@ namespace VHDMounter
 #if FEATURE_HID_MENU
             InitializeFeatureServices();
 #endif
-            
+
             // 注册关机事件监听
             SystemEvents.SessionEnding += OnSessionEnding;
 
-            // 初始化远程部署轮询
-            InitializeDeployPoller();
-
-            // 开始主流程（包含延迟启动）
+            // 延迟到 10 秒等待 + 机台密钥注册完成后再启动外部服务
             _ = StartMainProcessWithDelay();
             Trace.WriteLine("MAINWINDOW: ctor end");
         }
@@ -177,12 +180,56 @@ namespace VHDMounter
         {
             try
             {
-                // 程序启动前的十秒准备阶段
+                // 阶段 1：程序启动前的十秒准备阶段（纯等待，不做任何操作）
                 for (int i = 10; i > 0; i--)
                 {
                     SetStage(UiStage.PreLaunchDelay, $"程序启动准备中（剩余 {i} 秒）");
                     await Task.Delay(1000);
                 }
+
+                // 阶段 2：十秒结束后，统一注册机台密钥（阻塞等待直到审批通过）
+                var deployConfig = ReadDeployConfig();
+                if (!string.IsNullOrWhiteSpace(deployConfig.serverUrl) && !string.IsNullOrWhiteSpace(deployConfig.machineId))
+                {
+                    SetStage(UiStage.PreLaunchDelay, "正在注册机台密钥...");
+                    var registered = await MachineKeyRegistration.EnsureRegisteredAsync(
+                        deployConfig.machineId,
+                        deployConfig.serverUrl,
+                        msg => Dispatcher.Invoke(() => SetStage(UiStage.PreLaunchDelay, msg)),
+                        _appLifetimeToken);
+
+                    if (registered)
+                    {
+                        Trace.WriteLine("MAINWINDOW: 机台密钥注册完成并已审批");
+                    }
+                    else
+                    {
+                        Trace.WriteLine("MAINWINDOW: 机台密钥注册流程被取消或失败，继续尝试启动后续服务");
+                    }
+                }
+                else
+                {
+                    Trace.WriteLine("MAINWINDOW: 缺少服务端地址或机台ID，跳过机台密钥注册");
+                }
+
+                // 阶段 3：注册完成后启动实时日志通道
+                if (_machineLogChannel != null)
+                {
+                    try
+                    {
+                        _machineLogChannel.Start(_appLifetimeToken);
+                        Trace.WriteLine("MAINWINDOW: 机台日志实时通道已启动");
+                    }
+                    catch (Exception ex)
+                    {
+                        Trace.WriteLine($"MAINWINDOW: 启动机台日志实时通道失败: {ex.Message}");
+                    }
+                }
+
+                // 阶段 4：启动部署轮询
+                InitializeDeployPoller();
+
+                // 阶段 5：继续原有主流程
                 SetStage(UiStage.PreLaunchDelay, "准备完成，开始初始化");
                 await StartMainProcess();
             }

@@ -53,6 +53,14 @@ namespace VHDMounter.SoftwareDeploy
         public void Start()
         {
             if (_pollTask != null) return;
+
+            // 检查机台密钥注册状态
+            if (!MachineKeyRegistration.IsRegisteredAndApproved)
+            {
+                Trace.WriteLine("[DeployPoller] 机台密钥未注册或审批，跳过部署轮询启动");
+                return;
+            }
+
             _pollTask = Task.Run(PollLoopAsync);
         }
 
@@ -68,7 +76,14 @@ namespace VHDMounter.SoftwareDeploy
             {
                 try
                 {
-                    await PollOnceAsync(_cts.Token);
+                    if (!MachineKeyRegistration.IsRegisteredAndApproved)
+                    {
+                        Trace.WriteLine("[DeployPoller] 机台密钥未注册，跳过本轮轮询");
+                    }
+                    else
+                    {
+                        await PollOnceAsync(_cts.Token);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -108,7 +123,19 @@ namespace VHDMounter.SoftwareDeploy
                 DeployRequestSigner.Sign(request, _machineId, _keyId);
 
                 var response = await _httpClient.SendAsync(request, ct);
-                if (!response.IsSuccessStatusCode) return Array.Empty<PendingTaskInfo>();
+                if (!response.IsSuccessStatusCode)
+                {
+                    var status = (int)response.StatusCode;
+                    if (status == 400)
+                    {
+                        Trace.WriteLine("[DeployPoller] 获取部署任务失败: 机台公钥未注册");
+                    }
+                    else if (status == 403)
+                    {
+                        Trace.WriteLine("[DeployPoller] 获取部署任务失败: 机台密钥未审批或已吊销");
+                    }
+                    return Array.Empty<PendingTaskInfo>();
+                }
 
                 var result = await response.Content.ReadFromJsonAsync<PendingTasksResponse>(ct);
                 var tasks = result?.tasks ?? Array.Empty<PendingTaskInfo>();

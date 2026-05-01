@@ -84,8 +84,6 @@ namespace VHDMounter
         private int protectionCheckInterval;
         private bool protectionWasRunning = false;
         private bool hasLocalEvhdFiles;
-        private DateTimeOffset? nextPublicKeyRegistrationAttemptUtc;
-        private string pendingPublicKeyRegistrationBackoffMessage;
         private string activeMountedVhdPath;
 
         // 加密EVHD挂载进程（需保持常驻直到主程序退出）
@@ -1200,43 +1198,7 @@ namespace VHDMounter
                     }
                     else if ((int)response.StatusCode == 400)
                     {
-                        // 仅在未注册公钥时执行注册，然后重试一次
-                        if ((err ?? string.Empty).Contains("未注册公钥"))
-                        {
-                            var rsa = EnsureOrCreateTpmRsa(machineId);
-                            var pubPem = ExportPublicKeyPem(rsa);
-                            var registrationResult = await RegisterPublicKeyAsync(url, machineId, pubPem);
-                            if (!string.IsNullOrWhiteSpace(registrationResult.Message))
-                            {
-                                StatusChanged?.Invoke(registrationResult.Message);
-                            }
-
-                            if (!registrationResult.Submitted)
-                            {
-                                return null;
-                            }
-
-                            var retry = await httpClient.GetAsync(requestUrl);
-                            if (retry.IsSuccessStatusCode)
-                            {
-                                var jsonContent = await retry.Content.ReadAsStringAsync();
-                                var jsonDoc = JsonDocument.Parse(jsonContent);
-                                if (jsonDoc.RootElement.TryGetProperty("ciphertext", out var cipherElement))
-                                {
-                                    var b64 = cipherElement.GetString();
-                                    if (!string.IsNullOrWhiteSpace(b64))
-                                    {
-                                        var cipherBytes = Convert.FromBase64String(b64);
-                                        var plainBytes = rsa.Decrypt(cipherBytes, RSAEncryptionPadding.OaepSHA1);
-                                        var plain = Encoding.UTF8.GetString(plainBytes);
-                                        return plain;
-                                    }
-                                }
-                            }
-                            StatusChanged?.Invoke("重试后仍未下发ciphertext");
-                            return null;
-                        }
-                        StatusChanged?.Invoke(err ?? "获取EVHD封装信封失败: 400");
+                        StatusChanged?.Invoke(err ?? "获取EVHD封装信封失败: 机台公钥未注册");
                         return null;
                     }
                     else
@@ -1261,9 +1223,7 @@ namespace VHDMounter
                 var config = ReadConfig();
                 var url = ServiceEndpointResolver.ResolveEvhdEnvelopeUrl(config);
 
-                // 准备TPM RSA密钥（不主动注册，仅在400未注册公钥时注册）
                 var rsa = EnsureOrCreateTpmRsa(machineId);
-                var pubPem = ExportPublicKeyPem(rsa);
 
                 var requestUrl = $"{url}?machineId={Uri.EscapeDataString(machineId)}";
                 StatusChanged?.Invoke($"正在从远程获取EVHD封装信封: {requestUrl}");
@@ -1286,7 +1246,7 @@ namespace VHDMounter
                 }
 
                 // 进入阻塞模式并开始轮询
-                EnterBlockingMode("解密参数下发异常/机台未注册，正在检查注册状态...");
+                EnterBlockingMode("正在等待EVHD加密参数下发...");
                 while (true)
                 {
                     try
@@ -1334,21 +1294,17 @@ namespace VHDMounter
 
                             if ((int)pollResponse.StatusCode == 403)
                             {
-                                StatusChanged?.Invoke(err ?? "机台密钥未审批或已吊销，等待审批...");
+                                StatusChanged?.Invoke(err ?? "机台密钥未审批或已吊销");
                             }
                             else if ((int)pollResponse.StatusCode == 404)
                             {
-                                StatusChanged?.Invoke(err ?? "机台不存在，等待注册...");
+                                StatusChanged?.Invoke(err ?? "机台不存在");
                             }
                             else if ((int)pollResponse.StatusCode == 400)
                             {
                                 if ((err ?? string.Empty).Contains("未注册公钥"))
                                 {
-                                    var registrationResult = await RegisterPublicKeyAsync(url, machineId, pubPem);
-                                    if (!string.IsNullOrWhiteSpace(registrationResult.Message))
-                                    {
-                                        StatusChanged?.Invoke(registrationResult.Message);
-                                    }
+                                    StatusChanged?.Invoke("机台公钥未注册，请联系管理员完成注册");
                                 }
                                 else
                                 {
@@ -1542,158 +1498,6 @@ namespace VHDMounter
         {
             public bool Submitted { get; init; }
             public string Message { get; init; }
-        }
-
-        private static string FormatRetryDelay(TimeSpan delay)
-        {
-            if (delay.TotalMinutes >= 1)
-            {
-                return $"{Math.Max(1, (int)Math.Ceiling(delay.TotalMinutes))} 分钟";
-            }
-
-            return $"{Math.Max(1, (int)Math.Ceiling(delay.TotalSeconds))} 秒";
-        }
-
-        private static TimeSpan? TryGetRetryAfter(HttpResponseMessage response, JsonDocument parsedBody)
-        {
-            if (parsedBody != null && parsedBody.RootElement.TryGetProperty("retryAfterSeconds", out var retryAfterSecondsElement))
-            {
-                if (retryAfterSecondsElement.ValueKind == JsonValueKind.Number && retryAfterSecondsElement.TryGetInt32(out var retryAfterSeconds) && retryAfterSeconds > 0)
-                {
-                    return TimeSpan.FromSeconds(retryAfterSeconds);
-                }
-            }
-
-            if (response?.Headers?.RetryAfter?.Delta is TimeSpan retryAfter && retryAfter > TimeSpan.Zero)
-            {
-                return retryAfter;
-            }
-
-            if (response != null && response.Headers.TryGetValues("RateLimit-Reset", out var rateLimitResetValues))
-            {
-                var rawValue = rateLimitResetValues.FirstOrDefault();
-                if (double.TryParse(rawValue, out var resetSeconds) && resetSeconds > 0)
-                {
-                    return TimeSpan.FromSeconds(resetSeconds);
-                }
-            }
-
-            return null;
-        }
-
-        private void SetPublicKeyRegistrationBackoff(TimeSpan delay, string message)
-        {
-            nextPublicKeyRegistrationAttemptUtc = DateTimeOffset.UtcNow.Add(delay);
-            pendingPublicKeyRegistrationBackoffMessage = message;
-        }
-
-        private void ClearPublicKeyRegistrationBackoff()
-        {
-            nextPublicKeyRegistrationAttemptUtc = null;
-            pendingPublicKeyRegistrationBackoffMessage = null;
-        }
-
-        private async Task<PublicKeyRegistrationResult> RegisterPublicKeyAsync(string envelopeUrl, string machineId, string pubkeyPem)
-        {
-            var now = DateTimeOffset.UtcNow;
-            if (nextPublicKeyRegistrationAttemptUtc.HasValue && now < nextPublicKeyRegistrationAttemptUtc.Value)
-            {
-                var message = pendingPublicKeyRegistrationBackoffMessage;
-                pendingPublicKeyRegistrationBackoffMessage = null;
-                return new PublicKeyRegistrationResult { Submitted = false, Message = message };
-            }
-
-            try
-            {
-                var config = ReadConfig();
-                var baseUrl = envelopeUrl;
-                var idx = baseUrl.IndexOf("/api/", StringComparison.OrdinalIgnoreCase);
-                if (idx > 0) baseUrl = baseUrl.Substring(0, idx);
-                var regUrl = $"{baseUrl}/api/machines/{Uri.EscapeDataString(machineId)}/keys";
-
-                var keyId = $"VHDMounterKey_{machineId}";
-                var keyType = "RSA";
-                var normalizedPubkeyPem = NormalizePemText(pubkeyPem);
-                var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                var nonce = GenerateRegistrationNonce();
-
-                using var registrationCertificate = LoadRegistrationCertificate(config);
-                using var registrationPrivateKey = registrationCertificate.GetRSAPrivateKey();
-                if (registrationPrivateKey == null)
-                {
-                    throw new InvalidOperationException("注册证书不包含 RSA 私钥");
-                }
-
-                var signingPayload = BuildRegistrationSigningPayload(machineId, keyId, keyType, normalizedPubkeyPem, timestamp, nonce);
-                var signatureBytes = registrationPrivateKey.SignData(
-                    Encoding.UTF8.GetBytes(signingPayload),
-                    HashAlgorithmName.SHA256,
-                    RSASignaturePadding.Pkcs1);
-
-                var payload = new
-                {
-                    keyId,
-                    keyType,
-                    pubkeyPem = normalizedPubkeyPem,
-                    registrationCertificatePem = ExportCertificatePem(registrationCertificate),
-                    signature = Convert.ToBase64String(signatureBytes),
-                    timestamp,
-                    nonce,
-                };
-                var json = JsonSerializer.Serialize(payload);
-                var req = new StringContent(json, Encoding.UTF8, "application/json");
-                var res = await httpClient.PostAsync(regUrl, req);
-                var body = await res.Content.ReadAsStringAsync();
-
-                if (res.IsSuccessStatusCode)
-                {
-                    ClearPublicKeyRegistrationBackoff();
-                    return new PublicKeyRegistrationResult
-                    {
-                        Submitted = true,
-                        Message = "已提交机台公钥签名注册，等待管理员审批",
-                    };
-                }
-
-                string errorMessage = null;
-                JsonDocument parsedBody = null;
-                try
-                {
-                    parsedBody = JsonDocument.Parse(body);
-                    if (parsedBody.RootElement.TryGetProperty("error", out var errorElement))
-                    {
-                        errorMessage = errorElement.GetString();
-                    }
-                    else if (parsedBody.RootElement.TryGetProperty("message", out var messageElement))
-                    {
-                        errorMessage = messageElement.GetString();
-                    }
-                }
-                catch { }
-
-                if (res.StatusCode == HttpStatusCode.TooManyRequests)
-                {
-                    var retryAfter = TryGetRetryAfter(res, parsedBody) ?? TimeSpan.FromMinutes(10);
-                    var message = $"{(string.IsNullOrWhiteSpace(errorMessage) ? "机台公钥注册过于频繁" : errorMessage)}，将在 {FormatRetryDelay(retryAfter)} 后重试";
-                    SetPublicKeyRegistrationBackoff(retryAfter, message);
-                    parsedBody?.Dispose();
-                    return new PublicKeyRegistrationResult { Submitted = false, Message = message };
-                }
-
-                parsedBody?.Dispose();
-                SetPublicKeyRegistrationBackoff(TimeSpan.FromSeconds(30), errorMessage ?? $"注册公钥失败: {res.StatusCode}");
-                return new PublicKeyRegistrationResult
-                {
-                    Submitted = false,
-                    Message = errorMessage ?? $"注册公钥失败: {res.StatusCode}",
-                };
-            }
-            catch (Exception ex)
-            {
-                var message = $"注册公钥异常: {ex.Message}";
-                SetPublicKeyRegistrationBackoff(TimeSpan.FromSeconds(30), message);
-                return new PublicKeyRegistrationResult { Submitted = false, Message = message };
-            }
         }
 
         private readonly record struct PasswordWriteInfo(
