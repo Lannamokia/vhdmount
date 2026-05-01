@@ -2,12 +2,12 @@ name: Tests (Flutter)
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, feature/software-deployment, maimoller_control_test]
     paths:
       - 'vhd_mount_admin_flutter/**'
       - '.github/workflows/test-flutter.yml'
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, feature/software-deployment, maimoller_control_test]
     paths:
       - 'vhd_mount_admin_flutter/**'
       - '.github/workflows/test-flutter.yml'
@@ -23,5 +23,7 @@ jobs:
           channel: 'stable'
       - name: Get dependencies
         run: cd vhd_mount_admin_flutter && flutter pub get
+      - name: Analyze
+        run: cd vhd_mount_admin_flutter && flutter analyze
       - name: Run tests
         run: cd vhd_mount_admin_flutter && flutter test

@@ -139,6 +139,7 @@ scripts\build.bat
 - 发布增强版 `VHDMounter_Maimoller.exe`
 - 发布 `Updater.exe`
 - 发布 `VHDMountAdminTools.exe`
+- 构建并打包 Flutter Windows 管理端 `vhd_mount_admin_windows.zip`
 - 把以上产物与 `vhdmonter_config.ini` 复制到 `single/`
 - 同时保留完整发布目录到 `artifacts/local-publish/`
 
@@ -319,7 +320,7 @@ flutter test
 GitHub Actions：
 
 - `.github/workflows/build.yml`
-  - 在 `main`、`dev`、`maimoller_control_test` 分支和所有标签上构建。
+  - 在 `main`、`dev`、`feature/software-deployment`、`maimoller_control_test` 分支和所有标签上构建。
   - 产出四个 ZIP：`VHDMounter`、`VHDMounter_Maimoller`、`Updater`、`VHDMountAdminTools`。
   - 标签构建时附带 `CHECKSUMS.sha256` 并上传到 GitHub Release。
 
@@ -327,11 +328,11 @@ GitHub Actions：
   - 在 Flutter 目录或工作流文件变更时触发。
   - 构建 Windows ZIP、Android release APK、iOS unsigned IPA。
   - 标签构建时汇总产物并上传到 GitHub Release。
-  - Android release 签名通过 `ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` 注入；未配置时会回退到 debug signing 以保证构建可继续完成。
+  - Android release 签名通过 `ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` 注入；tag 构建缺少这些变量时会直接失败，避免发布 debug-signed APK。
 
 - `.github/workflows/docker-image.yml`
   - 在 `VHDSelectServer/**` 相关变更的 push / pull_request 时构建 Docker 镜像并上传 `.tgz` artifact。
-  - 在 GitHub Release 发布事件上构建版本镜像并推送到 DockerHub，同时上传镜像归档 artifact。
+  - 在 tag push 时构建版本镜像并推送到 DockerHub，同时上传镜像归档 artifact。
 
 ## 重要说明
 

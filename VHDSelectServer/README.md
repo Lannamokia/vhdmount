@@ -215,7 +215,10 @@ VHDSelectServer/
 ├── migrations/
 │   ├── 001_initial_schema.sql
 │   ├── 002_machine_security_columns.sql
-│   └── 003_machine_log_schema.sql
+│   ├── 003_machine_log_schema.sql
+│   ├── 004_deployment_schema.sql
+│   ├── 005_deployment_encryption.sql
+│   └── 006_deployment_task_lease.sql
 ├── securityStore.js
 ├── registrationAuth.js
 ├── auditLog.js

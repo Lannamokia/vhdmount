@@ -1,7 +1,7 @@
 {
   "name": "vhd-select-server",
   "version": "1.7.0",
-  "description": "Cross-platform VHD selection server with web GUI",
+  "description": "Cross-platform VHD selection server for Flutter admin and machine management",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -13,7 +13,7 @@
     "vhd",
     "server",
     "cross-platform",
-    "web-gui"
+    "flutter-admin"
   ],
   "author": "VHD Select Server",
   "license": "MIT",

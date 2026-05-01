@@ -2,14 +2,14 @@ name: Tests (.NET)
 
 on:
   push:
-    branches: [main, dev, feature/software-deployment]
+    branches: [main, dev, feature/software-deployment, maimoller_control_test]
     paths:
       - 'src/VHDMounter/**'
       - 'VHDMounter.Tests/**'
       - '**.csproj'
       - '.github/workflows/test-dotnet.yml'
   pull_request:
-    branches: [main, dev, feature/software-deployment]
+    branches: [main, dev, feature/software-deployment, maimoller_control_test]
     paths:
       - 'src/VHDMounter/**'
       - 'VHDMounter.Tests/**'
@@ -23,10 +23,13 @@ env:
 jobs:
   dotnet-test:
     runs-on: windows-latest
+    strategy:
+      matrix:
+        enable_hid_menu_features: [false, true]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
       - name: Test VHDMounter
-        run: dotnet test ./VHDMounter.Tests/VHDMounter.Tests.csproj -p:EnableHidMenuFeatures=true --verbosity normal
+        run: dotnet test ./VHDMounter.Tests/VHDMounter.Tests.csproj -p:EnableHidMenuFeatures=${{ matrix.enable_hid_menu_features }} --verbosity normal

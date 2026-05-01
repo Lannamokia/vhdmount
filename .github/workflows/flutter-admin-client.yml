@@ -97,7 +97,11 @@ jobs:
             echo "${ANDROID_KEYSTORE_BASE64}" | base64 --decode > "${keystore_path}"
             echo "ANDROID_KEYSTORE_PATH=${keystore_path}" >> "${GITHUB_ENV}"
           else
-            echo "::warning::Android signing variables are not configured. The build will fall back to debug signing."
+            if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+              echo "::error::Android signing variables are required for tag builds."
+              exit 1
+            fi
+            echo "::warning::Android signing variables are not configured. Non-tag builds will fall back to debug signing."
           fi
 
       - name: Build Android client
