@@ -184,7 +184,7 @@ namespace VHDMounter
                 for (int i = 10; i > 0; i--)
                 {
                     SetStage(UiStage.PreLaunchDelay, $"程序启动准备中（剩余 {i} 秒）");
-                    await Task.Delay(1000);
+                    await Task.Delay(1000, _appLifetimeToken);
                 }
 
                 // 阶段 2：十秒结束后，统一注册机台密钥（阻塞等待直到审批通过）
@@ -204,7 +204,10 @@ namespace VHDMounter
                     }
                     else
                     {
-                        Trace.WriteLine("MAINWINDOW: 机台密钥注册流程被取消或失败，继续尝试启动后续服务");
+                        // EnsureRegisteredAsync 仅在 CancellationToken 触发时返回 false。
+                        // 应用正在关闭，停止后续启动流程，避免在未注册状态下访问网络。
+                        Trace.WriteLine("MAINWINDOW: 机台密钥注册流程被取消，停止启动后续服务");
+                        return;
                     }
                 }
                 else
