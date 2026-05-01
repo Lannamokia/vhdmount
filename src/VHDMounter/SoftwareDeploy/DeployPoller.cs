@@ -27,6 +27,8 @@ namespace VHDMounter.SoftwareDeploy
         private Task? _pollTask;
         private readonly string _appVersion;
         private readonly string _keyId;
+        private bool _disposed;
+        private readonly object _disposeLock = new object();
         private const string UA_PREFIX = "VHDMount/";
         private const int POLL_INTERVAL_MS = 60000; // 60s
 
@@ -52,6 +54,10 @@ namespace VHDMounter.SoftwareDeploy
 
         public void Start()
         {
+            lock (_disposeLock)
+            {
+                if (_disposed) return;
+            }
             if (_pollTask != null) return;
 
             // 检查机台密钥注册状态
@@ -66,8 +72,22 @@ namespace VHDMounter.SoftwareDeploy
 
         public void Stop()
         {
-            _cts.Cancel();
-            _pollTask?.Wait(TimeSpan.FromSeconds(10));
+            try
+            {
+                if (!_cts.IsCancellationRequested) _cts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // 已 Dispose，忽略
+            }
+            try
+            {
+                _pollTask?.Wait(TimeSpan.FromSeconds(10));
+            }
+            catch (AggregateException)
+            {
+                // 忽略 task 内部抛出的异常，等待是为了让其优雅退出
+            }
         }
 
         private async Task PollLoopAsync()
@@ -352,10 +372,17 @@ namespace VHDMounter.SoftwareDeploy
 
         public void Dispose()
         {
-            Stop();
-            _cts.Dispose();
-            _httpClient.Dispose();
-            _downloader.Dispose();
+            lock (_disposeLock)
+            {
+                if (_disposed) return;
+                _disposed = true;
+            }
+
+            // 先停止轮询任务并等待其退出，再销毁 _cts，避免任务运行时访问已 disposed 的 token
+            try { Stop(); } catch { }
+            try { _cts.Dispose(); } catch { }
+            try { _httpClient.Dispose(); } catch { }
+            try { _downloader.Dispose(); } catch { }
         }
 
         private class PendingTasksResponse
