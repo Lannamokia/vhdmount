@@ -235,17 +235,17 @@ namespace VHDMounter.SoftwareDeploy
             {
                 if (task.AesKey == null || task.IvBytes == null || task.SignatureAesKey == null || task.SignatureIvBytes == null)
                 {
-                    await _reporter.ReportStatusAsync(task.TaskId, false, "缺少 AES 解密密钥");
+                    await _reporter.ReportStatusAsync(task.TaskId, false, "缺少 AES 解密密钥", ct);
                     return;
                 }
 
-                await _reporter.ReportTaskStateAsync(task.TaskId, "downloading");
+                await _reporter.ReportTaskStateAsync(task.TaskId, "downloading", cancellationToken: ct);
 
                 // 下载（使用任务内分别解密 ZIP 与签名的参数）
                 var dlResult = await _downloader.DownloadAsync(_serverUrl, _machineId, task, ct);
                 if (!dlResult.Success)
                 {
-                    await _reporter.ReportStatusAsync(task.TaskId, false, dlResult.ErrorMessage);
+                    await _reporter.ReportStatusAsync(task.TaskId, false, dlResult.ErrorMessage, ct);
                     return;
                 }
                 zipPath = dlResult.ZipPath;
@@ -255,13 +255,13 @@ namespace VHDMounter.SoftwareDeploy
                 var verifyResult = DeployVerifier.VerifyAndExtract(zipPath, sigPath, _trustedKeysPath);
                 if (!verifyResult.Success)
                 {
-                    await _reporter.ReportStatusAsync(task.TaskId, false, verifyResult.ErrorMessage);
+                    await _reporter.ReportStatusAsync(task.TaskId, false, verifyResult.ErrorMessage, ct);
                     return;
                 }
                 extractDir = verifyResult.ExtractPath;
                 var manifest = verifyResult.Manifest;
 
-                await _reporter.ReportTaskStateAsync(task.TaskId, "running");
+                await _reporter.ReportTaskStateAsync(task.TaskId, "running", cancellationToken: ct);
 
                 // 执行
                 DeployExecutionResult execResult;
@@ -311,12 +311,12 @@ namespace VHDMounter.SoftwareDeploy
                 }
 
                 // 上报
-                await _reporter.ReportStatusAsync(task.TaskId, execResult.Success, execResult.ErrorMessage);
-                await _reporter.SyncRecordsAsync(_historyStore.GetRecordsForSync());
+                await _reporter.ReportStatusAsync(task.TaskId, execResult.Success, execResult.ErrorMessage, ct);
+                await _reporter.SyncRecordsAsync(_historyStore.GetRecordsForSync(), ct);
             }
             catch (Exception ex)
             {
-                await _reporter.ReportStatusAsync(task.TaskId, false, $"部署异常: {ex.Message}");
+                await _reporter.ReportStatusAsync(task.TaskId, false, $"部署异常: {ex.Message}", ct);
             }
             finally
             {
@@ -341,19 +341,19 @@ namespace VHDMounter.SoftwareDeploy
 
                 if (record == null)
                 {
-                    await _reporter.ReportStatusAsync(task.TaskId, false, "未找到对应的部署记录");
+                    await _reporter.ReportStatusAsync(task.TaskId, false, "未找到对应的部署记录", ct);
                     return;
                 }
 
                 UninstallResult result;
                 if (record.type == "software-deploy")
                 {
-                    await _reporter.ReportTaskStateAsync(task.TaskId, "running");
+                    await _reporter.ReportTaskStateAsync(task.TaskId, "running", cancellationToken: ct);
                     result = DeployUninstaller.UninstallSoftware(record);
                 }
                 else
                 {
-                    await _reporter.ReportTaskStateAsync(task.TaskId, "running");
+                    await _reporter.ReportTaskStateAsync(task.TaskId, "running", cancellationToken: ct);
                     result = DeployUninstaller.UninstallFiles("", record);
                 }
 
@@ -361,12 +361,12 @@ namespace VHDMounter.SoftwareDeploy
                 {
                     _historyStore.UpdateRecordStatus(record.recordId, "uninstalled");
                 }
-                await _reporter.ReportStatusAsync(task.TaskId, result.Success, result.ErrorMessage);
-                await _reporter.SyncRecordsAsync(_historyStore.GetRecordsForSync());
+                await _reporter.ReportStatusAsync(task.TaskId, result.Success, result.ErrorMessage, ct);
+                await _reporter.SyncRecordsAsync(_historyStore.GetRecordsForSync(), ct);
             }
             catch (Exception ex)
             {
-                await _reporter.ReportStatusAsync(task.TaskId, false, $"卸载异常: {ex.Message}");
+                await _reporter.ReportStatusAsync(task.TaskId, false, $"卸载异常: {ex.Message}", ct);
             }
         }
 
@@ -382,6 +382,7 @@ namespace VHDMounter.SoftwareDeploy
             try { Stop(); } catch { }
             try { _cts.Dispose(); } catch { }
             try { _httpClient.Dispose(); } catch { }
+            try { _reporter.Dispose(); } catch { }
             try { _downloader.Dispose(); } catch { }
         }
 

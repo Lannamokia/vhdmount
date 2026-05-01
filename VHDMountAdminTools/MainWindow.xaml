@@ -32,6 +32,14 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="8"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="8"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="8"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="8"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="8"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <TextBlock Text="输出目录" VerticalAlignment="Center"/>
                         <TextBox x:Name="KeyOutDir" Grid.Column="1" Margin="8,0" VerticalAlignment="Center" MinHeight="26"/>
@@ -196,9 +204,14 @@
                         <TextBox x:Name="PackOutDir" Grid.Row="16" Grid.Column="1" Margin="8,0" VerticalAlignment="Center" MinHeight="26"/>
                         <Button Grid.Row="16" Grid.Column="2" Content="浏览" Padding="12,4" MinWidth="64" MinHeight="28" Click="PackBrowseOutDir"/>
 
-                        <TextBlock Grid.Row="18" Grid.Column="1" Margin="8,0" TextWrapping="Wrap" VerticalAlignment="Center"
+                        <TextBlock Grid.Row="18" Text="目标部署路径" VerticalAlignment="Center"/>
+                        <TextBox x:Name="PackTargetPath" Grid.Row="18" Grid.Column="1" Margin="8,0" VerticalAlignment="Center" MinHeight="26"/>
+
+                        <CheckBox x:Name="PackRequiresAdmin" Grid.Row="20" Grid.Column="1" Margin="8,0" VerticalAlignment="Center" Content="需要管理员权限"/>
+
+                        <TextBlock Grid.Row="22" Grid.Column="1" Margin="8,0" TextWrapping="Wrap" VerticalAlignment="Center"
                                    Text="software-deploy 类型必须包含 install.ps1；file-deploy 类型不含脚本，只解压文件。输出文件为 name-version.zip 和 .zip.sig，可手动上传到服务端。"/>
-                        <Button Grid.Row="18" Grid.Column="2" Content="打包并签名" Padding="16,6" MinWidth="96" MinHeight="32" Click="PackAndSign"/>
+                        <Button Grid.Row="22" Grid.Column="2" Content="打包并签名" Padding="16,6" MinWidth="96" MinHeight="32" Click="PackAndSign"/>
                     </Grid>
                 </GroupBox>
             </Grid>

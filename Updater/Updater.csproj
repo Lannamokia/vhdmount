@@ -11,4 +11,8 @@
     <PublishTrimmed>false</PublishTrimmed>
   </PropertyGroup>
 
+  <ItemGroup>
+    <Compile Include="..\src\VHDMounter\VersionComparison.cs" Link="VersionComparison.cs" />
+  </ItemGroup>
+
 </Project>

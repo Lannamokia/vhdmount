@@ -11,7 +11,7 @@ using System.Threading.Tasks;
 
 namespace VHDMounter.SoftwareDeploy
 {
-    public class DeployReporter
+    public class DeployReporter : IDisposable
     {
         private readonly HttpClient _httpClient;
         private readonly string _serverUrl;
@@ -31,12 +31,12 @@ namespace VHDMounter.SoftwareDeploy
             _appVersion = version != null ? $"{version.Major}.{version.Minor}.{version.Build}" : "1.0.0";
         }
 
-        public Task ReportStatusAsync(string taskId, bool success, string errorMessage)
+        public Task ReportStatusAsync(string taskId, bool success, string errorMessage, CancellationToken cancellationToken = default)
         {
-            return ReportTaskStateAsync(taskId, success ? "success" : "failed", errorMessage);
+            return ReportTaskStateAsync(taskId, success ? "success" : "failed", errorMessage, cancellationToken);
         }
 
-        public async Task ReportTaskStateAsync(string taskId, string status, string? errorMessage = null)
+        public async Task ReportTaskStateAsync(string taskId, string status, string? errorMessage = null, CancellationToken cancellationToken = default)
         {
             try
             {
@@ -51,7 +51,7 @@ namespace VHDMounter.SoftwareDeploy
                 request.Content = new StringContent(bodyJson, Encoding.UTF8, "application/json");
                 DeployRequestSigner.Sign(request, _machineId, _keyId, bodyJson);
 
-                var response = await _httpClient.SendAsync(request);
+                using var response = await _httpClient.SendAsync(request, cancellationToken);
                 response.EnsureSuccessStatusCode();
             }
             catch (Exception ex)
@@ -60,7 +60,7 @@ namespace VHDMounter.SoftwareDeploy
             }
         }
 
-        public async Task SyncRecordsAsync(List<DeployRecord> records)
+        public async Task SyncRecordsAsync(List<DeployRecord> records, CancellationToken cancellationToken = default)
         {
             try
             {
@@ -71,13 +71,18 @@ namespace VHDMounter.SoftwareDeploy
                 request.Content = new StringContent(bodyJson, Encoding.UTF8, "application/json");
                 DeployRequestSigner.Sign(request, _machineId, _keyId, bodyJson);
 
-                var response = await _httpClient.SendAsync(request);
+                using var response = await _httpClient.SendAsync(request, cancellationToken);
                 response.EnsureSuccessStatusCode();
             }
             catch (Exception ex)
             {
                 Trace.WriteLine($"[DeployReporter] 同步记录失败: {ex.Message}");
             }
+        }
+
+        public void Dispose()
+        {
+            _httpClient.Dispose();
         }
     }
 }

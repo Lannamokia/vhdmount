@@ -463,7 +463,7 @@ namespace VHDMounter
                     }
                     if (tagExists)
                     {
-                        var cmp = string.Compare(localVersion ?? "", manifest.minVersion ?? "", StringComparison.Ordinal);
+                        var cmp = VersionComparison.Compare(localVersion, manifest.minVersion);
                         if (cmp > 0)
                         {
                             StatusChanged?.Invoke($"拒绝资源更新：当前版本高于清单的最小版本要求（local={localVersion}, min={manifest.minVersion}）");
@@ -601,7 +601,7 @@ namespace VHDMounter
                     catch { }
                     if (tagExists)
                     {
-                        var cmp = string.Compare(localVersion ?? "", manifest.minVersion ?? "", StringComparison.Ordinal);
+                        var cmp = VersionComparison.Compare(localVersion, manifest.minVersion);
                         if (cmp > 0)
                         {
                             StatusChanged?.Invoke($"拒绝资源更新：当前版本高于清单的最小版本要求（local={localVersion}, min={manifest.minVersion}）");

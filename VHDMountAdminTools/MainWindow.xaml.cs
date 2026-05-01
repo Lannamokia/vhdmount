@@ -137,10 +137,10 @@ namespace VHDMountAdminTools
 
                     manifestFiles.Add(new
                     {
-                        path = Path.GetFileName(relativePath),
+                        path = relativePath,
                         target = string.Equals(type, "app-update", StringComparison.OrdinalIgnoreCase)
                             ? relativePath
-                            : Path.GetFileName(relativePath),
+                            : relativePath,
                         size = stream.Length,
                         sha256 = Convert.ToHexString(hash).ToLowerInvariant(),
                     });
@@ -409,6 +409,8 @@ namespace VHDMountAdminTools
                 var signer = PackSigner.Text?.Trim() ?? "";
                 var privateKeyPath = PackPrivateKey.Text?.Trim() ?? "";
                 var outputDir = string.IsNullOrWhiteSpace(PackOutDir.Text) ? "." : PackOutDir.Text.Trim();
+                var targetPath = PackTargetPath.Text?.Trim() ?? "";
+                var requiresAdmin = PackRequiresAdmin.IsChecked == true;
 
                 if (string.IsNullOrWhiteSpace(name))
                     throw new InvalidOperationException("包名称不能为空");
@@ -420,6 +422,8 @@ namespace VHDMountAdminTools
                     throw new InvalidOperationException("私钥文件不存在");
                 if (isSoftwareDeploy && (string.IsNullOrWhiteSpace(installScriptPath) || !File.Exists(installScriptPath)))
                     throw new InvalidOperationException("software-deploy 类型必须提供 install.ps1");
+                if (!isSoftwareDeploy && string.IsNullOrWhiteSpace(targetPath))
+                    throw new InvalidOperationException("file-deploy 类型必须指定目标部署路径");
                 if (!string.IsNullOrWhiteSpace(payloadDir) && !Directory.Exists(payloadDir))
                     throw new InvalidOperationException("文件负载目录不存在");
 
@@ -437,7 +441,9 @@ namespace VHDMountAdminTools
                     // 复制文件负载
                     if (!string.IsNullOrWhiteSpace(payloadDir) && Directory.Exists(payloadDir))
                     {
-                        CopyDirectoryContents(payloadDir, stagingDir);
+                        var payloadRoot = isSoftwareDeploy ? stagingDir : Path.Combine(stagingDir, "payload");
+                        Directory.CreateDirectory(payloadRoot);
+                        CopyDirectoryContents(payloadDir, payloadRoot);
                     }
 
                     // software-deploy 类型：复制脚本到根目录
@@ -458,6 +464,10 @@ namespace VHDMountAdminTools
                         type,
                         signer,
                         createdAt = DateTime.UtcNow.ToString("o"),
+                        targetPath = string.IsNullOrWhiteSpace(targetPath) ? null : targetPath,
+                        requiresAdmin,
+                        installScript = isSoftwareDeploy ? "install.ps1" : null,
+                        uninstallScript = isSoftwareDeploy ? "uninstall.ps1" : null,
                     };
                     var manifestJson = JsonSerializer.Serialize(deployManifest, new JsonSerializerOptions { WriteIndented = true });
                     File.WriteAllText(Path.Combine(stagingDir, "deploy.json"), manifestJson, Encoding.UTF8);

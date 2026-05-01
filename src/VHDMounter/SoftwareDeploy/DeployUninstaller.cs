@@ -82,6 +82,8 @@ namespace VHDMounter.SoftwareDeploy
                 return result;
             }
 
+            var failures = new System.Collections.Generic.List<string>();
+
             // 按清单逐条删除文件
             foreach (var filePath in record.fileManifest)
             {
@@ -90,7 +92,10 @@ namespace VHDMounter.SoftwareDeploy
                     if (File.Exists(filePath))
                         File.Delete(filePath);
                 }
-                catch { /* 忽略单个文件删除失败 */ }
+                catch (Exception ex)
+                {
+                    failures.Add($"{filePath}: {ex.Message}");
+                }
             }
 
             // 删除因此变空的目录（从下往上删）
@@ -107,10 +112,17 @@ namespace VHDMounter.SoftwareDeploy
                     if (Directory.Exists(dir) && !Directory.EnumerateFileSystemEntries(dir).Any())
                         Directory.Delete(dir);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    failures.Add($"{dir}: {ex.Message}");
+                }
             }
 
-            result.Success = true;
+            result.Success = failures.Count == 0;
+            if (!result.Success)
+            {
+                result.ErrorMessage = "部分文件/目录删除失败: " + string.Join(" | ", failures);
+            }
             return result;
         }
 

@@ -394,7 +394,7 @@ namespace VHDMounter
                     if (File.Exists(flagPath))
                     {
                         var localVersion = File.ReadAllText(flagPath).Trim();
-                        var cmp = string.Compare(localVersion ?? "", manifest.version ?? "", StringComparison.Ordinal);
+                        var cmp = VersionComparison.Compare(localVersion, manifest.version);
                         if (cmp >= 0)
                         {
                             Trace.WriteLine($"跳过自更新：update_done.flag({localVersion}) >= manifest.version({manifest.version})");

@@ -37,12 +37,32 @@ namespace VHDMounter.SoftwareDeploy
 
             var finalDir = GetSoftwareDeployDirectory(packageId);
             var stagingDir = finalDir + ".staging";
+            var backupDir = finalDir + ".backup";
 
             SafeDeleteDirectory(stagingDir);
-            SafeDeleteDirectory(finalDir);
+            SafeDeleteDirectory(backupDir);
 
             CopyDirectory(extractDir, stagingDir);
-            Directory.Move(stagingDir, finalDir);
+            if (Directory.Exists(finalDir))
+            {
+                Directory.Move(finalDir, backupDir);
+            }
+
+            try
+            {
+                Directory.Move(stagingDir, finalDir);
+                SafeDeleteDirectory(backupDir);
+            }
+            catch
+            {
+                SafeDeleteDirectory(finalDir);
+                if (Directory.Exists(backupDir))
+                {
+                    Directory.Move(backupDir, finalDir);
+                }
+                SafeDeleteDirectory(stagingDir);
+                throw;
+            }
             return finalDir;
         }
 

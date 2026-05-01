@@ -70,6 +70,43 @@ namespace VHDMounter.Tests
         }
 
         [Fact]
+        public void ExecuteSoftwareDeploy_PreservesExistingVersionWhenPreparationFails()
+        {
+            var existingDir = Path.Combine(_softwareRoot, "pkg-test-rollback");
+            Directory.CreateDirectory(existingDir);
+            File.WriteAllText(Path.Combine(existingDir, "keep.txt"), "old-version");
+
+            var extractDir = Path.Combine(_tempDir, "extract-fail");
+            Directory.CreateDirectory(extractDir);
+            File.WriteAllText(Path.Combine(extractDir, "deploy.json"), "{}");
+            File.WriteAllText(Path.Combine(extractDir, "install.ps1"), "param([string]$DeployJson)`nexit 0");
+            File.WriteAllText(Path.Combine(extractDir, "uninstall.ps1"), "param([string]$DeployJson)`nexit 0");
+            Directory.CreateDirectory(Path.Combine(extractDir, "locked-dir"));
+
+            var manifest = new DeployManifest
+            {
+                name = "TestApp",
+                version = "2.0.0",
+                type = "software-deploy",
+                installScript = "install.ps1",
+                uninstallScript = "uninstall.ps1",
+            };
+
+            using var lockStream = new FileStream(
+                Path.Combine(existingDir, "keep.txt"),
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.None);
+
+            var result = DeployExecutor.ExecuteSoftwareDeploy(extractDir, "pkg-test-rollback", manifest);
+
+            Assert.False(result.Success);
+            Assert.True(File.Exists(Path.Combine(existingDir, "keep.txt")));
+            lockStream.Dispose();
+            Assert.Equal("old-version", File.ReadAllText(Path.Combine(existingDir, "keep.txt")));
+        }
+
+        [Fact]
         public void UninstallSoftware_UsesPersistedDirectoryAndRemovesItOnSuccess()
         {
             var installDir = Path.Combine(_softwareRoot, "pkg-test-002");
@@ -127,6 +164,34 @@ namespace VHDMounter.Tests
             Assert.NotNull(record);
             Assert.Contains(Path.Combine(targetPath, "data.txt"), record!.fileManifest);
             Assert.Contains(Path.Combine(targetPath, "subdir", "nested.txt"), record.fileManifest);
+        }
+
+        [Fact]
+        public void UninstallFiles_ReturnsFailure_WhenAnyFileCannotBeDeleted()
+        {
+            var targetPath = Path.Combine(_tempDir, "locked-target");
+            Directory.CreateDirectory(targetPath);
+            var lockedFile = Path.Combine(targetPath, "data.txt");
+            File.WriteAllText(lockedFile, "locked");
+
+            var record = new DeployRecord
+            {
+                recordId = "rec-file-locked",
+                packageId = "pkg-file-locked",
+                name = "FilePack",
+                version = "1.0.0",
+                type = "file-deploy",
+                status = "success",
+                targetPath = targetPath,
+                fileManifest = new System.Collections.Generic.List<string> { lockedFile },
+            };
+
+            using var lockStream = new FileStream(lockedFile, FileMode.Open, FileAccess.Read, FileShare.None);
+            var result = DeployUninstaller.UninstallFiles("", record);
+
+            Assert.False(result.Success);
+            Assert.Contains("data.txt", result.ErrorMessage);
+            Assert.True(File.Exists(lockedFile));
         }
     }
 }

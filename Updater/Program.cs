@@ -358,7 +358,7 @@ namespace Updater
             catch { }
             if (flagExists)
             {
-                var cmp = string.Compare(localVersion ?? "", m.minVersion ?? "", StringComparison.Ordinal);
+                var cmp = VHDMounter.VersionComparison.Compare(localVersion, m.minVersion);
                 if (cmp > 0)
                 {
                     Trace.WriteLine($"拒绝程序更新：当前版本高于清单的最小版本要求（local={localVersion}, min={m.minVersion}）");

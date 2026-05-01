@@ -71,6 +71,7 @@ namespace VHDMounter.Tests
         public void Dispose_StopsRunningPollTask()
         {
             SetRegistrationState(MachineKeyRegistration.RegistrationState.Approved);
+            Assert.True(MachineKeyRegistration.IsRegisteredAndApproved);
             var poller = new DeployPoller("http://127.0.0.1:1", "TEST_MACHINE", trustedKeysPath, tempDir);
 
             try
