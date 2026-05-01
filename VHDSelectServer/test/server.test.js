@@ -638,13 +638,9 @@ async function registerApprovedMachine(client, machineId, machineKeyPair) {
 
     await client.post('/api/auth/login').send({ password: 'ComplexPassword123!' }).expect(200);
     await client.post(`/api/machines/${machineId}/approve`).send({ approved: true }).expect(200);
-    await client
-        .post(`/api/machines/${machineId}/evhd-password`)
-        .send({ evhdPassword: 'EnvelopeSecret-456' })
-        .expect(200);
 
-    const envelopeResponse = await client
-        .get('/api/evhd-envelope')
+    const bootstrapResponse = await client
+        .get('/api/machine-log-bootstrap')
         .query({ machineId })
         .expect(200);
 
@@ -652,7 +648,7 @@ async function registerApprovedMachine(client, machineId, machineKeyPair) {
         key: machineKeyPair.privateKey,
         padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
         oaepHash: 'sha1',
-    }, Buffer.from(envelopeResponse.body.logChannelBootstrapCiphertext, 'base64')).toString('utf8');
+    }, Buffer.from(bootstrapResponse.body.logChannelBootstrapCiphertext, 'base64')).toString('utf8');
 
     return {
         keyId,
@@ -1210,6 +1206,25 @@ test('机台注册必须使用可信证书签名且拒绝 nonce 重放', async (
         .send({ evhdPassword: 'EnvelopeSecret-456' })
         .expect(200);
 
+    const bootstrapResponse = await client
+        .get('/api/machine-log-bootstrap')
+        .query({ machineId })
+        .expect(200);
+
+    assert.ok(bootstrapResponse.body.logChannelBootstrapId);
+    assert.ok(bootstrapResponse.body.logChannelBootstrapCiphertext);
+    assert.ok(bootstrapResponse.body.logChannelBootstrapExpiresAt);
+
+    const bootstrapPlaintext = crypto.privateDecrypt({
+        key: machineKeyPair.privateKey,
+        padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+        oaepHash: 'sha1',
+    }, Buffer.from(bootstrapResponse.body.logChannelBootstrapCiphertext, 'base64')).toString('utf8');
+    const bootstrapPayload = JSON.parse(bootstrapPlaintext);
+    assert.equal(bootstrapPayload.bootstrapId, bootstrapResponse.body.logChannelBootstrapId);
+    assert.ok(bootstrapPayload.bootstrapSecret);
+    assert.equal(bootstrapPayload.expiresAt, bootstrapResponse.body.logChannelBootstrapExpiresAt);
+
     const envelopeResponse = await client
         .get('/api/evhd-envelope')
         .query({ machineId })
@@ -1217,19 +1232,41 @@ test('机台注册必须使用可信证书签名且拒绝 nonce 重放', async (
 
     assert.ok(envelopeResponse.body.ciphertext);
     assert.notEqual(envelopeResponse.body.ciphertext, 'EnvelopeSecret-456');
-    assert.ok(envelopeResponse.body.logChannelBootstrapId);
-    assert.ok(envelopeResponse.body.logChannelBootstrapCiphertext);
-    assert.ok(envelopeResponse.body.logChannelBootstrapExpiresAt);
+    assert.equal('logChannelBootstrapId' in envelopeResponse.body, false);
+    assert.equal('logChannelBootstrapCiphertext' in envelopeResponse.body, false);
+    assert.equal('logChannelBootstrapExpiresAt' in envelopeResponse.body, false);
+});
 
-    const bootstrapPlaintext = crypto.privateDecrypt({
-        key: machineKeyPair.privateKey,
-        padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
-        oaepHash: 'sha1',
-    }, Buffer.from(envelopeResponse.body.logChannelBootstrapCiphertext, 'base64')).toString('utf8');
-    const bootstrapPayload = JSON.parse(bootstrapPlaintext);
-    assert.equal(bootstrapPayload.bootstrapId, envelopeResponse.body.logChannelBootstrapId);
-    assert.ok(bootstrapPayload.bootstrapSecret);
-    assert.equal(bootstrapPayload.expiresAt, envelopeResponse.body.logChannelBootstrapExpiresAt);
+test('已审批机台即使未配置 EVHD 密码也可获取日志 bootstrap', async (t) => {
+    const { client } = await createInitializedHarness(t);
+    const machineId = 'MACHINE-LOG-BOOT-ONLY';
+    const keyId = 'VHDMounterKey_MACHINE-LOG-BOOT-ONLY';
+    const keyType = 'RSA';
+    const machineKeyPair = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const pubkeyPem = machineKeyPair.publicKey.export({ type: 'spki', format: 'pem' });
+    const signedRequest = buildSignedRegistrationRequest(machineId, keyId, keyType, pubkeyPem);
+
+    await client
+        .post(`/api/machines/${machineId}/keys`)
+        .send(signedRequest)
+        .expect(202);
+
+    await client.post('/api/auth/login').send({ password: 'ComplexPassword123!' }).expect(200);
+    await client.post(`/api/machines/${machineId}/approve`).send({ approved: true }).expect(200);
+
+    const bootstrapResponse = await client
+        .get('/api/machine-log-bootstrap')
+        .query({ machineId })
+        .expect(200);
+
+    assert.equal(bootstrapResponse.body.machineId, machineId);
+    assert.ok(bootstrapResponse.body.logChannelBootstrapId);
+    assert.ok(bootstrapResponse.body.logChannelBootstrapCiphertext);
+
+    await client
+        .get('/api/evhd-envelope')
+        .query({ machineId })
+        .expect(404);
 });
 
 test('机台日志 WebSocket 握手按原始 ECDH shared secret 完成认证', async (t) => {

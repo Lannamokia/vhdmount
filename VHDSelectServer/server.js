@@ -1286,6 +1286,79 @@ async function createApp(options = {}) {
         });
     }));
 
+    app.get('/api/machine-log-bootstrap', requireInitialized, requireDatabase, asyncHandler(async (req, res) => {
+        const machineId = assertMachineId(req.query.machineId);
+        const machine = await runtime.database.getMachine(machineId);
+
+        if (!machine) {
+            runtime.writeAudit(req, {
+                type: 'machine.log-bootstrap.read',
+                actor: 'machine',
+                result: 'failure',
+                machineId,
+                reason: '机台不存在',
+            });
+            throw createJsonError(404, '机台不存在');
+        }
+
+        await runtime.database.updateMachineLastSeen(machineId);
+
+        if (machine.revoked) {
+            runtime.writeAudit(req, {
+                type: 'machine.log-bootstrap.read',
+                actor: 'machine',
+                result: 'failure',
+                machineId,
+                keyId: machine.key_id,
+                reason: '机台密钥已吊销',
+            });
+            throw createJsonError(403, '机台密钥已吊销');
+        }
+        if (!machine.approved) {
+            runtime.writeAudit(req, {
+                type: 'machine.log-bootstrap.read',
+                actor: 'machine',
+                result: 'failure',
+                machineId,
+                keyId: machine.key_id,
+                reason: '机台密钥未审批',
+            });
+            throw createJsonError(403, '机台密钥未审批');
+        }
+        if (!machine.pubkey_pem) {
+            runtime.writeAudit(req, {
+                type: 'machine.log-bootstrap.read',
+                actor: 'machine',
+                result: 'failure',
+                machineId,
+                reason: '机台未注册公钥',
+            });
+            throw createJsonError(400, '机台未注册公钥');
+        }
+
+        const bootstrap = createMachineLogBootstrap(machineId, machine.pubkey_pem, encryptWithPublicKeyRSA);
+        runtime.machineLogBootstrapCache.set(bootstrap.bootstrapId, bootstrap);
+        runtime.writeAudit(req, {
+            type: 'machine.log-bootstrap.read',
+            actor: 'machine',
+            result: 'success',
+            machineId,
+            keyId: machine.key_id,
+        });
+
+        res.json({
+            success: true,
+            machineId,
+            approved: machine.approved,
+            revoked: machine.revoked,
+            keyId: machine.key_id,
+            keyType: machine.key_type,
+            logChannelBootstrapId: bootstrap.bootstrapId,
+            logChannelBootstrapCiphertext: bootstrap.bootstrapCiphertext,
+            logChannelBootstrapExpiresAt: bootstrap.expiresAt,
+        });
+    }));
+
     app.get('/api/evhd-envelope', requireInitialized, requireDatabase, asyncHandler(async (req, res) => {
         const machineId = assertMachineId(req.query.machineId);
         const machine = await runtime.database.getMachine(machineId);
@@ -1349,9 +1422,6 @@ async function createApp(options = {}) {
             throw createJsonError(404, '机台未配置 EVHD 密码');
         }
 
-        const bootstrap = createMachineLogBootstrap(machineId, machine.pubkey_pem, encryptWithPublicKeyRSA);
-        runtime.machineLogBootstrapCache.set(bootstrap.bootstrapId, bootstrap);
-
         const ciphertext = encryptWithPublicKeyRSA(machine.pubkey_pem, evhdPassword);
         runtime.writeAudit(req, {
             type: 'machine.evhd-envelope.read',
@@ -1369,9 +1439,6 @@ async function createApp(options = {}) {
             keyId: machine.key_id,
             keyType: machine.key_type,
             ciphertext,
-            logChannelBootstrapId: bootstrap.bootstrapId,
-            logChannelBootstrapCiphertext: bootstrap.bootstrapCiphertext,
-            logChannelBootstrapExpiresAt: bootstrap.expiresAt,
         });
     }));
 
