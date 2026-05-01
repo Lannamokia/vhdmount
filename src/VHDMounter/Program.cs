@@ -256,12 +256,15 @@ namespace VHDMounter
                             machineLogConfig,
                             machineLogBuffer,
                             machineLogDiagnostics);
-                        machineLogRealtimeChannel.Start(cts.Token);
+                        // 不在此处启动 Start()。
+                        // 实时日志通道依赖机台密钥已注册并审批，
+                        // 统一由 MainWindow 在 EnsureRegisteredAsync 成功后启动，
+                        // 避免与 MainWindow 双重启动（C9）。
                     }
                 }
                 catch (Exception ex)
                 {
-                    machineLogDiagnostics($"启动机台日志实时通道失败: {ex.Message}");
+                    machineLogDiagnostics($"创建机台日志实时通道失败: {ex.Message}");
                     machineLogRealtimeChannel?.Dispose();
                     machineLogRealtimeChannel = null;
                 }
