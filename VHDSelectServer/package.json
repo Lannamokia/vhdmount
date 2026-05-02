@@ -7,7 +7,7 @@
     "start": "node server.js",
     "dev": "node server.js",
     "migrate": "node migrate.js",
-    "test": "node --test"
+    "test": "node --test test/*.test.js"
   },
   "keywords": [
     "vhd",
