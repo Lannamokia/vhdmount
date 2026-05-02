@@ -2175,6 +2175,18 @@ namespace VHDMounter
                     return false;
                 }
 
+                // 在启动新的 EVHD 挂载工具前，先清理旧的 M 盘/旧 VHD/旧 EVHD 进程。
+                // 这样后续 MountVHD() 就不需要再执行一次会误杀新 EVHD 进程的 MountSwitch teardown。
+                if (!await RequestTeardownAsync(
+                    TeardownReason.MountSwitch,
+                    detachVhd: true,
+                    stopEvhd: IsEncryptedEvhdMountProcessRunning(),
+                    removeDrive: true))
+                {
+                    await ShowStatusAndWait("清理旧挂载状态失败，已中止新的 EVHD 挂载");
+                    return false;
+                }
+
                 // 调用加密挂载工具
                 await ShowStatusAndWait("正在调用加密VHD挂载工具...");
                 var fileName = ResolveExecutableFromPath("encrypted-vhd-mount.exe");
@@ -2335,8 +2347,22 @@ namespace VHDMounter
                 Trace.WriteLine($"EVHD_MOUNT_VHD_SELECTED: {SanitizeSensitiveText(vhdToAttach)}");
                 await ShowStatusAndWait($"找到解密后的VHD: {Path.GetFileName(vhdToAttach)}，准备挂载...");
 
-                // 使用现有MountVHD挂载到目标盘符
-                return await MountVHD(vhdToAttach);
+                // 使用现有 MountVHD 挂载到目标盘符。
+                // 这里必须禁止再次执行 MountSwitch teardown，否则会把刚启动并仍需保持常驻的 EVHD 进程提前结束。
+                var mounted = await MountVHD(
+                    vhdToAttach,
+                    performMountSwitchTeardown: false,
+                    stopEvhdOnMountSwitch: false);
+                if (!mounted)
+                {
+                    await RequestTeardownAsync(
+                        TeardownReason.MountFailureCleanup,
+                        detachVhd: true,
+                        stopEvhd: true,
+                        removeDrive: true,
+                        vhdPathOverride: vhdToAttach);
+                }
+                return mounted;
             }
             catch (Exception ex)
             {
@@ -2520,7 +2546,15 @@ namespace VHDMounter
             return vhdFiles;
         }
 
-        public async Task<bool> MountVHD(string vhdPath)
+        public Task<bool> MountVHD(string vhdPath)
+        {
+            return MountVHD(vhdPath, performMountSwitchTeardown: true, stopEvhdOnMountSwitch: true);
+        }
+
+        public async Task<bool> MountVHD(
+            string vhdPath,
+            bool performMountSwitchTeardown,
+            bool stopEvhdOnMountSwitch)
         {
             await ShowStatusAndWait($"正在挂载VHD文件: {Path.GetFileName(vhdPath)}");
 
@@ -2545,11 +2579,12 @@ namespace VHDMounter
                     return false;
                 }
 
-                // 先清理当前盘符、当前已挂载的VHD以及可能残留的EVHD挂载工具，避免切换冲突
-                if (!await RequestTeardownAsync(
+                // 普通 VHD 流程在挂载前需要清理旧状态；
+                // EVHD 流程会在启动新挂载工具前自行完成清理，并在这里显式关闭二次 teardown。
+                if (performMountSwitchTeardown && !await RequestTeardownAsync(
                     TeardownReason.MountSwitch,
                     detachVhd: true,
-                    stopEvhd: IsEncryptedEvhdMountProcessRunning(),
+                    stopEvhd: stopEvhdOnMountSwitch && IsEncryptedEvhdMountProcessRunning(),
                     removeDrive: true))
                 {
                     return false;

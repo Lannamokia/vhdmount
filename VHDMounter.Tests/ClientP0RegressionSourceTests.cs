@@ -93,6 +93,16 @@ namespace VHDMounter.Tests
             Assert.Contains("RequestTeardownAsync(", source, StringComparison.Ordinal);
         }
 
+        [Fact]
+        public void VhdManager_EvhdFlowDoesNotStopFreshMountToolBeforeAttach()
+        {
+            var source = ReadSource("src/VHDMounter/VHDManager.cs");
+
+            Assert.Contains("MountVHD(", source, StringComparison.Ordinal);
+            Assert.Contains("performMountSwitchTeardown: false", source, StringComparison.Ordinal);
+            Assert.Contains("stopEvhdOnMountSwitch: false", source, StringComparison.Ordinal);
+        }
+
         private static string ReadSource(string relativePath)
         {
             var root = FindRepositoryRoot();
