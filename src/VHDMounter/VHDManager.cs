@@ -2645,6 +2645,12 @@ exit";
                 var assignedOk = await AssignDriveLetterWithoutDiskpart(vhdPath, volumesBefore, includeExistingVolumesFallback: alreadyAttached);
                 if (!assignedOk)
                 {
+                    await RequestTeardownAsync(
+                        TeardownReason.MountFailureCleanup,
+                        detachVhd: true,
+                        stopEvhd: false,
+                        removeDrive: true,
+                        vhdPathOverride: vhdPath);
                     await ShowStatusAndWait("盘符 M 分配失败");
                     return false;
                 }

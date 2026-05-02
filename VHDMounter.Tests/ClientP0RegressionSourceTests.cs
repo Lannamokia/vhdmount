@@ -114,6 +114,16 @@ namespace VHDMounter.Tests
             Assert.Contains("TeardownReason.MountFailureCleanup", source, StringComparison.Ordinal);
         }
 
+        [Fact]
+        public void VhdManager_VhdAttachFailureAfterDiskAttachCleansPartialState()
+        {
+            var source = ReadSource("src/VHDMounter/VHDManager.cs");
+
+            Assert.Contains("var assignedOk = await AssignDriveLetterWithoutDiskpart", source, StringComparison.Ordinal);
+            Assert.Contains("vhdPathOverride: vhdPath", source, StringComparison.Ordinal);
+            Assert.Contains("stopEvhd: false", source, StringComparison.Ordinal);
+        }
+
         private static string ReadSource(string relativePath)
         {
             var root = FindRepositoryRoot();
