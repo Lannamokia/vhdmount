@@ -2159,6 +2159,7 @@ namespace VHDMounter
         // 挂载EVHD到N盘，并从其中提取解密后的VHD再挂载
         public async Task<bool> MountEVHDAndAttachDecryptedVHD(string evhdPath, CancellationToken ct)
         {
+            string? decryptedVhdPath = null;
             try
             {
                 if (string.IsNullOrWhiteSpace(evhdPath) || !File.Exists(evhdPath))
@@ -2308,6 +2309,11 @@ namespace VHDMounter
                     }
                     LogDirectorySnapshot("TIMEOUT_RUNNING_MOUNTPOINT", nRoot);
                     LogMountToolSummary("TIMEOUT_STILL_RUNNING", proc.HasExited ? proc.ExitCode : -1, runningStdout, runningStderr);
+                    await RequestTeardownAsync(
+                        TeardownReason.MountFailureCleanup,
+                        detachVhd: true,
+                        stopEvhd: true,
+                        removeDrive: true);
                     await ShowStatusAndWait("EVHD挂载超时（超过60秒），未检测到N盘");
                     return false;
                 }
@@ -2321,6 +2327,11 @@ namespace VHDMounter
                 }
                 if (!Directory.Exists(nRoot))
                 {
+                    await RequestTeardownAsync(
+                        TeardownReason.MountFailureCleanup,
+                        detachVhd: true,
+                        stopEvhd: true,
+                        removeDrive: true);
                     await ShowStatusAndWait("未找到N盘，EVHD挂载可能失败");
                     return false;
                 }
@@ -2339,11 +2350,17 @@ namespace VHDMounter
                 if (decryptedVhds.Count == 0)
                 {
                     LogDirectorySnapshot("NO_VHD_FOUND", nRoot, "*.vhd");
+                    await RequestTeardownAsync(
+                        TeardownReason.MountFailureCleanup,
+                        detachVhd: true,
+                        stopEvhd: true,
+                        removeDrive: true);
                     await ShowStatusAndWait("N盘中未找到解密后的VHD文件");
                     return false;
                 }
 
                 var vhdToAttach = decryptedVhds[0];
+                decryptedVhdPath = vhdToAttach;
                 Trace.WriteLine($"EVHD_MOUNT_VHD_SELECTED: {SanitizeSensitiveText(vhdToAttach)}");
                 await ShowStatusAndWait($"找到解密后的VHD: {Path.GetFileName(vhdToAttach)}，准备挂载...");
 
@@ -2373,7 +2390,8 @@ namespace VHDMounter
                         TeardownReason.MountFailureCleanup,
                         detachVhd: true,
                         stopEvhd: true,
-                        removeDrive: true);
+                        removeDrive: true,
+                        vhdPathOverride: decryptedVhdPath);
                 }
                 catch
                 {

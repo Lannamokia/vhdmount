@@ -103,6 +103,17 @@ namespace VHDMounter.Tests
             Assert.Contains("stopEvhdOnMountSwitch: false", source, StringComparison.Ordinal);
         }
 
+        [Fact]
+        public void VhdManager_EvhdFailurePathsCleanupStartedRuntime()
+        {
+            var source = ReadSource("src/VHDMounter/VHDManager.cs");
+
+            Assert.Contains("TIMEOUT_STILL_RUNNING", source, StringComparison.Ordinal);
+            Assert.Contains("N盘中未找到解密后的VHD文件", source, StringComparison.Ordinal);
+            Assert.Contains("未找到N盘，EVHD挂载可能失败", source, StringComparison.Ordinal);
+            Assert.Contains("TeardownReason.MountFailureCleanup", source, StringComparison.Ordinal);
+        }
+
         private static string ReadSource(string relativePath)
         {
             var root = FindRepositoryRoot();
