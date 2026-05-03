@@ -1,0 +1,161 @@
+<style>
+.docs-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.docs-sidebar {
+  border: 1px solid #d0d7de;
+  border-radius: 12px;
+  padding: 1rem 1.1rem;
+  background: #f6f8fa;
+  box-shadow: 0 4px 16px rgba(31, 35, 40, 0.06);
+}
+
+.docs-sidebar h3,
+.docs-sidebar h4 {
+  margin-top: 0;
+  margin-bottom: 0.6rem;
+}
+
+.docs-sidebar h4 {
+  margin-top: 1rem;
+}
+
+.docs-sidebar ul {
+  margin: 0;
+  padding-left: 1.15rem;
+}
+
+.docs-sidebar li + li {
+  margin-top: 0.3rem;
+}
+
+.docs-sidebar a {
+  text-decoration: none;
+}
+
+.docs-sidebar a:hover {
+  text-decoration: underline;
+}
+
+.docs-sidebar-current {
+  font-weight: 700;
+}
+
+@media (min-width: 1080px) {
+  .docs-layout {
+    grid-template-columns: 280px minmax(0, 1fr);
+  }
+
+  .docs-sidebar {
+    position: sticky;
+    top: 1rem;
+  }
+}
+</style>
+
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    <h3>快速导航</h3>
+    <ul>
+      <li><a href="{{ '/index.html' | relative_url }}" class="{% if include.page_key == 'index' %}docs-sidebar-current{% endif %}">首页</a></li>
+      <li><a href="{{ '/server-setup.html' | relative_url }}" class="{% if include.page_key == 'server-setup' %}docs-sidebar-current{% endif %}">服务端部署</a></li>
+      <li><a href="{{ '/client-setup.html' | relative_url }}" class="{% if include.page_key == 'client-setup' %}docs-sidebar-current{% endif %}">Windows 客户端安装</a></li>
+      <li><a href="{{ '/maimoller.html' | relative_url }}" class="{% if include.page_key == 'maimoller' %}docs-sidebar-current{% endif %}">Maimoller HID 系统菜单</a></li>
+      <li><a href="{{ '/admin-client.html' | relative_url }}" class="{% if include.page_key == 'admin-client' %}docs-sidebar-current{% endif %}">管理客户端安装</a></li>
+      <li><a href="{{ '/admin-guide.html' | relative_url }}" class="{% if include.page_key == 'admin-guide' %}docs-sidebar-current{% endif %}">管理者指南</a></li>
+      <li><a href="{{ '/faq.html' | relative_url }}" class="{% if include.page_key == 'faq' %}docs-sidebar-current{% endif %}">常见问题</a></li>
+    </ul>
+
+    {% if include.page_key == 'index' %}
+    <h4>本页章节</h4>
+    <ul>
+      <li><a href="#系统概述">系统概述</a></li>
+      <li><a href="#快速导航">快速导航</a></li>
+    </ul>
+    {% endif %}
+
+    {% if include.page_key == 'server-setup' %}
+    <h4>本页章节</h4>
+    <ul>
+      <li><a href="#方式一docker-部署推荐">Docker 部署</a></li>
+      <li><a href="#方式二本地直接运行">本地直接运行</a></li>
+      <li><a href="#首次初始化">首次初始化</a></li>
+      <li><a href="#生产环境安全建议">生产环境安全建议</a></li>
+    </ul>
+    {% endif %}
+
+    {% if include.page_key == 'client-setup' %}
+    <h4>本页章节</h4>
+    <ul>
+      <li><a href="#前置要求">前置要求</a></li>
+      <li><a href="#磁盘空间准备">磁盘空间准备</a></li>
+      <li><a href="#安装方式一下载预构建版本">下载预构建版本</a></li>
+      <li><a href="#安装方式二从源码构建">从源码构建</a></li>
+      <li><a href="#客户端配置">客户端配置</a></li>
+      <li><a href="#maimoller-hid-系统菜单仅限增强版">Maimoller HID 系统菜单</a></li>
+      <li><a href="#shell-launcher-配置-kiosk-模式">Shell Launcher 配置</a></li>
+      <li><a href="#生产环境机台加固windows-iot-enterprise">生产环境机台加固</a></li>
+    </ul>
+    {% endif %}
+
+    {% if include.page_key == 'maimoller' %}
+    <h4>本页章节</h4>
+    <ul>
+      <li><a href="#支持的硬件">支持的硬件</a></li>
+      <li><a href="#按钮定义">按钮定义</a></li>
+      <li><a href="#输入路由模式">输入路由模式</a></li>
+      <li><a href="#导航模式按键映射">导航模式</a></li>
+      <li><a href="#数字编辑模式按键映射">数字编辑模式</a></li>
+      <li><a href="#系统菜单结构">系统菜单结构</a></li>
+      <li><a href="#系统信息详情">系统信息</a></li>
+      <li><a href="#系统设置调整">系统设置</a></li>
+      <li><a href="#电源操作安全机制">电源操作安全机制</a></li>
+      <li><a href="#故障排查">故障排查</a></li>
+    </ul>
+    {% endif %}
+
+    {% if include.page_key == 'faq' %}
+    <h4>本页章节</h4>
+    <ul>
+      <li><a href="#客户端无法连接服务端">客户端无法连接服务端</a></li>
+      <li><a href="#vhd-挂载失败">VHD 挂载失败</a></li>
+      <li><a href="#maimoller-设备未识别">Maimoller 设备未识别</a></li>
+      <li><a href="#服务端初始化后无法登录">服务端初始化后无法登录</a></li>
+      <li><a href="#更新失败">更新失败</a></li>
+    </ul>
+    {% endif %}
+
+    {% if include.page_key == 'admin-client' %}
+    <h4>本页章节</h4>
+    <ul>
+      <li><a href="#windows-端">Windows 端</a></li>
+      <li><a href="#android-端">Android 端</a></li>
+      <li><a href="#ios-端">iOS 端</a></li>
+      <li><a href="#管理客户端功能">管理客户端功能</a></li>
+      <li><a href="#新功能速览">新功能速览</a></li>
+    </ul>
+    {% endif %}
+
+    {% if include.page_key == 'admin-guide' %}
+    <h4>本页章节</h4>
+    <ul>
+      <li><a href="#离线工具vhdmountadmintools">离线工具</a></li>
+      <li><a href="#flutter-管理客户端">Flutter 管理客户端</a></li>
+      <li><a href="#机器管理">机器管理</a></li>
+      <li><a href="#机台日志">机台日志</a></li>
+      <li><a href="#证书">证书</a></li>
+      <li><a href="#审计">审计</a></li>
+      <li><a href="#设置">设置</a></li>
+      <li><a href="#部署管理新功能">部署管理新功能</a></li>
+      <li><a href="#强制触发-otp-二次校验的操作">OTP 二次校验清单</a></li>
+      <li><a href="#日常运维流程">日常运维流程</a></li>
+      <li><a href="#安全注意事项">安全注意事项</a></li>
+    </ul>
+    {% endif %}
+  </aside>
+
+  <div class="docs-content">

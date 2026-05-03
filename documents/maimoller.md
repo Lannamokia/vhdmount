@@ -7,6 +7,8 @@ title: Maimoller HID 系统菜单指南
 
 本文档详细说明 `VHDMounter_Maimoller.exe`（增强版客户端）中 Maimoller HID 操控面板的完整功能与操作方式。
 
+{% include docs-sidebar.html page_key="maimoller" %}
+
 ---
 
 ## 支持的硬件
@@ -164,3 +166,5 @@ Maimoller 面板上有 8 个数字按钮和 4 个系统按钮：
 | 系统信息无数据 | 硬件监控服务初始化失败 | 检查是否以管理员身份运行 |
 | 网络设置不生效 | 权限不足 | 必须以管理员身份运行才能修改网络配置 |
 | 音频设置无设备 | 音频服务异常 | 检查 Windows 音频服务是否运行 |
+
+{% include docs-sidebar-end.html %}

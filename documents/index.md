@@ -7,6 +7,8 @@ title: VHD Mounter 安装指南
 
 本文档帮助用户完成 VHD Mounter 系统的完整部署，包括服务端、Windows 客户端和管理客户端三部分。
 
+{% include docs-sidebar.html page_key="index" %}
+
 ---
 
 ## 系统概述
@@ -30,3 +32,5 @@ VHD Mounter 是一套 VHD 挂载管理系统，包含以下组件：
 - [管理客户端安装](admin-client)
 - [管理者指南](admin-guide)
 - [常见问题](faq)
+
+{% include docs-sidebar-end.html %}

@@ -5,6 +5,8 @@ title: Windows 客户端安装
 
 # Windows 客户端安装
 
+{% include docs-sidebar.html page_key="client-setup" %}
+
 ---
 
 ## 前置要求
@@ -262,3 +264,5 @@ Enable-BitLocker -MountPoint C: -RecoveryPasswordProtector
 | UWF | 按需启用/禁用 | `uwfmgr filter enable/disable` |
 | dontdisplaylastusername | `1` | 改为 `0` |
 | BitLocker | 启用 | `Disable-BitLocker C:` |
+
+{% include docs-sidebar-end.html %}

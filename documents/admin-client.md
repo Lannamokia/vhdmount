@@ -7,6 +7,8 @@ title: 管理客户端安装
 
 管理客户端基于 Flutter 构建，支持 Windows、Android 和 iOS。
 
+{% include docs-sidebar.html page_key="admin-client" %}
+
 ---
 
 ## Windows 端
@@ -73,3 +75,35 @@ flutter run -d ios
 - 机台管理与注册证书配置
 - 审计日志查看
 - 安全设置（密码修改、OTP 轮换）
+- 部署包上传、部署任务下发、机台部署历史与卸载
+- 本地打包器：直接在管理员电脑上生成 `software-deploy` / `file-deploy` ZIP 与签名
+
+## 新功能速览
+
+### 部署管理
+
+管理客户端现在提供“部署管理”页面，覆盖以下操作：
+
+1. 上传部署包与签名文件
+2. 浏览部署包列表
+3. 为指定机台创建部署任务
+4. 查看机台部署历史
+5. 对已安装记录发起卸载
+
+### 本地打包器
+
+“部署管理”页中的“本地打包器”按钮可直接生成服务端可接受的部署包：
+
+- `software-deploy`
+  - 适合带 `install.ps1` / `uninstall.ps1` 的配套软件安装包
+  - 打包器会把脚本放在 ZIP 根目录，并生成带 `installScript`、`uninstallScript`、`requiresAdmin` 的 `deploy.json`
+- `file-deploy`
+  - 适合把文件直接解压到机台目标目录
+  - 打包器会把文件负载放进 `payload/` 子目录，并把 `targetPath` 写入 `deploy.json`
+
+### 使用建议
+
+- 上传服务端前，优先用本地打包器生成 ZIP 和 `.zip.sig`
+- 机台选择、日志、部署任务、部署历史都可以在同一个客户端中完成，无需切换旧 Web 管理页
+
+{% include docs-sidebar-end.html %}
