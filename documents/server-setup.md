@@ -1,13 +1,6 @@
----
-layout: default
-title: 服务端部署
----
-
 # 服务端部署
 
 VHDSelectServer 提供两种部署方式：Docker（推荐）和本地直接运行。
-
-{% include docs-sidebar.html page_key="server-setup" %}
 
 ---
 
@@ -109,5 +102,3 @@ npm start
 虽然机台侧通信采用 AES-256-CTR + RSA-TPM 端到端加密，管理端的密码、OTP、EVHD 等敏感数据在传输中仍需保护。**生产环境强烈建议通过反向代理（如 Nginx、Traefik）或负载均衡启用 TLS/HTTPS**，避免敏感数据在公网中以明文传输。
 
 Flutter 管理客户端默认使用 `http://` 基地址以适应内网部署场景，生产环境请在连接设置中使用 `https://` 地址。
-
-{% include docs-sidebar-end.html %}

@@ -24,27 +24,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Ruby
-        uses: ruby/setup-ruby@v1
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          ruby-version: '3.3'
-          bundler-cache: true
-          working-directory: documents
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: documents/package-lock.json
 
       - name: Setup Pages
         id: pages
         uses: actions/configure-pages@v5
 
-      - name: Build with Jekyll
-        run: bundle exec jekyll build --baseurl "${{ steps.pages.outputs.base_path }}"
+      - name: Install dependencies
+        run: npm ci
         working-directory: documents
-        env:
-          JEKYLL_ENV: production
+
+      - name: Build with VitePress
+        run: npm run docs:build -- --base "${{ steps.pages.outputs.base_path }}/"
+        working-directory: documents
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: documents/_site
+          path: documents/.vitepress/dist
 
   deploy:
     environment:

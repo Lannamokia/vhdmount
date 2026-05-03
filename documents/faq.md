@@ -1,11 +1,4 @@
----
-layout: default
-title: 常见问题
----
-
 # 常见问题
-
-{% include docs-sidebar.html page_key="faq" %}
 
 ---
 
@@ -39,5 +32,3 @@ title: 常见问题
 1. 准备 `manifest.json` 和 `manifest.sig`
 2. 放入卷标为 `NX_INS` 的可移动设备
 3. 客户端启动时会自动检测并执行更新
-
-{% include docs-sidebar-end.html %}

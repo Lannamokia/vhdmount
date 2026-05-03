@@ -1,13 +1,6 @@
----
-layout: default
-title: 管理客户端安装
----
-
 # 管理客户端安装
 
 管理客户端基于 Flutter 构建，支持 Windows、Android 和 iOS。
-
-{% include docs-sidebar.html page_key="admin-client" %}
 
 ---
 
@@ -53,8 +46,8 @@ flutter run -d android
 
 iOS unsigned IPA 已上传到 [GitHub Releases](https://github.com/Lannamokia/vhdmount/releases)，但**未经签名**，无法直接安装。您可以选择以下任一方式：
 
-- **LiveContainer**：在已越狱或使用 TrollStore 的设备上，通过 LiveContainer 直接运行未签名的 IPA
-- **自行签名**：使用个人 Apple Developer 账号或 AltStore、SideStore 等工具对 IPA 进行自签名后安装
+- **LiveContainer**：在所有iOS设备上，通过 LiveContainer 直接运行未签名的 IPA，无需越狱，适合临时使用和测试
+- **自行签名**：使用Apple Developer 账号或 AltStore、SideStore 等工具对 IPA 进行自签名后安装
 
 ### 方式二：从源码构建
 
@@ -105,5 +98,3 @@ flutter run -d ios
 
 - 上传服务端前，优先用本地打包器生成 ZIP 和 `.zip.sig`
 - 机台选择、日志、部署任务、部署历史都可以在同一个客户端中完成，无需切换旧 Web 管理页
-
-{% include docs-sidebar-end.html %}
