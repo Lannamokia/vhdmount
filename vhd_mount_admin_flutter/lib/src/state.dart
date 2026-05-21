@@ -76,6 +76,22 @@ class AppController extends ChangeNotifier {
 
   Timer? _otpExpiryTimer;
   bool _clientConfigLoaded = false;
+  OtpHostHandler? _otpHost;
+
+  /// 注册一个全局 OTP 验证主机。当 [_runAction] 检测到 requireOtp 错误时，
+  /// 会通过该主机弹出验证对话框并在成功后透明重试。
+  ///
+  /// UI 层（通常是 [_OtpHostOverlay]）应在挂载时调用。
+  void attachOtpHost(OtpHostHandler handler) {
+    _otpHost = handler;
+  }
+
+  /// 卸载已注册的 OTP 验证主机（避免持有失效的 BuildContext）。
+  void detachOtpHost(OtpHostHandler handler) {
+    if (identical(_otpHost, handler)) {
+      _otpHost = null;
+    }
+  }
 
   // ─── 后台操作持久化 ───────────────────────────────────────────────────────
   final List<BackgroundOperation> backgroundOperations =
@@ -358,9 +374,30 @@ class AppController extends ChangeNotifier {
     errorMessage = null;
     notifyListeners();
     try {
-      return await action();
+      try {
+        return await action();
+      } on AdminApiException catch (error) {
+        // 服务端要求 OTP step-up：尝试通过 OTP 主机弹窗验证后透明重试一次
+        if (!error.requireOtp || _otpHost == null) {
+          rethrow;
+        }
+        final verified = await _otpHost!.requestVerification();
+        if (!verified) {
+          // 用户取消：抛出语义化异常给上层，避免显示通用错误
+          throw const OtpRequiredException('OTP 验证已取消');
+        }
+        // 验证成功后只重试一次，避免无限循环
+        errorMessage = null;
+        notifyListeners();
+        return await action();
+      }
     } catch (error) {
-      errorMessage = describeError(error);
+      // 取消语义不应作为错误显示
+      if (error is OtpRequiredException) {
+        errorMessage = null;
+      } else {
+        errorMessage = describeError(error);
+      }
       notifyListeners();
       rethrow;
     } finally {

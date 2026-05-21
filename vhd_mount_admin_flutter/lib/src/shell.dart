@@ -229,7 +229,10 @@ class AdminApp extends StatelessWidget {
           }),
         ),
       ),
-      home: AdminRoot(controller: controller),
+      home: OtpHostOverlay(
+        controller: controller,
+        child: AdminRoot(controller: controller),
+      ),
     );
   }
 }

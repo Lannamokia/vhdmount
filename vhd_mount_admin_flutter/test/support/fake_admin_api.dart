@@ -74,6 +74,12 @@ class FakeAdminApi implements AdminApi {
   int changePasswordCalls = 0;
   int prepareOtpRotationCalls = 0;
   int completeOtpRotationCalls = 0;
+  int setMachineApprovalCalls = 0;
+
+  /// 测试钩子：当为 true 时，下一次 [setMachineApproval] 调用会先抛出
+  /// `AdminApiException(requireOtp: true)`，并自动复位为 false。
+  /// 用于测试 controller._runAction 的 OTP 自动拦截 + 透明重试逻辑。
+  bool shouldRequireOtpOnNextMachineAction = false;
   String? lastAuditMachineId;
   String? lastUpdatedDefaultVhd;
   String? lastCurrentPassword;
@@ -495,6 +501,15 @@ class FakeAdminApi implements AdminApi {
 
   @override
   Future<void> setMachineApproval(String machineId, bool approved) async {
+    setMachineApprovalCalls++;
+    if (shouldRequireOtpOnNextMachineAction) {
+      shouldRequireOtpOnNextMachineAction = false;
+      throw AdminApiException(
+        '需要 OTP 二次验证',
+        statusCode: 403,
+        requireOtp: true,
+      );
+    }
     machines = machines
         .map(
           (machine) => machine.machineId == machineId

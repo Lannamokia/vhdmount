@@ -359,4 +359,92 @@ void main() {
       },
     );
   });
+
+  group('OtpHostOverlay (controller-level guard)', () {
+    testWidgets(
+      '_runAction auto-shows OTP dialog when API throws requireOtp',
+      (tester) async {
+        final api = FakeAdminApi(
+          serverStatus: _readyServerStatus,
+          authStatus: _otpNotVerified,
+        );
+        api.shouldRequireOtpOnNextMachineAction = true;
+        final controller = AppController(
+          api: api,
+          clientConfigStore: FakeClientConfigStore(),
+        );
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: OtpHostOverlay(
+              controller: controller,
+              child: const Scaffold(body: SizedBox.shrink()),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Trigger an action that will throw requireOtp on first call
+        final future = controller.setMachineApproval('m1', true);
+
+        // The OtpHostOverlay should auto-display the dialog
+        await tester.pumpAndSettle();
+        expect(find.text('OTP 验证'), findsOneWidget);
+
+        // Submit a TOTP code → controller verifies, then retries the action transparently
+        await tester.enterText(
+          find.widgetWithText(TextField, '验证码'),
+          '123456',
+        );
+        await tester.tap(find.text('验证'));
+        await tester.pumpAndSettle();
+
+        // future should complete without throwing
+        await future;
+        expect(controller.otpVerified, isTrue);
+        expect(api.setMachineApprovalCalls, 2);
+      },
+    );
+
+    testWidgets(
+      'cancelling the auto OTP dialog yields OtpRequiredException to caller',
+      (tester) async {
+        final api = FakeAdminApi(
+          serverStatus: _readyServerStatus,
+          authStatus: _otpNotVerified,
+        );
+        api.shouldRequireOtpOnNextMachineAction = true;
+        final controller = AppController(
+          api: api,
+          clientConfigStore: FakeClientConfigStore(),
+        );
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: OtpHostOverlay(
+              controller: controller,
+              child: const Scaffold(body: SizedBox.shrink()),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final future = controller.setMachineApproval('m1', true);
+
+        // 用 future.catchError 提前 hook 错误，避免 flutter test framework 把
+        // 来自异步队列的异常视为"未捕获"
+        Object? caught;
+        future.catchError((Object e) {
+          caught = e;
+        });
+
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('取消'));
+        await tester.pumpAndSettle();
+
+        expect(caught, isA<OtpRequiredException>());
+        expect(controller.otpVerified, isFalse);
+      },
+    );
+  });
 }

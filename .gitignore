@@ -101,3 +101,4 @@ CLI_GUIDE.md
 ehthumbs.db
 .kiro/specs/deployment-security-audit-fixes/.config.kiro
 .kiro/specs/admin-tools-flutter-migration/.config.kiro
+.kiro/specs/multi-end-integration-testing/.config.kiro
