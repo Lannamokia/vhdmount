@@ -212,29 +212,74 @@ class _TotpKeysManagementSectionState
   Future<void> _bindBiometric() async {
     if (_biometricService == null) return;
 
+    // 1) 防御性检查：如果设备上已经存有绑定，先确认要不要覆盖
+    if (await _biometricService!.isBound()) {
+      if (!mounted) return;
+      final overwrite = await showConfirmDialog(
+        context,
+        title: '已存在生物识别绑定',
+        message:
+            '当前设备已经绑定过 ${_biometricService!.displayName}。\n继续将覆盖现有绑定，并在服务端创建一条新的密钥（旧密钥可在列表中手动注销）。\n\n确认继续吗？',
+        confirmLabel: '继续绑定',
+      );
+      if (overwrite != true) return;
+    }
+
+    // 2) 服务端先注册一条 biometric 类型密钥
+    TotpKeyCreationResult? created;
     try {
-      final result = await widget.controller.createTotpKey(
+      created = await widget.controller.createTotpKey(
         name: '${_biometricService!.displayName} (${Platform.localHostname})',
         type: 'biometric',
         platform: _biometricService!.platformIdentifier,
-      );
-
-      await _biometricService!.bind(
-        totpSecret: result.totpSecret,
-        keyId: result.id,
-      );
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('${_biometricService!.displayName} 已绑定成功。'),
-        ),
       );
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(describeError(error))),
       );
+      return;
+    }
+
+    // 3) 本地通过生物识别认证后写入 secret
+    try {
+      await _biometricService!.bind(
+        totpSecret: created.totpSecret,
+        keyId: created.id,
+      );
+    } on BiometricBindCancelledException {
+      // 用户取消：删除刚创建的服务端密钥，避免成为孤儿
+      await _rollbackOrphanKey(created.id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已取消生物识别绑定。')),
+      );
+      return;
+    } catch (error) {
+      // 其它错误（存储写入失败等）：同样回滚
+      await _rollbackOrphanKey(created.id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(describeError(error))),
+      );
+      return;
+    }
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('${_biometricService!.displayName} 已绑定成功。'),
+      ),
+    );
+  }
+
+  /// 删除服务端那条已经创建、但本地绑定失败的"孤儿"密钥。
+  /// 任何错误都吞掉：服务端如果删不掉，用户也能在列表里手动注销。
+  Future<void> _rollbackOrphanKey(String keyId) async {
+    try {
+      await widget.controller.deleteTotpKey(keyId);
+    } catch (_) {
+      // 静默忽略；密钥仍可在列表中手动注销
     }
   }
 

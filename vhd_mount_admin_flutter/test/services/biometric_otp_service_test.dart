@@ -143,6 +143,14 @@ class MockSecureStorage implements FlutterSecureStorage {
   void unregisterAllListeners() {}
 }
 
+/// 测试辅助：在测试中创建一个总是允许通过的 WindowsBiometricOtpService。
+WindowsBiometricOtpService _windowsServiceWith(MockSecureStorage storage) {
+  return WindowsBiometricOtpService(
+    secureStorage: storage,
+    authGate: (_) async => true,
+  );
+}
+
 void main() {
   group('TotpGenerator.base32Decode', () {
     test('decodes RFC 4648 test vector for "12345678901234567890"', () {
@@ -308,7 +316,7 @@ void main() {
     test('WindowsBiometricOtpService.authenticate() 生成正确的 TOTP 验证码', () async {
       const secret = 'GEZDGNBVGY3TQOJQ';
       final mockStorage = MockSecureStorage();
-      final service = WindowsBiometricOtpService(secureStorage: mockStorage);
+      final service = _windowsServiceWith(mockStorage);
 
       // Bind the secret
       await service.bind(totpSecret: secret, keyId: 'test-key-1');
@@ -334,7 +342,7 @@ void main() {
     test('WindowsBiometricOtpService: storage error propagates to caller', () async {
       const secret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
       final mockStorage = MockSecureStorage();
-      final service = WindowsBiometricOtpService(secureStorage: mockStorage);
+      final service = _windowsServiceWith(mockStorage);
 
       // Bind the secret first
       await service.bind(totpSecret: secret, keyId: 'test-key-1');
@@ -406,7 +414,7 @@ void main() {
 
     test('unbind() 清除所有存储的密钥数据', () async {
       final mockStorage = MockSecureStorage();
-      final service = WindowsBiometricOtpService(secureStorage: mockStorage);
+      final service = _windowsServiceWith(mockStorage);
 
       await service.bind(totpSecret: 'TESTSECRET', keyId: 'key-123');
       expect(await service.isBound(), isTrue);
@@ -419,7 +427,7 @@ void main() {
 
     test('多次 unbind 不抛出异常', () async {
       final mockStorage = MockSecureStorage();
-      final service = WindowsBiometricOtpService(secureStorage: mockStorage);
+      final service = _windowsServiceWith(mockStorage);
 
       await service.bind(totpSecret: 'TESTSECRET', keyId: 'key-123');
       await service.unbind();
@@ -463,7 +471,7 @@ void main() {
   group('WindowsBiometricOtpService 生命周期', () {
     test('未绑定时 authenticate 返回 null', () async {
       final mockStorage = MockSecureStorage();
-      final service = WindowsBiometricOtpService(secureStorage: mockStorage);
+      final service = _windowsServiceWith(mockStorage);
 
       expect(await service.isBound(), isFalse);
       final code = await service.authenticate();
@@ -472,7 +480,7 @@ void main() {
 
     test('bind 后 isBound 返回 true', () async {
       final mockStorage = MockSecureStorage();
-      final service = WindowsBiometricOtpService(secureStorage: mockStorage);
+      final service = _windowsServiceWith(mockStorage);
 
       await service.bind(totpSecret: 'JBSWY3DPEHPK3PXP', keyId: 'key-1');
       expect(await service.isBound(), isTrue);
@@ -480,7 +488,7 @@ void main() {
 
     test('bind 后 authenticate 返回有效验证码', () async {
       final mockStorage = MockSecureStorage();
-      final service = WindowsBiometricOtpService(secureStorage: mockStorage);
+      final service = _windowsServiceWith(mockStorage);
 
       await service.bind(totpSecret: 'JBSWY3DPEHPK3PXP', keyId: 'key-1');
       final code = await service.authenticate();
@@ -489,11 +497,15 @@ void main() {
       expect(int.tryParse(code), isNotNull);
     });
 
-    test('isAvailable 在 Windows 上返回 true', () async {
-      final service = WindowsBiometricOtpService();
+    test('isAvailable 在 Windows 上注入 authGate 时返回 true', () async {
+      final service = WindowsBiometricOtpService(
+        secureStorage: MockSecureStorage(),
+        authGate: (_) async => true,
+      );
       final available = await service.isAvailable();
-      // Running on Windows test host
+      // Running on Windows test host with stubbed auth gate
       expect(available, isTrue);
     });
   });
 }
+

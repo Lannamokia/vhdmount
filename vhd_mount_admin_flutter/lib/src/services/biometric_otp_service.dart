@@ -1,5 +1,16 @@
 part of '../../app.dart';
 
+/// 当用户在录入生物识别绑定流程中取消或认证失败时抛出。
+/// UI 层应将其视为"用户操作"，不要弹错误提示。
+class BiometricBindCancelledException implements Exception {
+  const BiometricBindCancelledException([this.message = '生物识别绑定已取消']);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
 /// 跨平台生物识别 OTP 服务抽象接口。
 /// 各平台提供具体实现，统一 API 供 OtpGuard 和设置页面调用。
 abstract class BiometricOtpService {
