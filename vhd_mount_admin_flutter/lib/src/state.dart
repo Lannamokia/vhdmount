@@ -1,5 +1,72 @@
 part of '../app.dart';
 
+/// 后台操作的状态枚举。
+enum BackgroundOperationStatus {
+  running,
+  completed,
+  failed,
+}
+
+/// 后台操作的类型枚举。
+enum BackgroundOperationType {
+  keyGeneration,
+  manifestPackaging,
+  certificateGeneration,
+  deploymentPackaging,
+}
+
+/// 表示一个后台操作的模型，用于在用户导航离开离线工具时持久化操作状态。
+class BackgroundOperation {
+  BackgroundOperation({
+    required this.type,
+    required this.status,
+    this.progress = 0.0,
+    this.step = '',
+    this.resultMessage,
+    this.isError = false,
+    DateTime? timestamp,
+  }) : timestamp = timestamp ?? DateTime.now();
+
+  final BackgroundOperationType type;
+  final BackgroundOperationStatus status;
+  final double progress;
+  final String step;
+  final String? resultMessage;
+  final bool isError;
+  final DateTime timestamp;
+
+  String get typeLabel {
+    switch (type) {
+      case BackgroundOperationType.keyGeneration:
+        return '密钥生成';
+      case BackgroundOperationType.manifestPackaging:
+        return '清单打包';
+      case BackgroundOperationType.certificateGeneration:
+        return '证书生成';
+      case BackgroundOperationType.deploymentPackaging:
+        return '部署打包';
+    }
+  }
+
+  BackgroundOperation copyWith({
+    BackgroundOperationStatus? status,
+    double? progress,
+    String? step,
+    String? resultMessage,
+    bool? isError,
+  }) {
+    return BackgroundOperation(
+      type: type,
+      status: status ?? this.status,
+      progress: progress ?? this.progress,
+      step: step ?? this.step,
+      resultMessage: resultMessage ?? this.resultMessage,
+      isError: isError ?? this.isError,
+      timestamp: timestamp,
+    );
+  }
+}
+
 class AppController extends ChangeNotifier {
   AppController({required this.api, ClientConfigStore? clientConfigStore})
     : clientConfigStore = clientConfigStore ?? FileClientConfigStore();
@@ -9,6 +76,101 @@ class AppController extends ChangeNotifier {
 
   Timer? _otpExpiryTimer;
   bool _clientConfigLoaded = false;
+
+  // ─── 后台操作持久化 ───────────────────────────────────────────────────────
+  final List<BackgroundOperation> backgroundOperations =
+      <BackgroundOperation>[];
+
+  /// 当前正在运行的操作（如果有）。
+  BackgroundOperation? get activeOperation {
+    for (final op in backgroundOperations) {
+      if (op.status == BackgroundOperationStatus.running) {
+        return op;
+      }
+    }
+    return null;
+  }
+
+  /// 最近完成或失败的操作结果（用于用户返回时显示）。
+  BackgroundOperation? get lastCompletedOperation {
+    for (int i = backgroundOperations.length - 1; i >= 0; i--) {
+      final op = backgroundOperations[i];
+      if (op.status == BackgroundOperationStatus.completed ||
+          op.status == BackgroundOperationStatus.failed) {
+        return op;
+      }
+    }
+    return null;
+  }
+
+  /// 启动一个后台操作。返回操作在列表中的索引，用于后续更新。
+  int startBackgroundOperation(BackgroundOperationType type, String step) {
+    final op = BackgroundOperation(
+      type: type,
+      status: BackgroundOperationStatus.running,
+      step: step,
+    );
+    backgroundOperations.add(op);
+    notifyListeners();
+    return backgroundOperations.length - 1;
+  }
+
+  /// 更新后台操作的进度。
+  void updateBackgroundOperationProgress(
+    int index,
+    double progress,
+    String step,
+  ) {
+    if (index < 0 || index >= backgroundOperations.length) return;
+    backgroundOperations[index] = backgroundOperations[index].copyWith(
+      progress: progress,
+      step: step,
+    );
+    notifyListeners();
+  }
+
+  /// 标记后台操作为完成。
+  void completeBackgroundOperation(int index, String resultMessage) {
+    if (index < 0 || index >= backgroundOperations.length) return;
+    backgroundOperations[index] = backgroundOperations[index].copyWith(
+      status: BackgroundOperationStatus.completed,
+      progress: 1.0,
+      step: '完成',
+      resultMessage: resultMessage,
+      isError: false,
+    );
+    notifyListeners();
+  }
+
+  /// 标记后台操作为失败。
+  void failBackgroundOperation(int index, String errorMessage) {
+    if (index < 0 || index >= backgroundOperations.length) return;
+    backgroundOperations[index] = backgroundOperations[index].copyWith(
+      status: BackgroundOperationStatus.failed,
+      step: '失败',
+      resultMessage: errorMessage,
+      isError: true,
+    );
+    notifyListeners();
+  }
+
+  /// 清除所有已完成/失败的后台操作记录。
+  void clearCompletedBackgroundOperations() {
+    backgroundOperations.removeWhere(
+      (op) => op.status != BackgroundOperationStatus.running,
+    );
+    notifyListeners();
+  }
+
+  /// 清除指定索引的后台操作记录。
+  void dismissBackgroundOperation(int index) {
+    if (index < 0 || index >= backgroundOperations.length) return;
+    if (backgroundOperations[index].status !=
+        BackgroundOperationStatus.running) {
+      backgroundOperations.removeAt(index);
+      notifyListeners();
+    }
+  }
 
   bool isLoading = true;
   bool isWorking = false;
@@ -40,6 +202,7 @@ class AppController extends ChangeNotifier {
   List<DeploymentPackage> deploymentPackages = <DeploymentPackage>[];
   List<DeploymentTask> deploymentTasks = <DeploymentTask>[];
   List<DeploymentRecord> deploymentRecords = <DeploymentRecord>[];
+  List<TotpKeyRecord> totpKeys = <TotpKeyRecord>[];
   String? deploymentSelectedMachineId;
   String? deploymentTaskStatusFilter;
   String deploymentSelectedTab = 'packages';
@@ -719,6 +882,28 @@ class AppController extends ChangeNotifier {
   Future<void> triggerUninstall(String machineId, String recordId) async {
     await _runAction(() => api.triggerUninstall(machineId, recordId));
     await loadMachineDeploymentHistory(machineId);
+  }
+
+  Future<void> loadTotpKeys() async {
+    totpKeys = await _runAction(api.getTotpKeys);
+    notifyListeners();
+  }
+
+  Future<TotpKeyCreationResult> createTotpKey({
+    required String name,
+    required String type,
+    String? platform,
+  }) async {
+    final result = await _runAction(
+      () => api.createTotpKey(name: name, type: type, platform: platform),
+    );
+    await loadTotpKeys();
+    return result;
+  }
+
+  Future<void> deleteTotpKey(String keyId) async {
+    await _runAction(() => api.deleteTotpKey(keyId));
+    await loadTotpKeys();
   }
 
   @override
