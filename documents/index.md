@@ -34,8 +34,8 @@ VHD Mounter 是一套 VHD 挂载管理系统，包含以下组件：
 
 | 组件 | 说明 |
 |------|------|
-| **VHDSelectServer** | Node.js 管理服务端，负责机台注册、VHD 选择、日志收集 |
+| **VHDSelectServer** | Node.js 管理服务端，负责机台注册、VHD 选择、日志收集、远程部署 |
 | **VHDMounter** | Windows 客户端，扫描并挂载 VHD 到 `M:\`并启动游戏 |
 | **VHDMounter_Maimoller** | 增强版客户端，支持 Maimoller HID 系统菜单 |
-| **管理客户端** | Flutter 跨平台应用，用于服务端初始化和管理 |
+| **管理客户端** | Flutter 跨平台应用，用于服务端初始化、机台管理、证书管理、部署管理、离线签名打包（仅桌面） |
 

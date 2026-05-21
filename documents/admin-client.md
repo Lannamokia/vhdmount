@@ -64,18 +64,91 @@ flutter run -d ios
 ## 管理客户端功能
 
 - 服务端初始化向导
-- 管理员登录与 OTP 验证
+- 管理员登录与 OTP 验证（含 OTP 自动守卫，高敏操作触发时自动弹出验证窗）
 - 机台管理与注册证书配置
 - 审计日志查看
-- 安全设置（密码修改、OTP 轮换）
+- 安全设置（密码修改、OTP 轮换、TOTP 密钥管理）
 - 部署包上传、部署任务下发、机台部署历史与卸载
-- 本地打包器：直接在管理员电脑上生成 `software-deploy` / `file-deploy` ZIP 与签名
+- **离线工具（仅 Windows 桌面）**：等价于 `VHDMountAdminTools.exe` 的全部能力
+  - 更新签名密钥生成（RSA 3072）
+  - 清单打包与签名（RSA-PSS SHA-256）
+  - 注册证书包生成（X.509 + PFX + trust.json + client-config.ini）
+  - 软件部署本地打包器（`software-deploy` / `file-deploy`）
+- **跨平台生物识别 OTP**：Windows Hello（Credential Manager + DPAPI）、iOS Face ID / Touch ID（Keychain）、Android BiometricPrompt（Keystore）
+- 移动端响应式布局，远程管理页面（机台、日志、证书、审计、设置、部署）在窄屏下可正常使用
 
 ## 新功能速览
 
+### 离线工具页（仅 Windows 桌面）
+
+仅在 `Platform.isWindows` 且已认证时显示，移动端完全隐藏。包含 4 个标签页：
+
+| 标签页 | 功能 | 说明 |
+|--------|------|------|
+| 密钥生成 | 生成 RSA 3072 位更新签名密钥对 | 输出 PKCS#8 私钥、SPKI 公钥；自动追加公钥到 `trusted_keys.pem` |
+| 清单打包 | 扫描 payload 目录、计算 SHA-256、签名 | RSA-PSS SHA-256 签名，输出 `manifest.json` + `manifest.sig`；`app-update` 类型强制最大 1 GB |
+| 证书包 | 生成自签名 X.509 注册证书包 | 输出 `.pfx` / `.pem` / `.trust.json` / `.client-config.ini`；validDays 范围 1–3650 |
+| 软件部署打包器 | 直接在管理员电脑上生成 `software-deploy` / `file-deploy` ZIP 与签名 | 与上传功能配合使用 |
+
+操作进行中导航离开离线工具页面时，操作仍会继续执行至完成；用户返回后可看到最近一次的操作结果。
+
+### OTP 自动守卫
+
+高敏操作（如查看证书列表、生成证书、审批机台、查看部署包等）触发时，若 OTP 未验证：
+
+1. 客户端自动弹出 OTP 验证对话框，无需用户手动寻找入口
+2. 验证成功后透明地重试原始操作
+3. 用户取消时静默返回，不显示额外错误
+4. 验证失败时在对话框内显示错误提示，不关闭对话框
+5. 顶部 PageHeader 中的"验证 OTP"按钮仍保留，作为主动验证入口
+
+### TOTP 密钥管理（设置页面）
+
+服务端支持多个并行 TOTP 密钥，分两类：
+
+| 类型 | 用途 |
+|------|------|
+| `authenticator` | 标准认证器（如 Google Authenticator / Microsoft Authenticator）；至少保留一个 |
+| `biometric` | 设备生物识别绑定（Windows Hello / Face ID / Android 指纹） |
+
+设置页"TOTP 密钥管理"区域提供以下操作（均需 OTP step-up）：
+
+- **添加认证器**：服务端生成新密钥，弹出 QR 码 + 密钥文本，使用验证器扫描后即可生效
+- **绑定生物识别**（仅在设备支持时可见）：服务端创建 biometric 类型密钥，本地通过平台生物识别加密存储 `secret`
+- **注销密钥**：从服务端注销指定密钥；最后一个 authenticator 密钥受保护不可注销
+
+### 生物识别 OTP 快捷验证
+
+OTP 验证对话框在以下条件成立时显示生物识别按钮：
+
+- 当前平台支持生物识别（`isAvailable() == true`）
+- 本地已绑定生物识别 TOTP（`isBound() == true`）
+
+按钮图标和标签按平台区分：
+
+| 平台 | 显示名称 | 图标 |
+|------|----------|------|
+| Windows | Windows Hello | 指纹 |
+| iOS | Face ID 或 Touch ID | 面容 / 指纹 |
+| Android | 指纹验证 | 指纹 |
+
+点击按钮后调用平台 API 完成生物识别认证，自动生成 RFC 6238 TOTP 验证码（HMAC-SHA1, 6 位, 30 秒窗口）并提交服务端。失败 / 取消时保持对话框打开，仍可手动输入；服务端拒绝（密钥已被注销）时自动清除本地绑定并提示重新绑定。
+
+iOS 上 Keychain 配合 `kSecAccessControlBiometryCurrentSet`（实现使用 `KeychainAccessibility.unlocked_this_device`）；Android 使用 `EncryptedSharedPreferences` + `BiometricPrompt` 前置认证。两个平台在生物识别注册信息变更后，本地存储读取失败会自动触发 `unbind()`。
+
+### 证书页面"生成证书"按钮（仅 Windows 桌面）
+
+"可信注册证书"页面在 Windows 桌面端的 PageHeader 中新增"生成证书"按钮，与"导入证书"并列：
+
+1. 点击按钮弹出对话框，包含 bundleName、subjectCN、PFX 密码、validDays、输出目录字段
+2. 调用 `CertificateGeneratorService` 生成完整证书包到本地
+3. 自动调用 `addTrustedCertificate(bundleName, certificatePem)` 导入服务端信任列表
+4. 自动刷新证书列表
+5. 若服务端导入失败，显示警告但保留本地文件，可手动导入
+
 ### 部署管理
 
-管理客户端现在提供“部署管理”页面，覆盖以下操作：
+部署管理页面用于向机台分发配套工具软件、配置文件或其他辅助文件，覆盖以下操作：
 
 1. 上传部署包与签名文件
 2. 浏览部署包列表
@@ -83,9 +156,9 @@ flutter run -d ios
 4. 查看机台部署历史
 5. 对已安装记录发起卸载
 
-### 本地打包器
+### 本地打包器（部署管理页 + 离线工具页）
 
-“部署管理”页中的“本地打包器”按钮可直接生成服务端可接受的部署包：
+部署管理页中的"本地打包器"按钮（仅 Windows 桌面）和离线工具页"软件部署打包器"标签使用同一套打包逻辑：
 
 - `software-deploy`
   - 适合带 `install.ps1` / `uninstall.ps1` 的配套软件安装包
@@ -98,3 +171,4 @@ flutter run -d ios
 
 - 上传服务端前，优先用本地打包器生成 ZIP 和 `.zip.sig`
 - 机台选择、日志、部署任务、部署历史都可以在同一个客户端中完成，无需切换旧 Web 管理页
+- 移动端定位为纯远程管理：完全隐藏离线工具入口和部署页面的"本地打包器"按钮，但保留"上传部署包"等远程操作能力
