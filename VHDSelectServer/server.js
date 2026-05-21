@@ -830,7 +830,10 @@ async function createApp(options = {}) {
 
     // --- TOTP 密钥管理 API ---
 
-    app.get('/api/auth/otp/keys', requireAuth, requireOtpStepUp, (req, res) => {
+    // 列出密钥仅返回元数据（id/name/type/platform/createdAt/lastUsedAt），
+    // 不含任何 secret，所以只要求登录态，不要求 OTP step-up。
+    // 进入设置页时即可正常拉取列表，避免给"日常浏览"操作带来 OTP 摩擦。
+    app.get('/api/auth/otp/keys', requireAuth, (req, res) => {
         const keys = securityStore.listTotpKeys();
         res.json({
             success: true,

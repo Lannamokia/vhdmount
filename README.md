@@ -258,7 +258,7 @@ MachineLogUploadMaxSpoolBytes=52428800
 - `GET /api/auth/otp/status`
 - `POST /api/auth/otp/rotate/prepare`
 - `POST /api/auth/otp/rotate/complete`
-- `GET /api/auth/otp/keys`（列出当前活跃 TOTP 密钥，不含 secret，需 OTP step-up）
+- `GET /api/auth/otp/keys`（列出当前活跃 TOTP 密钥，不含 secret，仅需登录态）
 - `POST /api/auth/otp/keys`（注册新密钥，type 为 `authenticator` 或 `biometric`，仅创建时返回一次 `secret` + `otpauthUrl`，需 OTP step-up）
 - `DELETE /api/auth/otp/keys/:keyId`（注销指定密钥；保护最后一个 `authenticator` 类型密钥不被删除，需 OTP step-up）
 
