@@ -182,7 +182,8 @@ async function createInitializedHarness(t) {
 async function loginAndVerifyOtp(client, app) {
     await client.post('/api/auth/login').send({ password: 'ComplexPassword123!' }).expect(200);
     const runtime = app.locals.runtime;
-    const secret = runtime.securityConfig.totpSecret;
+    const keys = runtime.securityConfig.totpKeys || [];
+    const secret = keys.length > 0 ? keys[0].secret : runtime.securityConfig.totpSecret;
     await client.post('/api/auth/otp/verify').send({ code: authenticator.generate(secret) }).expect(200);
 }
 
