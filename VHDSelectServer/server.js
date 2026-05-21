@@ -1774,7 +1774,7 @@ async function startServer(options = {}) {
 
         // Token 清理调度：每 10 分钟清理过期 token
         const { DeploymentStore } = require('./deploymentStore');
-        const deploymentStoreForCleanup = new DeploymentStore(configDir);
+        const deploymentStoreForCleanup = new DeploymentStore(runtime.configDir);
         runtime._tokenCleanupInterval = setInterval(async () => {
             try {
                 if (runtime.database) {
