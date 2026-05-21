@@ -61,6 +61,14 @@ class DashboardScreen extends StatelessWidget {
         icon: Icons.rocket_launch_rounded,
         color: AppPalette.coral,
       ),
+      if (Platform.isWindows) ...[
+        const DashboardDestinationSpec(
+          label: '离线工具',
+          subtitle: '密钥、清单、证书',
+          icon: Icons.build_circle_rounded,
+          color: AppPalette.sky,
+        ),
+      ],
     ];
 
     Future<void> openOtpDialog() async {
@@ -152,6 +160,9 @@ class DashboardScreen extends StatelessWidget {
             controller: controller,
             embedInParentScroll: mobile,
           ),
+          if (Platform.isWindows) ...[
+            OfflineToolsView(controller: controller),
+          ],
         ];
         final overviewSection = OverviewStatsGrid(
           cards: overviewCards,
@@ -832,7 +843,7 @@ class MachinesView extends StatelessWidget {
   }
 }
 
-class CertificatesView extends StatelessWidget {
+class CertificatesView extends StatefulWidget {
   const CertificatesView({
     super.key,
     required this.controller,
@@ -843,13 +854,140 @@ class CertificatesView extends StatelessWidget {
   final bool embedInParentScroll;
 
   @override
+  State<CertificatesView> createState() => _CertificatesViewState();
+}
+
+class _CertificatesViewState extends State<CertificatesView> {
+  late final OtpGuard _otpGuard;
+  bool _initialLoadTriggered = false;
+
+  AppController get controller => widget.controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _otpGuard = OtpGuard(controller: controller);
+    // Auto-trigger OTP guard and load certificates on first build.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _autoLoadCertificates();
+    });
+  }
+
+  Future<void> _autoLoadCertificates() async {
+    if (_initialLoadTriggered) return;
+    _initialLoadTriggered = true;
+    if (controller.otpVerified) {
+      // OTP already verified, load directly.
+      try {
+        await controller.loadCertificates();
+      } catch (_) {
+        // Ignore errors on auto-load; user can retry manually.
+      }
+    } else {
+      // OTP not verified, trigger guard which will show OTP dialog first.
+      await _guardedLoadCertificates();
+    }
+  }
+
+  Future<void> _guardedLoadCertificates() async {
+    if (!mounted) return;
+    await _otpGuard.guard<void>(context, () => controller.loadCertificates());
+  }
+
+  Future<void> _guardedImportCertificate() async {
+    await _otpGuard.guard<void>(context, () async {
+      if (!mounted) return;
+      final values = await showTwoFieldDialog(
+        context,
+        title: '添加可信证书',
+        firstLabel: '名称',
+        secondLabel: 'PEM 证书',
+        secondMinLines: 10,
+      );
+      if (values == null) return;
+      await controller.addTrustedCertificate(
+        values.first.trim(),
+        values.last.trim(),
+      );
+    });
+  }
+
+  Future<void> _guardedDeleteCertificate(String fingerprint256, String name) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除可信证书'),
+        content: Text(
+          '确认删除证书 $name 吗？删除后将影响后续机台注册审批链路。',
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await _otpGuard.guard<void>(context, () async {
+      await controller.removeTrustedCertificate(fingerprint256);
+    });
+  }
+
+  Future<void> _guardedGenerateCertificate() async {
+    await _otpGuard.guard<void>(context, () async {
+      if (!mounted) return;
+      await _showGenerateCertificateDialog();
+    });
+  }
+
+  Future<void> _showGenerateCertificateDialog() async {
+    final result = await showDialog<_CertGenDialogResult>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => _CertificateGenerateDialog(
+        controller: controller,
+      ),
+    );
+    if (result == null || !mounted) return;
+
+    // Generation succeeded — attempt auto-import to server.
+    try {
+      await controller.addTrustedCertificate(
+        result.bundleName,
+        result.certificatePem,
+      );
+      // Import succeeded — refresh list.
+      await controller.loadCertificates();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('证书已生成并成功导入服务端信任列表。')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '证书已生成到本地，但服务端导入失败：${describeError(e)}。请手动导入。',
+          ),
+          duration: const Duration(seconds: 6),
+        ),
+      );
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final emptyState = Center(
       child: SizedBox(
         width: 420,
         child: const InfoPanel(
           title: '当前没有可信注册证书',
-          body: Text('可以在完成 OTP 验证后导入第一张机台注册证书。'),
+          body: Text('导入第一张机台注册证书以开始管理。'),
           icon: Icons.verified_user_rounded,
           color: AppPalette.sky,
         ),
@@ -857,8 +995,8 @@ class CertificatesView extends StatelessWidget {
     );
     final certificatesList = ListView.separated(
       itemCount: controller.certificates.length,
-      shrinkWrap: embedInParentScroll,
-      physics: embedInParentScroll
+      shrinkWrap: widget.embedInParentScroll,
+      physics: widget.embedInParentScroll
           ? const NeverScrollableScrollPhysics()
           : null,
       padding: EdgeInsets.zero,
@@ -897,42 +1035,10 @@ class CertificatesView extends StatelessWidget {
                       ),
                     ),
                     IconButton(
-                      onPressed: () async {
-                        final confirmed = await showDialog<bool>(
-                          context: context,
-                          builder: (context) => AlertDialog(
-                            title: const Text('删除可信证书'),
-                            content: Text(
-                              '确认删除证书 ${certificate.name} 吗？删除后将影响后续机台注册审批链路。',
-                            ),
-                            actions: <Widget>[
-                              TextButton(
-                                onPressed: () => Navigator.of(context).pop(false),
-                                child: const Text('取消'),
-                              ),
-                              FilledButton(
-                                onPressed: () => Navigator.of(context).pop(true),
-                                child: const Text('删除'),
-                              ),
-                            ],
-                          ),
-                        );
-                        if (confirmed != true || !context.mounted) {
-                          return;
-                        }
-                        try {
-                          await controller.removeTrustedCertificate(
-                            certificate.fingerprint256,
-                          );
-                        } catch (error) {
-                          if (!context.mounted) {
-                            return;
-                          }
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text(describeError(error))),
-                          );
-                        }
-                      },
+                      onPressed: () => _guardedDeleteCertificate(
+                        certificate.fingerprint256,
+                        certificate.name,
+                      ),
                       icon: const Icon(Icons.delete_outline_rounded),
                     ),
                   ],
@@ -958,64 +1064,296 @@ class CertificatesView extends StatelessWidget {
           subtitle: '这里管理用于机台注册审批链路的可信证书。',
           actions: <Widget>[
             OutlinedButton.icon(
-              onPressed: controller.otpVerified
-                  ? controller.loadCertificates
-                  : null,
+              onPressed: () => _guardedLoadCertificates(),
               icon: const Icon(Icons.refresh_rounded),
               label: const Text('刷新证书'),
             ),
+            if (Platform.isWindows)
+              FilledButton.icon(
+                onPressed: () => _guardedGenerateCertificate(),
+                icon: const Icon(Icons.add_circle_rounded),
+                label: const Text('生成证书'),
+              ),
             FilledButton.icon(
-              onPressed: () async {
-                if (!controller.otpVerified) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('添加可信证书前请先完成 OTP 验证。')),
-                  );
-                  return;
-                }
-
-                final values = await showTwoFieldDialog(
-                  context,
-                  title: '添加可信证书',
-                  firstLabel: '名称',
-                  secondLabel: 'PEM 证书',
-                  secondMinLines: 10,
-                );
-                if (values == null) {
-                  return;
-                }
-                try {
-                  await controller.addTrustedCertificate(
-                    values.first.trim(),
-                    values.last.trim(),
-                  );
-                } catch (error) {
-                  if (!context.mounted) {
-                    return;
-                  }
-                  ScaffoldMessenger.of(
-                    context,
-                  ).showSnackBar(SnackBar(content: Text(describeError(error))));
-                }
-              },
+              onPressed: () => _guardedImportCertificate(),
               icon: const Icon(Icons.add_rounded),
               label: const Text('导入证书'),
             ),
           ],
         ),
         const SizedBox(height: 16),
-        if (!controller.otpVerified)
-          const InfoPanel(
-            title: '需要 OTP',
-            body: Text('证书管理属于高敏感操作。请先在右上角完成 OTP 验证，再刷新证书列表。'),
-            icon: Icons.lock_clock_rounded,
-            color: AppPalette.sun,
-          )
-        else if (controller.certificates.isEmpty)
-          if (embedInParentScroll) emptyState else Expanded(child: emptyState)
-        else if (embedInParentScroll)
+        if (controller.certificates.isEmpty)
+          if (widget.embedInParentScroll) emptyState else Expanded(child: emptyState)
+        else if (widget.embedInParentScroll)
           certificatesList
         else
           Expanded(child: certificatesList),
+      ],
+    );
+  }
+}
+
+/// Result returned from the certificate generation dialog on success.
+class _CertGenDialogResult {
+  const _CertGenDialogResult({
+    required this.bundleName,
+    required this.certificatePem,
+  });
+  final String bundleName;
+  final String certificatePem;
+}
+
+/// Modal dialog for generating a registration certificate bundle.
+/// Reuses [CertificateGeneratorService] (same logic as offline tools).
+class _CertificateGenerateDialog extends StatefulWidget {
+  const _CertificateGenerateDialog({required this.controller});
+  final AppController controller;
+
+  @override
+  State<_CertificateGenerateDialog> createState() =>
+      _CertificateGenerateDialogState();
+}
+
+class _CertificateGenerateDialogState
+    extends State<_CertificateGenerateDialog> {
+  final _bundleNameController = TextEditingController();
+  final _subjectCNController = TextEditingController();
+  final _pfxPasswordController = TextEditingController();
+  final _validDaysController = TextEditingController(text: '365');
+  final _outputDirController = TextEditingController();
+
+  bool _obscurePassword = true;
+  bool _isGenerating = false;
+  double _progress = 0.0;
+  String _step = '';
+  String? _errorMessage;
+
+  @override
+  void dispose() {
+    _bundleNameController.dispose();
+    _subjectCNController.dispose();
+    _pfxPasswordController.dispose();
+    _validDaysController.dispose();
+    _outputDirController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickOutputDir() async {
+    final result = await FilePicker.platform.getDirectoryPath();
+    if (result != null && result.isNotEmpty) {
+      setState(() {
+        _outputDirController.text = result;
+      });
+    }
+  }
+
+  Future<void> _generate() async {
+    final bundleName = _bundleNameController.text.trim();
+    final subjectCN = _subjectCNController.text.trim();
+    final pfxPassword = _pfxPasswordController.text;
+    final validDaysText = _validDaysController.text.trim();
+    final outputDir = _outputDirController.text.trim();
+
+    // Client-side validation
+    if (pfxPassword.isEmpty) {
+      setState(() => _errorMessage = 'PFX 密码不能为空');
+      return;
+    }
+    if (pfxPassword.length < 8) {
+      setState(() => _errorMessage = 'PFX 密码长度至少为 8 位');
+      return;
+    }
+    if (validDaysText.isEmpty) {
+      setState(() => _errorMessage = '有效天数不能为空');
+      return;
+    }
+    final validDays = int.tryParse(validDaysText);
+    if (validDays == null || validDays < 1 || validDays > 3650) {
+      setState(() => _errorMessage = '有效天数必须在 1 到 3650 之间');
+      return;
+    }
+    if (outputDir.isEmpty) {
+      setState(() => _errorMessage = '请选择输出目录');
+      return;
+    }
+
+    setState(() {
+      _isGenerating = true;
+      _progress = 0.0;
+      _step = '准备开始...';
+      _errorMessage = null;
+    });
+
+    try {
+      final service = CertificateGeneratorService();
+      final result = await service.generate(
+        bundleName: bundleName.isEmpty ? null : bundleName,
+        subjectCN: subjectCN.isEmpty ? null : subjectCN,
+        pfxPassword: pfxPassword,
+        validDays: validDays,
+        outputDir: outputDir,
+        onProgress: (progress, step) {
+          if (mounted) {
+            setState(() {
+              _progress = progress;
+              _step = step;
+            });
+          }
+        },
+      );
+
+      // Read the generated PEM content for auto-import.
+      final pemContent = await File(result.pemPath).readAsString();
+      final effectiveBundleName = bundleName.isEmpty
+          ? CertificateGeneratorService.defaultBundleName
+          : FileNameSanitizer().sanitize(bundleName);
+
+      if (!mounted) return;
+      Navigator.of(context).pop(
+        _CertGenDialogResult(
+          bundleName: effectiveBundleName,
+          certificatePem: pemContent.trim(),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isGenerating = false;
+          _errorMessage = '证书生成失败：${describeError(e)}';
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return AlertDialog(
+      title: const Text('生成注册证书'),
+      content: SizedBox(
+        width: 480,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              TextField(
+                controller: _bundleNameController,
+                decoration: const InputDecoration(
+                  labelText: '包名称（可选）',
+                  hintText: '默认: machine-registration',
+                ),
+                enabled: !_isGenerating,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _subjectCNController,
+                decoration: const InputDecoration(
+                  labelText: '证书主题 CN（可选）',
+                  hintText: '默认: VHDMount Machine Registration',
+                ),
+                enabled: !_isGenerating,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _pfxPasswordController,
+                decoration: InputDecoration(
+                  labelText: 'PFX 密码',
+                  hintText: '至少 8 个字符',
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _obscurePassword
+                          ? Icons.visibility_off_rounded
+                          : Icons.visibility_rounded,
+                    ),
+                    onPressed: () {
+                      setState(() => _obscurePassword = !_obscurePassword);
+                    },
+                  ),
+                ),
+                obscureText: _obscurePassword,
+                enabled: !_isGenerating,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _validDaysController,
+                decoration: const InputDecoration(
+                  labelText: '有效天数',
+                  hintText: '1-3650',
+                ),
+                keyboardType: TextInputType.number,
+                inputFormatters: <TextInputFormatter>[
+                  FilteringTextInputFormatter.digitsOnly,
+                ],
+                enabled: !_isGenerating,
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: TextField(
+                      controller: _outputDirController,
+                      decoration: const InputDecoration(
+                        labelText: '输出目录',
+                        hintText: '选择目录',
+                      ),
+                      readOnly: true,
+                      enabled: !_isGenerating,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  OutlinedButton.icon(
+                    onPressed: _isGenerating ? null : _pickOutputDir,
+                    icon: const Icon(Icons.folder_open_rounded),
+                    label: const Text('浏览'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text(
+                '生成自签名 X.509 证书包并自动导入到服务端信任列表。',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: AppPalette.muted,
+                ),
+              ),
+              if (_isGenerating) ...<Widget>[
+                const SizedBox(height: 16),
+                LinearProgressIndicator(value: _progress),
+                const SizedBox(height: 8),
+                Text(_step, style: theme.textTheme.bodySmall),
+              ],
+              if (_errorMessage != null) ...<Widget>[
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AppPalette.danger.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: AppPalette.danger.withValues(alpha: 0.3),
+                    ),
+                  ),
+                  child: Text(
+                    _errorMessage!,
+                    style: const TextStyle(color: AppPalette.danger),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: _isGenerating ? null : () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton.icon(
+          onPressed: _isGenerating ? null : _generate,
+          icon: const Icon(Icons.workspace_premium_rounded),
+          label: const Text('生成'),
+        ),
       ],
     );
   }
@@ -1104,58 +1442,67 @@ class _AuditViewState extends State<AuditView> {
           ],
         ),
         const SizedBox(height: 16),
-        Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: <Widget>[
-            SizedBox(
-              width: 320,
-              child: DropdownMenu<String>(
-                key: ValueKey<String>(
-                  controller.auditFilterMachineId ?? '__all__',
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final available = constraints.maxWidth.isFinite
+                ? constraints.maxWidth
+                : double.maxFinite;
+            double w(double preferred) =>
+                preferred < available ? preferred : available;
+            return Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: <Widget>[
+                SizedBox(
+                  width: w(320),
+                  child: DropdownMenu<String>(
+                    key: ValueKey<String>(
+                      controller.auditFilterMachineId ?? '__all__',
+                    ),
+                    width: w(320),
+                    enableFilter: true,
+                    enableSearch: true,
+                    label: const Text('按机台过滤'),
+                    hintText: '全部机台',
+                    initialSelection: controller.auditFilterMachineId,
+                    dropdownMenuEntries: machineOptions
+                        .map(
+                          (machineId) => DropdownMenuEntry<String>(
+                            value: machineId,
+                            label: machineId,
+                          ),
+                        )
+                        .toList(),
+                    onSelected: (value) => _reloadAudit(machineId: value),
+                  ),
                 ),
-                width: 320,
-                enableFilter: true,
-                enableSearch: true,
-                label: const Text('按机台过滤'),
-                hintText: '全部机台',
-                initialSelection: controller.auditFilterMachineId,
-                dropdownMenuEntries: machineOptions
-                    .map(
-                      (machineId) => DropdownMenuEntry<String>(
-                        value: machineId,
-                        label: machineId,
-                      ),
-                    )
-                    .toList(),
-                onSelected: (value) => _reloadAudit(machineId: value),
-              ),
-            ),
-            SizedBox(
-              width: 320,
-              child: TextField(
-                controller: _searchController,
-                decoration: InputDecoration(
-                  labelText: '搜索审计内容',
-                  hintText: '输入机台 ID、事件键、原因等',
-                  prefixIcon: const Icon(Icons.search_rounded),
-                  suffixIcon: searchQuery.isEmpty
-                      ? null
-                      : IconButton(
-                          onPressed: _searchController.clear,
-                          icon: const Icon(Icons.close_rounded),
-                        ),
+                SizedBox(
+                  width: w(320),
+                  child: TextField(
+                    controller: _searchController,
+                    decoration: InputDecoration(
+                      labelText: '搜索审计内容',
+                      hintText: '输入机台 ID、事件键、原因等',
+                      prefixIcon: const Icon(Icons.search_rounded),
+                      suffixIcon: searchQuery.isEmpty
+                          ? null
+                          : IconButton(
+                              onPressed: _searchController.clear,
+                              icon: const Icon(Icons.close_rounded),
+                            ),
+                    ),
+                  ),
                 ),
-              ),
-            ),
-            if (controller.auditFilterMachineId != null)
-              TextButton.icon(
-                onPressed: () => _reloadAudit(machineId: null),
-                icon: const Icon(Icons.filter_alt_off_rounded),
-                label: const Text('清除机台过滤'),
-              ),
-          ],
+                if (controller.auditFilterMachineId != null)
+                  TextButton.icon(
+                    onPressed: () => _reloadAudit(machineId: null),
+                    icon: const Icon(Icons.filter_alt_off_rounded),
+                    label: const Text('清除机台过滤'),
+                  ),
+              ],
+            );
+          },
         ),
         const SizedBox(height: 12),
         if (controller.auditFilterMachineId != null)
@@ -2036,6 +2383,8 @@ class _SettingsViewState extends State<SettingsView> {
           ],
         ),
       ),
+      const SizedBox(height: 16),
+      TotpKeysManagementSection(controller: widget.controller),
     ];
 
     if (widget.embedInParentScroll) {

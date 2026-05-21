@@ -286,8 +286,8 @@ class _AdminRootState extends State<AdminRoot> {
                   from: controller.machineLogFrom,
                   to: controller.machineLogTo,
                 );
-              } else if (index == 2 && controller.otpVerified) {
-                await controller.loadCertificates();
+              } else if (index == 2) {
+                // CertificatesView handles its own loading with OTP guard.
               } else if (index == 3) {
                 await controller.loadAudit(
                   machineId: controller.auditFilterMachineId,
