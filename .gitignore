@@ -100,3 +100,4 @@ CLI_GUIDE.md
 .Trashes
 ehthumbs.db
 .kiro/specs/deployment-security-audit-fixes/.config.kiro
+.kiro/specs/admin-tools-flutter-migration/.config.kiro
