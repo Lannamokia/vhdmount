@@ -55,38 +55,11 @@ class _TotpKeysManagementSectionState
   }
 
   Future<void> _addAuthenticator() async {
-    final nameController = TextEditingController();
-    final name = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('添加认证器'),
-        content: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 360),
-          child: TextField(
-            controller: nameController,
-            decoration: const InputDecoration(
-              labelText: '密钥名称',
-              hintText: '例如：Google Authenticator',
-            ),
-            autofocus: true,
-            onSubmitted: (value) => Navigator.of(context).pop(value.trim()),
-          ),
-        ),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(null),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () =>
-                Navigator.of(context).pop(nameController.text.trim()),
-            child: const Text('创建'),
-          ),
-        ],
-      ),
+    final name = await _promptForKeyName(
+      title: '添加认证器',
+      hintText: '例如：Google Authenticator',
+      submitLabel: '创建',
     );
-    nameController.dispose();
-
     if (name == null || name.isEmpty) return;
 
     try {
@@ -101,6 +74,51 @@ class _TotpKeysManagementSectionState
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(describeError(error))),
       );
+    }
+  }
+
+  /// 弹出"输入密钥名称"对话框，返回 trim 后的名称；用户取消返回 null。
+  Future<String?> _promptForKeyName({
+    required String title,
+    required String hintText,
+    required String submitLabel,
+    String? initialValue,
+  }) async {
+    final nameController = TextEditingController(text: initialValue ?? '');
+    try {
+      return await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(title),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 360),
+            child: TextField(
+              controller: nameController,
+              decoration: InputDecoration(
+                labelText: '密钥名称',
+                hintText: hintText,
+              ),
+              autofocus: true,
+              maxLength: 128,
+              onSubmitted: (value) =>
+                  Navigator.of(context).pop(value.trim()),
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(null),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () =>
+                  Navigator.of(context).pop(nameController.text.trim()),
+              child: Text(submitLabel),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      nameController.dispose();
     }
   }
 
@@ -225,11 +243,22 @@ class _TotpKeysManagementSectionState
       if (overwrite != true) return;
     }
 
-    // 2) 服务端先注册一条 biometric 类型密钥
+    // 2) 让用户为这台设备的生物识别密钥起名
+    if (!mounted) return;
+    final defaultName = _defaultBiometricKeyName();
+    final name = await _promptForKeyName(
+      title: '为生物识别密钥命名',
+      hintText: '例如：${_biometricService!.displayName} (我的笔记本)',
+      submitLabel: '继续',
+      initialValue: defaultName,
+    );
+    if (name == null || name.isEmpty) return;
+
+    // 3) 服务端先注册一条 biometric 类型密钥
     TotpKeyCreationResult? created;
     try {
       created = await widget.controller.createTotpKey(
-        name: '${_biometricService!.displayName} (${Platform.localHostname})',
+        name: name,
         type: 'biometric',
         platform: _biometricService!.platformIdentifier,
       );
@@ -241,7 +270,7 @@ class _TotpKeysManagementSectionState
       return;
     }
 
-    // 3) 本地通过生物识别认证后写入 secret
+    // 4) 本地通过生物识别认证后写入 secret
     try {
       await _biometricService!.bind(
         totpSecret: created.totpSecret,
@@ -267,10 +296,24 @@ class _TotpKeysManagementSectionState
 
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('${_biometricService!.displayName} 已绑定成功。'),
-      ),
+      SnackBar(content: Text('"$name" 已绑定成功。')),
     );
+  }
+
+  /// 生成默认的生物识别密钥名称：`<显示名> (<主机名>)`。
+  /// 主机名读取失败（如某些平台抛异常）时退化为只用显示名。
+  String _defaultBiometricKeyName() {
+    final displayName = _biometricService!.displayName;
+    String? host;
+    try {
+      host = Platform.localHostname;
+    } catch (_) {
+      host = null;
+    }
+    if (host == null || host.isEmpty || host == 'localhost') {
+      return displayName;
+    }
+    return '$displayName ($host)';
   }
 
   /// 删除服务端那条已经创建、但本地绑定失败的"孤儿"密钥。
