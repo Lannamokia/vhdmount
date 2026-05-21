@@ -100,6 +100,15 @@ namespace VHDMounter.SoftwareDeploy
                 }
             }
 
+            // 4.5 强制安全策略校验
+            var policyError = DeploySecurityPolicy.ValidateManifest(manifest);
+            if (policyError != null)
+            {
+                result.ErrorMessage = $"安全策略校验失败: {policyError}";
+                Cleanup(extractDir);
+                return result;
+            }
+
             // 5. 校验类型
             if (!manifest.IsSoftwareDeploy && !manifest.IsFileDeploy)
             {

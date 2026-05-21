@@ -206,8 +206,8 @@ namespace VHDMounter.SoftwareDeploy
                 return result;
             }
 
-            // 路径安全检查
-            if (manifest.targetPath.Contains("..") || IsSystemPath(manifest.targetPath))
+            // 路径安全检查（白名单模式）
+            if (!DeploySecurityPolicy.IsValidTargetPath(manifest.targetPath))
             {
                 result.ErrorMessage = "targetPath 不合法";
                 return result;

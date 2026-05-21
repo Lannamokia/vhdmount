@@ -143,7 +143,7 @@ function buildAuditMetadata(req) {
     return {
         ip: req.ip,
         method: req.method,
-        path: req.originalUrl,
+        path: (req._sanitizedUrl || req.originalUrl || '').replace(/token=[^&]+/g, 'token=***'),
         userAgent: req.get('user-agent') || '',
     };
 }
@@ -300,7 +300,27 @@ async function createApp(options = {}) {
 
     app.use(helmet({
         contentSecurityPolicy: false,
+        crossOriginEmbedderPolicy: true,
+        crossOriginOpenerPolicy: true,
+        crossOriginResourcePolicy: { policy: 'same-origin' },
+        dnsPrefetchControl: true,
+        frameguard: { action: 'deny' },
+        hidePoweredBy: true,
+        hsts: true,
+        ieNoOpen: true,
+        noSniff: true,
+        referrerPolicy: { policy: 'no-referrer' },
+        xssFilter: true,
     }));
+
+    // Token 脱敏中间件：确保日志中不暴露 token 值
+    app.use((req, res, next) => {
+        const originalUrl = req.originalUrl;
+        if (originalUrl && originalUrl.includes('token=')) {
+            req._sanitizedUrl = originalUrl.replace(/token=[^&]+/g, 'token=***');
+        }
+        next();
+    });
 
     app.use((req, res, next) => {
         const origin = req.headers.origin;
@@ -385,8 +405,9 @@ async function createApp(options = {}) {
         legacyHeaders: false,
         keyGenerator: (req) => {
             const machineId = String(req.params?.machineId || '').trim();
-            return machineId ? `machine-registration:${machineId}` : `machine-registration-ip:${rateLimit.ipKeyGenerator(req.ip)}`;
+            return machineId ? `machine-registration:${machineId}` : `machine-registration-ip:unknown`;
         },
+        validate: { ip: false },
         handler: (req, res, _next, options) => {
             const resetTime = req.rateLimit?.resetTime instanceof Date
                 ? req.rateLimit.resetTime.getTime()
@@ -1573,6 +1594,19 @@ async function createApp(options = {}) {
     // ---------- 部署模块路由 ----------
     const deploymentRoutes = buildDeploymentRoutes({ encryptWithPublicKeyRSA, configDir });
 
+    // Per-machine rate limiter for deployment endpoints (30/min per machine)
+    const deploymentMachineLimiter = rateLimit({
+        windowMs: 60 * 1000,
+        max: Number(process.env.DEPLOYMENT_MACHINE_RATE_LIMIT_MAX || 30),
+        standardHeaders: true,
+        legacyHeaders: false,
+        keyGenerator: (req) => {
+            const machineId = String(req.params?.machineId || req.query?.machineId || '').trim();
+            return machineId ? `deploy-machine:${machineId}` : `deploy-ip:unknown`;
+        },
+        validate: { ip: false },
+    });
+
     app.post('/api/deployments/packages', requireAuth, requireOtpStepUp, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.uploadPackage));
     app.get('/api/deployments/packages', requireAuth, requireOtpStepUp, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.listPackages));
     app.get('/api/deployments/packages/:id', requireAuth, requireOtpStepUp, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.getPackage));
@@ -1582,9 +1616,9 @@ async function createApp(options = {}) {
     app.get('/api/deployments/tasks', requireAuth, requireOtpStepUp, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.listTasks));
     app.delete('/api/deployments/tasks/:id', requireAuth, requireOtpStepUp, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.deleteTask));
 
-    app.get('/api/machines/:machineId/deployments/pending', deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.getPendingTasks));
-    app.post('/api/machines/:machineId/deployments/:taskId/status', deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.reportTaskStatus));
-    app.post('/api/machines/:machineId/deployments/sync', deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.syncRecords));
+    app.get('/api/machines/:machineId/deployments/pending', deploymentMachineLimiter, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.getPendingTasks));
+    app.post('/api/machines/:machineId/deployments/:taskId/status', deploymentMachineLimiter, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.reportTaskStatus));
+    app.post('/api/machines/:machineId/deployments/sync', deploymentMachineLimiter, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.syncRecords));
 
     app.get('/api/machines/:machineId/deployments/history', requireAuth, requireOtpStepUp, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.getMachineHistory));
     app.post('/api/machines/:machineId/deployments/:recordId/uninstall', requireAuth, requireOtpStepUp, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.triggerUninstall));
@@ -1624,9 +1658,19 @@ async function createApp(options = {}) {
             return;
         }
 
+        // 生产环境错误脱敏：不暴露内部细节
+        const isProduction = process.env.NODE_ENV === 'production';
+        if (isProduction && statusCode >= 500) {
+            res.status(statusCode).json({
+                success: false,
+                error: '服务器内部错误',
+            });
+            return;
+        }
+
         res.status(statusCode).json({
             success: false,
-            error: error.message || '服务器内部错误',
+            error: statusCode >= 500 ? (error.message || '服务器内部错误') : error.message,
             ...(error.initializeRequired ? { initializeRequired: true } : {}),
             ...(error.requireAuth ? { requireAuth: true } : {}),
         });
@@ -1653,6 +1697,19 @@ async function startServer(options = {}) {
 
     if (runtime.initialized && runtime.database) {
         startMachineLogInspectionScheduler(runtime, logger);
+
+        // Token 清理调度：每 10 分钟清理过期 token
+        const { DeploymentStore } = require('./deploymentStore');
+        const deploymentStoreForCleanup = new DeploymentStore(configDir);
+        runtime._tokenCleanupInterval = setInterval(async () => {
+            try {
+                if (runtime.database) {
+                    await deploymentStoreForCleanup.cleanupExpiredTokens(runtime.database);
+                }
+            } catch (err) {
+                logger.error('Token 清理失败:', err.message);
+            }
+        }, 10 * 60 * 1000);
     }
 
     logger.log('='.repeat(60));
@@ -1666,6 +1723,12 @@ async function startServer(options = {}) {
         logger.log(`${signal} received, shutting down...`);
 
         stopMachineLogInspectionScheduler(runtime);
+
+        // 清理 token 清理定时器
+        if (runtime._tokenCleanupInterval) {
+            clearInterval(runtime._tokenCleanupInterval);
+            runtime._tokenCleanupInterval = null;
+        }
 
         await new Promise((resolve) => {
             server.close(() => resolve());

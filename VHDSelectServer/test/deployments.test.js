@@ -250,6 +250,7 @@ function buildMachineRequestSigningPayload({
     keyId,
     method,
     path,
+    host = '127.0.0.1',
     timestamp,
     nonce,
     body = '',
@@ -261,6 +262,7 @@ function buildMachineRequestSigningPayload({
         String(keyId || '').trim(),
         String(method || '').trim().toUpperCase(),
         String(path || '').trim(),
+        String(host || '').trim(),
         String(timestamp || '').trim(),
         String(nonce || '').trim(),
         bodyHash,
@@ -273,6 +275,7 @@ function createMachineAuthHeaders({
     keyId,
     method,
     path,
+    host = '127.0.0.1',
     body = '',
 }) {
     const timestamp = String(Date.now());
@@ -282,6 +285,7 @@ function createMachineAuthHeaders({
         keyId,
         method,
         path,
+        host,
         timestamp,
         nonce,
         body,
@@ -379,7 +383,7 @@ async function loginAndVerifyOtp(client, app) {
 test('POST /api/deployments/tasks 需要认证', async (t) => {
     const { app } = await createInitializedHarness(t);
     const res = await request(app).post('/api/deployments/tasks').send({
-        packageId: 'pkg-test',
+        packageId: 'pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0009',
         targetMachineIds: ['machine-001'],
     });
     assert.strictEqual(res.status, 401);
@@ -396,7 +400,7 @@ test('部署管理高敏接口要求 OTP step-up', async (t) => {
 
     await client.get('/api/deployments/packages').expect(403);
     await client.post('/api/deployments/tasks').send({
-        packageId: 'pkg-test',
+        packageId: 'pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0009',
         targetMachineIds: ['machine-001'],
     }).expect(403);
     await client.post('/api/machines/machine-001/deployments/rec-test/uninstall').expect(403);
@@ -474,7 +478,7 @@ test('POST /api/machines/:machineId/deployments/:taskId/status 需要机台签�
     // 先创建一个任务
     await database.query(
         'INSERT INTO deployment_tasks (task_id, package_id, machine_id, task_type, status, scheduled_at) VALUES ($1, $2, $3, $4, $5, $6)',
-        ['task-001', 'pkg-001', 'machine-001', 'deploy', 'pending', null]
+        ['task-001', 'pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0008', 'machine-001', 'deploy', 'pending', null]
     );
 
     const res = await request(app).post('/api/machines/machine-001/deployments/task-001/status').send({
@@ -494,7 +498,7 @@ test('POST /api/machines/:machineId/deployments/:taskId/status 需要校验任�
 
     await database.query(
         'INSERT INTO deployment_tasks (task_id, package_id, machine_id, task_type, status, scheduled_at) VALUES ($1, $2, $3, $4, $5, $6)',
-        ['task-001', 'pkg-001', 'machine-001', 'deploy', 'pending', null]
+        ['task-001', 'pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0008', 'machine-001', 'deploy', 'pending', null]
     );
 
     const path = '/api/machines/machine-002/deployments/task-001/status';
@@ -520,7 +524,7 @@ test('POST /api/machines/:machineId/deployments/:taskId/status 允许签名机�
 
     await database.query(
         'INSERT INTO deployment_tasks (task_id, package_id, machine_id, task_type, status, scheduled_at) VALUES ($1, $2, $3, $4, $5, $6)',
-        ['task-001', 'pkg-001', 'machine-001', 'deploy', 'pending', null]
+        ['task-001', 'pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0008', 'machine-001', 'deploy', 'downloading', null]
     );
 
     const runningPath = '/api/machines/machine-001/deployments/task-001/status';
@@ -567,7 +571,7 @@ test('POST /api/machines/:machineId/deployments/sync 需要机台签名认证', 
     const res = await request(app).post('/api/machines/machine-001/deployments/sync').send({
         records: [{
             recordId: 'rec-001',
-            packageId: 'pkg-001',
+            packageId: 'pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0008',
             name: 'Test',
             version: '1.0.0',
             type: 'software-deploy',
@@ -584,7 +588,7 @@ test('POST /api/machines/:machineId/deployments/sync 允许签名机台同步自
     const body = JSON.stringify({
         records: [{
             recordId: 'rec-001',
-            packageId: 'pkg-001',
+            packageId: 'pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0008',
             name: 'Test',
             version: '1.0.0',
             type: 'software-deploy',
@@ -616,7 +620,7 @@ test('POST /api/machines/:machineId/deployments/sync 非法状态返回 400', as
     const body = JSON.stringify({
         records: [{
             recordId: 'rec-001',
-            packageId: 'pkg-001',
+            packageId: 'pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0008',
             name: 'Test',
             version: '1.0.0',
             type: 'software-deploy',
@@ -646,7 +650,7 @@ test('POST /api/machines/:machineId/deployments/sync 非法时间返回 400', as
     const body = JSON.stringify({
         records: [{
             recordId: 'rec-001',
-            packageId: 'pkg-001',
+            packageId: 'pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0008',
             name: 'Test',
             version: '1.0.0',
             type: 'software-deploy',
@@ -705,13 +709,13 @@ test('POST /api/deployments/tasks 批量创建在单个非法机台 ID 时整体
     fs.writeFileSync(zipPath, crypto.randomBytes(24));
     await database.query(
         'INSERT INTO deployment_packages (package_id, name, version, type, signer, file_path, file_size, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
-        ['pkg-batch-001', 'BatchPkg', '1.0.0', 'software-deploy', 'test', zipPath, 24, new Date(Date.now() + 30 * 86400000).toISOString()]
+        ['pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0007', 'BatchPkg', '1.0.0', 'software-deploy', 'test', zipPath, 24, new Date(Date.now() + 30 * 86400000).toISOString()]
     );
 
     await client
         .post('/api/deployments/tasks')
         .send({
-            packageId: 'pkg-batch-001',
+            packageId: 'pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0007',
             targetMachineIds: ['machine-001', 'X'.repeat(65)],
         })
         .expect(400);
@@ -774,11 +778,11 @@ test('GET /api/machines/:machineId/deployments/pending 有任务时返回加密�
     // 直接插入 package 和 task
     await database.query(
         'INSERT INTO deployment_packages (package_id, name, version, type, signer, file_path, file_size, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
-        ['pkg-enc-001', 'TestPackage', '1.0.0', 'software-deploy', 'test', zipPath, 28, new Date(Date.now() + 30 * 86400000).toISOString()]
+        ['pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0002', 'TestPackage', '1.0.0', 'software-deploy', 'test', zipPath, 28, new Date(Date.now() + 30 * 86400000).toISOString()]
     );
     await database.query(
         'INSERT INTO deployment_tasks (task_id, package_id, machine_id, task_type, status, scheduled_at) VALUES ($1, $2, $3, $4, $5, $6)',
-        ['task-enc-001', 'pkg-enc-001', 'machine-001', 'deploy', 'pending', null]
+        ['task-enc-001', 'pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0002', 'machine-001', 'deploy', 'pending', null]
     );
 
     const res = await request(app)
@@ -798,7 +802,7 @@ test('GET /api/machines/:machineId/deployments/pending 有任务时返回加密�
 
     const task = res.body.tasks[0];
     assert.strictEqual(task.taskId, 'task-enc-001');
-    assert.strictEqual(task.packageId, 'pkg-enc-001');
+    assert.strictEqual(task.packageId, 'pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0002');
     assert.ok(task.keyCipher, '应返回 keyCipher');
     assert.ok(task.iv, '应返回 iv');
     assert.ok(task.signatureKeyCipher, '应返回 signatureKeyCipher');
@@ -817,11 +821,11 @@ test('GET /api/machines/:machineId/deployments/pending 读取后会 claim 任务
 
     await database.query(
         'INSERT INTO deployment_packages (package_id, name, version, type, signer, file_path, file_size, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
-        ['pkg-pending-001', 'PendingPkg', '1.0.0', 'software-deploy', 'test', zipPath, 32, new Date(Date.now() + 30 * 86400000).toISOString()]
+        ['pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0003', 'PendingPkg', '1.0.0', 'software-deploy', 'test', zipPath, 32, new Date(Date.now() + 30 * 86400000).toISOString()]
     );
     await database.query(
         'INSERT INTO deployment_tasks (task_id, package_id, machine_id, task_type, status, scheduled_at) VALUES ($1, $2, $3, $4, $5, $6)',
-        ['task-pending-001', 'pkg-pending-001', 'machine-001', 'deploy', 'pending', null]
+        ['task-pending-001', 'pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0003', 'machine-001', 'deploy', 'pending', null]
     );
 
     const pathName = '/api/machines/machine-001/deployments/pending';
@@ -864,11 +868,11 @@ test('downloadPackage 有效 token 返回 AES-CTR 加密流，可被正确解密
 
     await database.query(
         'INSERT INTO deployment_packages (package_id, name, version, type, signer, file_path, file_size, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
-        ['pkg-dl-001', 'DlPkg', '1.0.0', 'software-deploy', 'test', zipPath, zipContent.length, new Date(Date.now() + 30 * 86400000).toISOString()]
+        ['pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0001', 'DlPkg', '1.0.0', 'software-deploy', 'test', zipPath, zipContent.length, new Date(Date.now() + 30 * 86400000).toISOString()]
     );
     await database.query(
         'INSERT INTO deployment_tasks (task_id, package_id, machine_id, task_type, status, scheduled_at) VALUES ($1, $2, $3, $4, $5, $6)',
-        ['task-dl-001', 'pkg-dl-001', 'machine-001', 'deploy', 'pending', null]
+        ['task-dl-001', 'pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0001', 'machine-001', 'deploy', 'pending', null]
     );
 
     // 获取 pending tasks（触发加密密钥生成）
@@ -902,7 +906,7 @@ test('downloadPackage 有效 token 返回 AES-CTR 加密流，可被正确解密
 
     // 下载加密流
     const dlRes = await request(app)
-        .get(`/api/deployments/packages/pkg-dl-001/download?token=${downloadToken}&machineId=machine-001`)
+        .get(`/api/deployments/packages/pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0001/download?token=${downloadToken}&machineId=machine-001`)
         .set('User-Agent', 'VHDMount/1.0.0')
         .buffer(true)
         .parse((res, callback) => {
@@ -931,15 +935,15 @@ test('downloadSignature 有效 token 返回独立 AES-CTR 加密流，可被正�
     const packagesDir = path.join(tempDir, 'deployment-packages');
     fs.mkdirSync(packagesDir, { recursive: true });
     const signatureContent = crypto.randomBytes(128);
-    fs.writeFileSync(path.join(packagesDir, 'pkg-sig-001.zip.sig'), signatureContent);
+    fs.writeFileSync(path.join(packagesDir, 'pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0004.zip.sig'), signatureContent);
 
     await database.query(
         'INSERT INTO deployment_packages (package_id, name, version, type, signer, file_path, file_size, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
-        ['pkg-sig-001', 'SigPkg', '1.0.0', 'software-deploy', 'test', zipPath, 32, new Date(Date.now() + 30 * 86400000).toISOString()]
+        ['pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0004', 'SigPkg', '1.0.0', 'software-deploy', 'test', zipPath, 32, new Date(Date.now() + 30 * 86400000).toISOString()]
     );
     await database.query(
         'INSERT INTO deployment_tasks (task_id, package_id, machine_id, task_type, status, scheduled_at) VALUES ($1, $2, $3, $4, $5, $6)',
-        ['task-sig-001', 'pkg-sig-001', 'machine-001', 'deploy', 'pending', null]
+        ['task-sig-001', 'pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0004', 'machine-001', 'deploy', 'pending', null]
     );
 
     const pendingRes = await request(app)
@@ -969,7 +973,7 @@ test('downloadSignature 有效 token 返回独立 AES-CTR 加密流，可被正�
     const signatureToken = signatureUrl.searchParams.get('token');
 
     const sigRes = await request(app)
-        .get(`/api/deployments/packages/pkg-sig-001/signature?token=${signatureToken}&machineId=machine-001`)
+        .get(`/api/deployments/packages/pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0004/signature?token=${signatureToken}&machineId=machine-001`)
         .set('User-Agent', 'VHDMount/1.0.0')
         .buffer(true)
         .parse((res, callback) => {
@@ -996,11 +1000,11 @@ test('downloadPackage Range 请求返回正确偏移的加密流', async (t) => 
 
     await database.query(
         'INSERT INTO deployment_packages (package_id, name, version, type, signer, file_path, file_size, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
-        ['pkg-range-001', 'RangePkg', '1.0.0', 'software-deploy', 'test', zipPath, zipContent.length, new Date(Date.now() + 30 * 86400000).toISOString()]
+        ['pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0005', 'RangePkg', '1.0.0', 'software-deploy', 'test', zipPath, zipContent.length, new Date(Date.now() + 30 * 86400000).toISOString()]
     );
     await database.query(
         'INSERT INTO deployment_tasks (task_id, package_id, machine_id, task_type, status, scheduled_at) VALUES ($1, $2, $3, $4, $5, $6)',
-        ['task-range-001', 'pkg-range-001', 'machine-001', 'deploy', 'pending', null]
+        ['task-range-001', 'pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0005', 'machine-001', 'deploy', 'pending', null]
     );
 
     // 获取 pending tasks
@@ -1034,7 +1038,7 @@ test('downloadPackage Range 请求返回正确偏移的加密流', async (t) => 
     // Range 请求：从 byte 50 开始
     const rangeStart = 50;
     const dlRes = await request(app)
-        .get(`/api/deployments/packages/pkg-range-001/download?token=${downloadToken}&machineId=machine-001`)
+        .get(`/api/deployments/packages/pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0005/download?token=${downloadToken}&machineId=machine-001`)
         .set('User-Agent', 'VHDMount/1.0.0')
         .set('Range', `bytes=${rangeStart}-`)
         .buffer(true)
@@ -1080,11 +1084,11 @@ test('downloadPackage 同一 token 可用于多次 Range 请求续传', async (t
 
     await database.query(
         'INSERT INTO deployment_packages (package_id, name, version, type, signer, file_path, file_size, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
-        ['pkg-resume-001', 'ResumePkg', '1.0.0', 'software-deploy', 'test', zipPath, zipContent.length, new Date(Date.now() + 30 * 86400000).toISOString()]
+        ['pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0006', 'ResumePkg', '1.0.0', 'software-deploy', 'test', zipPath, zipContent.length, new Date(Date.now() + 30 * 86400000).toISOString()]
     );
     await database.query(
         'INSERT INTO deployment_tasks (task_id, package_id, machine_id, task_type, status, scheduled_at) VALUES ($1, $2, $3, $4, $5, $6)',
-        ['task-resume-001', 'pkg-resume-001', 'machine-001', 'deploy', 'pending', null]
+        ['task-resume-001', 'pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0006', 'machine-001', 'deploy', 'pending', null]
     );
 
     const pendingRes = await request(app)
@@ -1113,7 +1117,7 @@ test('downloadPackage 同一 token 可用于多次 Range 请求续传', async (t
     const splitAt = 120;
 
     const firstRes = await request(app)
-        .get(`/api/deployments/packages/pkg-resume-001/download?token=${downloadToken}&machineId=machine-001`)
+        .get(`/api/deployments/packages/pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0006/download?token=${downloadToken}&machineId=machine-001`)
         .set('User-Agent', 'VHDMount/1.0.0')
         .set('Range', `bytes=0-${splitAt - 1}`)
         .buffer(true)
@@ -1125,7 +1129,7 @@ test('downloadPackage 同一 token 可用于多次 Range 请求续传', async (t
         });
 
     const secondRes = await request(app)
-        .get(`/api/deployments/packages/pkg-resume-001/download?token=${downloadToken}&machineId=machine-001`)
+        .get(`/api/deployments/packages/pkg-aaaaaaaaaaaaaaaaaaaaaaaaaaaa0006/download?token=${downloadToken}&machineId=machine-001`)
         .set('User-Agent', 'VHDMount/1.0.0')
         .set('Range', `bytes=${splitAt}-`)
         .buffer(true)

@@ -37,6 +37,7 @@ namespace VHDMounter.SoftwareDeploy
                 keyId.Trim(),
                 request.Method.Method.ToUpperInvariant(),
                 request.RequestUri.AbsolutePath,
+                request.RequestUri.Host.Split(':')[0],
                 timestamp,
                 nonce,
                 bodyHash,

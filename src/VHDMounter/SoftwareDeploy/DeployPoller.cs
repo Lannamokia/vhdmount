@@ -56,18 +56,17 @@ namespace VHDMounter.SoftwareDeploy
         {
             lock (_disposeLock)
             {
-                if (_disposed) return;
-            }
-            if (_pollTask != null) return;
+                if (_disposed || _pollTask != null) return;
 
-            // 检查机台密钥注册状态
-            if (!MachineKeyRegistration.IsRegisteredAndApproved)
-            {
-                Trace.WriteLine("[DeployPoller] 机台密钥未注册或审批，跳过部署轮询启动");
-                return;
-            }
+                // 检查机台密钥注册状态
+                if (!MachineKeyRegistration.IsRegisteredAndApproved)
+                {
+                    Trace.WriteLine("[DeployPoller] 机台密钥未注册或审批，跳过部署轮询启动");
+                    return;
+                }
 
-            _pollTask = Task.Run(PollLoopAsync);
+                _pollTask = Task.Run(PollLoopAsync);
+            }
         }
 
         public void Stop()
@@ -302,17 +301,34 @@ namespace VHDMounter.SoftwareDeploy
                     uninstallScript = manifest.uninstallScript,
                     requiresAdmin = manifest.requiresAdmin,
                 };
-                _historyStore.AddRecord(record);
 
-                // file-deploy 生成文件清单
-                if (execResult.Success && manifest.IsFileDeploy)
+                // 历史记录写入隔离：不影响部署状态上报
+                try
                 {
-                    _historyStore.GenerateFileManifest(extractDir, manifest.targetPath);
+                    _historyStore.AddRecord(record);
+
+                    // file-deploy 生成文件清单
+                    if (execResult.Success && manifest.IsFileDeploy)
+                    {
+                        _historyStore.GenerateFileManifest(extractDir, manifest.targetPath);
+                    }
+                }
+                catch (Exception historyEx)
+                {
+                    Trace.WriteLine($"[DeployPoller] 历史记录写入失败: {historyEx.Message}");
                 }
 
                 // 上报
                 await _reporter.ReportStatusAsync(task.TaskId, execResult.Success, execResult.ErrorMessage, ct);
-                await _reporter.SyncRecordsAsync(_historyStore.GetRecordsForSync(), ct);
+
+                try
+                {
+                    await _reporter.SyncRecordsAsync(_historyStore.GetRecordsForSync(), ct);
+                }
+                catch (Exception syncEx)
+                {
+                    Trace.WriteLine($"[DeployPoller] 记录同步失败: {syncEx.Message}");
+                }
             }
             catch (Exception ex)
             {

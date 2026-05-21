@@ -109,11 +109,14 @@ class DeploymentStore {
         const pkg = await this.getPackage(database, packageId);
         if (!pkg) return null;
 
-        await database.withClient(async (client) => {
+        await database.withTransaction(async (client) => {
+            // Lock the row first
+            await client.query('SELECT package_id FROM deployment_packages WHERE package_id = $1 FOR UPDATE', [packageId]);
             await client.query('DELETE FROM deployment_tasks WHERE package_id = $1', [packageId]);
             await client.query('DELETE FROM deployment_packages WHERE package_id = $1', [packageId]);
         });
 
+        // Best-effort file cleanup after transaction commit
         try {
             if (fs.existsSync(pkg.filePath)) fs.unlinkSync(pkg.filePath);
             const sigPath = `${pkg.filePath}.sig`;
@@ -204,11 +207,7 @@ class DeploymentStore {
     }
 
     async claimPendingTasks(database, machineId, { leaseDurationSeconds = DEFAULT_TASK_LEASE_SECONDS } = {}) {
-        const runInTransaction = typeof database.withTransaction === 'function'
-            ? database.withTransaction.bind(database)
-            : database.withClient.bind(database);
-
-        return runInTransaction(async (client) => {
+        return database.withTransaction(async (client) => {
             const result = await client.query(`
                 SELECT t.*, p.name, p.version, p.type, p.file_size
                 FROM deployment_tasks t
@@ -329,22 +328,26 @@ class DeploymentStore {
     }
 
     async validateToken(database, token, { machineId, packageId, resourceType }) {
+        // DEPRECATED: Use validateAndConsumeToken for atomic validate+consume
+        return this.validateAndConsumeToken(database, token, { machineId, packageId, resourceType });
+    }
+
+    async validateAndConsumeToken(database, token, { machineId, packageId, resourceType }) {
         return database.withClient(async (client) => {
+            // Atomic: mark as used if not already used, return the record
             const result = await client.query(`
-                SELECT * FROM deployment_tokens
-                WHERE token = $1 AND machine_id = $2 AND package_id = $3 AND resource_type = $4
-                  AND expires_at > NOW()
+                UPDATE deployment_tokens
+                SET used_at = COALESCE(used_at, NOW())
+                WHERE token = $1 AND machine_id = $2 AND package_id = $3
+                  AND resource_type = $4 AND expires_at > NOW()
+                RETURNING *
             `, [token, machineId, packageId, resourceType]);
             return result.rows[0] || null;
         });
     }
 
     async markTokenUsed(database, token) {
-        await database.withClient(async (client) => {
-            await client.query(`
-                UPDATE deployment_tokens SET used_at = NOW() WHERE token = $1
-            `, [token]);
-        });
+        // No-op: token is now atomically consumed in validateAndConsumeToken
     }
 
     async cleanupExpiredTokens(database) {

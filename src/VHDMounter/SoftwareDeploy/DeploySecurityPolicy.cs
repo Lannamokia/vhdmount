@@ -9,11 +9,11 @@ namespace VHDMounter.SoftwareDeploy
     {
         public const long MaxPackageSizeBytes = 2L * 1024 * 1024 * 1024; // 2GB
 
-        private static readonly string[] SystemPaths = new[]
+        private static readonly string[] AllowedPrefixes = new[]
         {
-            @"C:\Windows", @"C:\Program Files", @"C:\Program Files (x86)",
-            @"C:\ProgramData", @"C:\Users", @"C:\System",
-            @"C:\Windows\System32", @"C:\Windows\SysWOW64",
+            @"C:\SOFT\",
+            Path.Combine(Environment.GetFolderPath(
+                Environment.SpecialFolder.CommonApplicationData), "VHDMounter") + @"\",
         };
 
         private static readonly string[] AllowedScriptNames = new[]
@@ -25,25 +25,35 @@ namespace VHDMounter.SoftwareDeploy
         {
             if (string.IsNullOrWhiteSpace(path)) return false;
 
-            // 禁止路径遍历（在 GetFullPath 解析前先检查）
-            if (path.Contains("..")) return false;
+            // 拒绝 UNC/扩展路径
+            if (path.StartsWith(@"\\")) return false;
 
-            var normalized = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
-
-            // 禁止系统目录
-            foreach (var sysPath in SystemPaths)
+            string normalized;
+            try
             {
-                var sysNormalized = sysPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
-                if (normalized.StartsWith(sysNormalized + "\\") || normalized == sysNormalized)
-                    return false;
+                normalized = Path.GetFullPath(path);
+            }
+            catch
+            {
+                return false;
             }
 
-            return true;
+            // 拒绝驱动器根目录
+            if (normalized.Length <= 3) return false;
+
+            // 白名单前缀检查
+            return AllowedPrefixes.Any(prefix =>
+                normalized.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
         }
 
         public static bool IsValidScriptName(string name)
         {
             if (string.IsNullOrWhiteSpace(name)) return false;
+            // 拒绝包含路径分隔符或特殊字符的脚本名
+            if (name.Contains(Path.DirectorySeparatorChar) || name.Contains(Path.AltDirectorySeparatorChar))
+                return false;
+            if (name.Contains('"') || name.Contains('\'') || name.Contains(';') || name.Contains('&') || name.Contains('|'))
+                return false;
             return AllowedScriptNames.Contains(name, StringComparer.OrdinalIgnoreCase);
         }
 
@@ -85,15 +95,8 @@ namespace VHDMounter.SoftwareDeploy
         public static bool IsSystemPath(string path)
         {
             if (string.IsNullOrWhiteSpace(path)) return false;
-            var normalized = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
-
-            foreach (var sysPath in SystemPaths)
-            {
-                var sysNormalized = sysPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
-                if (normalized.StartsWith(sysNormalized + "\\") || normalized == sysNormalized)
-                    return true;
-            }
-            return false;
+            // A path is a system path if it's NOT in our whitelist
+            return !IsValidTargetPath(path);
         }
     }
 }

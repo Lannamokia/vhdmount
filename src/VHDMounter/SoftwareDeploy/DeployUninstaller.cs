@@ -26,6 +26,14 @@ namespace VHDMounter.SoftwareDeploy
             string uninstallScriptName = string.IsNullOrWhiteSpace(record.uninstallScript)
                 ? "uninstall.ps1"
                 : record.uninstallScript;
+
+            // 脚本名白名单校验
+            if (!DeploySecurityPolicy.IsValidScriptName(uninstallScriptName))
+            {
+                result.ErrorMessage = $"不合法的卸载脚本名: {uninstallScriptName}";
+                return result;
+            }
+
             string uninstallScript = Path.Combine(record.targetPath, uninstallScriptName);
             if (!File.Exists(uninstallScript))
             {
@@ -37,13 +45,18 @@ namespace VHDMounter.SoftwareDeploy
             var psi = new ProcessStartInfo
             {
                 FileName = "powershell.exe",
-                Arguments = $"-ExecutionPolicy Bypass -File \"{uninstallScript}\" -DeployJson \"{deployJsonPath}\"",
                 UseShellExecute = true,
                 Verb = record.requiresAdmin ? "runas" : null,
                 WorkingDirectory = record.targetPath,
                 RedirectStandardOutput = false,
                 RedirectStandardError = false,
             };
+            psi.ArgumentList.Add("-ExecutionPolicy");
+            psi.ArgumentList.Add("Bypass");
+            psi.ArgumentList.Add("-File");
+            psi.ArgumentList.Add(uninstallScript);
+            psi.ArgumentList.Add("-DeployJson");
+            psi.ArgumentList.Add(deployJsonPath);
 
             try
             {
@@ -84,9 +97,35 @@ namespace VHDMounter.SoftwareDeploy
 
             var failures = new System.Collections.Generic.List<string>();
 
+            // 计算基准路径用于边界校验
+            string basePath = string.IsNullOrWhiteSpace(record.targetPath)
+                ? string.Empty
+                : Path.GetFullPath(record.targetPath).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+
             // 按清单逐条删除文件
             foreach (var filePath in record.fileManifest)
             {
+                // 路径边界校验：确保文件在 targetPath 内
+                if (!string.IsNullOrEmpty(basePath))
+                {
+                    try
+                    {
+                        string fullPath = Path.GetFullPath(filePath);
+                        if (!fullPath.StartsWith(basePath, StringComparison.OrdinalIgnoreCase))
+                        {
+                            Trace.WriteLine($"[Uninstall] 拒绝越界路径: {filePath}");
+                            failures.Add($"{filePath}: 路径越界");
+                            continue;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Trace.WriteLine($"[Uninstall] 路径规范化失败: {filePath} - {ex.Message}");
+                        failures.Add($"{filePath}: 路径无效");
+                        continue;
+                    }
+                }
+
                 try
                 {
                     if (File.Exists(filePath))
@@ -126,19 +165,22 @@ namespace VHDMounter.SoftwareDeploy
             return result;
         }
 
-        private static void TryDeleteDirectory(string path)
+        private static bool TryDeleteDirectory(string path)
         {
             if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
             {
-                return;
+                return false;
             }
 
             try
             {
                 Directory.Delete(path, true);
+                return true;
             }
-            catch
+            catch (Exception ex)
             {
+                Trace.WriteLine($"[Uninstall] 目录删除失败 ({path}): {ex.Message}");
+                return false;
             }
         }
     }

@@ -28,6 +28,8 @@ namespace VHDMounter.SoftwareDeploy
         private const int RETRY_INTERVAL_MS = 5000;
         private const int CONNECT_TIMEOUT_MS = 10000;
         private const int READ_TIMEOUT_MS = 30000;
+        private const int MAX_RETRIES = 10;
+        private static readonly TimeSpan BODY_READ_TIMEOUT = TimeSpan.FromMinutes(5);
 
         public DeployDownloader()
         {
@@ -80,6 +82,18 @@ namespace VHDMounter.SoftwareDeploy
                 await DecryptFileAsync(zipEncPath, zipPath, task.AesKey, task.IvBytes, ct);
                 File.Delete(zipEncPath);
 
+                // SHA-256 完整性校验
+                if (!string.IsNullOrWhiteSpace(task.PackageSha256))
+                {
+                    var actualHash = ComputeFileSha256(zipPath);
+                    if (!string.Equals(actualHash, task.PackageSha256, StringComparison.OrdinalIgnoreCase))
+                    {
+                        result.ErrorMessage = $"ZIP 包 SHA-256 校验失败: 期望 {task.PackageSha256}, 实际 {actualHash}";
+                        Cleanup(tempDir);
+                        return result;
+                    }
+                }
+
                 // 下载加密签名
                 bool sigOk = await DownloadWithRetryAsync(serverUrl, task.SignatureUrl, sigEncPath, machineId, ct);
                 if (!sigOk)
@@ -109,6 +123,7 @@ namespace VHDMounter.SoftwareDeploy
         private async Task<bool> DownloadWithRetryAsync(string serverUrl, string url, string destPath, string machineId, CancellationToken ct)
         {
             long existingLength = File.Exists(destPath) ? new FileInfo(destPath).Length : 0;
+            int retryCount = 0;
 
             // 将相对 URL 拼接为绝对 URL
             string absoluteUrl = url;
@@ -119,6 +134,11 @@ namespace VHDMounter.SoftwareDeploy
 
             while (!ct.IsCancellationRequested)
             {
+                if (retryCount >= MAX_RETRIES)
+                {
+                    throw new InvalidOperationException($"下载重试次数超过上限 ({MAX_RETRIES})");
+                }
+
                 try
                 {
                     var request = new HttpRequestMessage(HttpMethod.Get, absoluteUrl);
@@ -141,6 +161,7 @@ namespace VHDMounter.SoftwareDeploy
 
                     if (!response.IsSuccessStatusCode)
                     {
+                        retryCount++;
                         await Task.Delay(RETRY_INTERVAL_MS, ct);
                         continue;
                     }
@@ -149,26 +170,46 @@ namespace VHDMounter.SoftwareDeploy
                         ? FileMode.Append
                         : FileMode.Create;
 
+                    // Body 读取超时
+                    using var readTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    readTimeoutCts.CancelAfter(BODY_READ_TIMEOUT);
+
                     using var fs = new FileStream(destPath, mode, FileAccess.Write, FileShare.None);
-                    await using var stream = await response.Content.ReadAsStreamAsync(ct);
-                    await stream.CopyToAsync(fs, ct);
-                    await fs.FlushAsync(ct);
+                    await using var stream = await response.Content.ReadAsStreamAsync(readTimeoutCts.Token);
+                    await stream.CopyToAsync(fs, readTimeoutCts.Token);
+                    await fs.FlushAsync(readTimeoutCts.Token);
 
                     return true;
                 }
-                catch (TaskCanceledException)
+                catch (TaskCanceledException) when (ct.IsCancellationRequested)
                 {
                     return false;
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    return false;
+                }
+                catch (TaskCanceledException)
+                {
+                    // Read timeout - retry
+                    retryCount++;
+                }
+                catch (OperationCanceledException)
+                {
+                    // Read timeout - retry
+                    retryCount++;
                 }
                 catch (HttpRequestException)
                 {
                     // 网络问题，等待重试
+                    retryCount++;
                 }
                 catch (Exception)
                 {
                     // 其他异常，清理并重试
                     try { if (File.Exists(destPath)) File.Delete(destPath); } catch { }
                     existingLength = 0;
+                    retryCount++;
                 }
 
                 try
@@ -191,6 +232,13 @@ namespace VHDMounter.SoftwareDeploy
             using var aesCtr = new AesCtrTransform(aesKey, iv);
             using var cryptoStream = new CryptoStream(encStream, aesCtr, CryptoStreamMode.Read);
             await cryptoStream.CopyToAsync(decStream, 81920, ct);
+        }
+
+        private static string ComputeFileSha256(string filePath)
+        {
+            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920);
+            var hash = SHA256.HashData(stream);
+            return Convert.ToHexString(hash).ToLowerInvariant();
         }
 
         public static void Cleanup(string dir)
@@ -240,6 +288,9 @@ namespace VHDMounter.SoftwareDeploy
 
         [JsonPropertyName("signatureIv")]
         public string SignatureIv { get; set; } = string.Empty;
+
+        [JsonPropertyName("packageSha256")]
+        public string PackageSha256 { get; set; } = string.Empty;
 
         // 由 DeployPoller 解密后填充，不来自 JSON 序列化
         public byte[]? AesKey { get; set; }

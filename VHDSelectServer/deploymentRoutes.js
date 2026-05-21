@@ -25,6 +25,16 @@ function assertMachineId(value) {
     return id;
 }
 
+const PACKAGE_ID_REGEX = /^pkg-[a-f0-9]{32}$/;
+
+function assertPackageId(value) {
+    const id = String(value || '').trim();
+    if (!PACKAGE_ID_REGEX.test(id)) {
+        throw new ValidationError('packageId 格式不合法');
+    }
+    return id;
+}
+
 function assertPackageType(value) {
     const type = String(value || '').trim();
     if (!['software-deploy', 'file-deploy'].includes(type)) {
@@ -109,6 +119,7 @@ function buildDeploymentRoutes(options = {}) {
         keyId,
         method,
         path,
+        host,
         timestamp,
         nonce,
         bodyHash,
@@ -119,6 +130,7 @@ function buildDeploymentRoutes(options = {}) {
             String(keyId || '').trim(),
             String(method || '').trim().toUpperCase(),
             String(path || '').trim(),
+            String(host || '').trim(),
             String(timestamp || '').trim(),
             String(nonce || '').trim(),
             String(bodyHash || '').trim().toLowerCase(),
@@ -192,11 +204,13 @@ function buildDeploymentRoutes(options = {}) {
         }
 
         const bodyHash = computeRequestBodyHash(req);
+        const requestHost = (req.get('host') || '').split(':')[0]; // Strip port for signature
         const payload = buildMachineRequestSigningPayload({
             machineId,
             keyId,
             method: req.method,
             path: req.path,
+            host: requestHost,
             timestamp,
             nonce,
             bodyHash,
@@ -274,6 +288,11 @@ function buildDeploymentRoutes(options = {}) {
             throw createJsonError(413, `部署包大小超过上限 ${PACKAGE_MAX_BYTES / 1024 / 1024}MB`);
         }
 
+        // 签名文件大小限制: 1MB
+        if (sigFile.size > 1 * 1024 * 1024) {
+            throw createJsonError(413, '签名文件大小不能超过 1MB');
+        }
+
         const name = assertString(req.body?.name, 'name');
         const version = assertString(req.body?.version, 'version', 1, 64);
         const type = assertPackageType(req.body?.type);
@@ -312,7 +331,7 @@ function buildDeploymentRoutes(options = {}) {
 
     async function getPackage(req, res) {
         const runtime = req.app.locals.runtime;
-        const packageId = assertString(req.params.id, 'packageId');
+        const packageId = assertPackageId(req.params.id);
         const pkg = await deploymentStore.getPackage(runtime.database, packageId);
         if (!pkg) {
             throw createJsonError(404, '部署包不存在');
@@ -322,7 +341,7 @@ function buildDeploymentRoutes(options = {}) {
 
     async function deletePackage(req, res) {
         const runtime = req.app.locals.runtime;
-        const packageId = assertString(req.params.id, 'packageId');
+        const packageId = assertPackageId(req.params.id);
         const pkg = await deploymentStore.deletePackage(runtime.database, packageId);
         if (!pkg) {
             throw createJsonError(404, '部署包不存在');
@@ -453,6 +472,12 @@ function buildDeploymentRoutes(options = {}) {
                 packageVersion: task.packageVersion,
                 packageType: task.packageType,
                 packageSize: task.packageSize,
+                packageSha256: (() => {
+                    try {
+                        const pkgPath = deploymentStore.getPackageFilePath(task.packageId);
+                        return fs.existsSync(pkgPath) ? computeFileHash(pkgPath) : '';
+                    } catch { return ''; }
+                })(),
                 downloadUrl: `/api/deployments/packages/${task.packageId}/download?token=${packageToken}&machineId=${encodeURIComponent(machineId)}&expires=${Date.now() + 3600000}`,
                 signatureUrl: `/api/deployments/packages/${task.packageId}/signature?token=${signatureToken}&machineId=${encodeURIComponent(machineId)}&expires=${Date.now() + 3600000}`,
                 keyCipher,
@@ -473,6 +498,11 @@ function buildDeploymentRoutes(options = {}) {
         const status = assertString(req.body?.status, 'status');
         const errorMessage = req.body?.errorMessage || null;
 
+        // 输入字段大小限制
+        if (errorMessage != null && String(errorMessage).length > 4096) {
+            throw new ValidationError('errorMessage 长度不能超过 4096');
+        }
+
         if (!['downloading', 'running', 'success', 'failed'].includes(status)) {
             throw createJsonError(400, 'status 必须是 downloading、running、success 或 failed');
         }
@@ -483,6 +513,17 @@ function buildDeploymentRoutes(options = {}) {
         }
         if (currentTask.machineId !== machineId) {
             throw createJsonError(403, '任务不属于该机台');
+        }
+
+        // 严格状态转换校验
+        const VALID_STATE_TRANSITIONS = {
+            pending: ['downloading'],
+            downloading: ['running', 'failed'],
+            running: ['success', 'failed'],
+        };
+        const allowedNextStates = VALID_STATE_TRANSITIONS[currentTask.status] || [];
+        if (!allowedNextStates.includes(status)) {
+            throw createJsonError(409, `非法状态转换: ${currentTask.status} → ${status}`);
         }
 
         const task = await deploymentStore.updateTaskStatus(runtime.database, taskId, status, errorMessage, {
@@ -500,19 +541,34 @@ function buildDeploymentRoutes(options = {}) {
         const { machineId } = await requireVerifiedMachineRequest(req);
         const records = Array.isArray(req.body?.records) ? req.body.records : [];
 
+        // 记录数量限制
+        if (records.length > 1000) {
+            throw createJsonError(413, '同步记录数量不能超过 1000');
+        }
+
         const synced = [];
         for (const record of records) {
+            const recordId = assertString(record.recordId, 'recordId', 1, 128);
+            const packageId = assertString(record.packageId, 'packageId', 1, 128);
+            const name = assertString(record.name, 'name', 1, 256);
+            const version = assertString(record.version, 'version', 1, 64);
+            const type = assertPackageType(record.type);
+            const targetPath = record.targetPath ? String(record.targetPath).substring(0, 512) : null;
+            const status = assertDeploymentRecordStatus(record.status || 'success');
+            const deployedAt = assertOptionalIsoTimestamp(record.deployedAt, 'deployedAt') || new Date().toISOString();
+            const uninstalledAt = assertOptionalIsoTimestamp(record.uninstalledAt, 'uninstalledAt');
+
             const syncedRecord = await deploymentStore.syncDeploymentRecord(runtime.database, {
-                recordId: assertString(record.recordId, 'recordId'),
+                recordId,
                 machineId,
-                packageId: assertString(record.packageId, 'packageId'),
-                name: assertString(record.name, 'name'),
-                version: assertString(record.version, 'version', 1, 64),
-                type: assertPackageType(record.type),
-                targetPath: record.targetPath || null,
-                status: assertDeploymentRecordStatus(record.status || 'success'),
-                deployedAt: assertOptionalIsoTimestamp(record.deployedAt, 'deployedAt') || new Date().toISOString(),
-                uninstalledAt: assertOptionalIsoTimestamp(record.uninstalledAt, 'uninstalledAt'),
+                packageId,
+                name,
+                version,
+                type,
+                targetPath,
+                status,
+                deployedAt,
+                uninstalledAt,
             });
             synced.push(syncedRecord);
         }
@@ -567,16 +623,17 @@ function buildDeploymentRoutes(options = {}) {
 
     async function downloadPackage(req, res) {
         const runtime = req.app.locals.runtime;
-        const packageId = assertString(req.params.id, 'packageId');
-        const token = assertString(req.query.token, 'token');
-        const machineId = assertString(req.query.machineId, 'machineId');
 
         if (!isValidDeploymentUserAgent(req.get('user-agent'))) {
             res.status(403).json({ success: false, error: 'User-Agent 校验失败' });
             return;
         }
 
-        const tokenRecord = await deploymentStore.validateToken(runtime.database, token, {
+        const packageId = assertPackageId(req.params.id);
+        const token = assertString(req.query.token, 'token');
+        const machineId = assertString(req.query.machineId, 'machineId');
+
+        const tokenRecord = await deploymentStore.validateAndConsumeToken(runtime.database, token, {
             machineId,
             packageId,
             resourceType: 'package',
@@ -597,8 +654,6 @@ function buildDeploymentRoutes(options = {}) {
             return;
         }
 
-        await deploymentStore.markTokenUsed(runtime.database, token);
-
         const stat = fs.statSync(pkg.filePath);
         const range = req.headers.range;
 
@@ -611,6 +666,13 @@ function buildDeploymentRoutes(options = {}) {
             const parts = range.replace(/bytes=/, '').split('-');
             start = parseInt(parts[0], 10);
             end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+
+            // Range 边界校验
+            if (!Number.isFinite(start) || start < 0 || start >= stat.size ||
+                !Number.isFinite(end) || end < start || end >= stat.size) {
+                res.status(416).set('Content-Range', `bytes */${stat.size}`).end();
+                return;
+            }
         }
         const cipher = createCtrCipher(aesKey, aesIv, start);
         const chunksize = end - start + 1;
@@ -627,21 +689,33 @@ function buildDeploymentRoutes(options = {}) {
             res.setHeader('Content-Type', 'application/octet-stream');
             res.setHeader('Accept-Ranges', 'bytes');
         }
-        fs.createReadStream(pkg.filePath, { start, end }).pipe(cipher).pipe(res);
+
+        const fileStream = fs.createReadStream(pkg.filePath, { start, end });
+        const headersSent = () => res.headersSent;
+
+        fileStream.on('error', (err) => {
+            if (!headersSent()) { next(err); } else { res.destroy(err); }
+        });
+        cipher.on('error', (err) => {
+            if (!headersSent()) { next(err); } else { res.destroy(err); }
+        });
+
+        fileStream.pipe(cipher).pipe(res);
     }
 
     async function downloadSignature(req, res) {
         const runtime = req.app.locals.runtime;
-        const packageId = assertString(req.params.id, 'packageId');
-        const token = assertString(req.query.token, 'token');
-        const machineId = assertString(req.query.machineId, 'machineId');
 
         if (!isValidDeploymentUserAgent(req.get('user-agent'))) {
             res.status(403).json({ success: false, error: 'User-Agent 校验失败' });
             return;
         }
 
-        const tokenRecord = await deploymentStore.validateToken(runtime.database, token, {
+        const packageId = assertPackageId(req.params.id);
+        const token = assertString(req.query.token, 'token');
+        const machineId = assertString(req.query.machineId, 'machineId');
+
+        const tokenRecord = await deploymentStore.validateAndConsumeToken(runtime.database, token, {
             machineId,
             packageId,
             resourceType: 'signature',
@@ -657,8 +731,6 @@ function buildDeploymentRoutes(options = {}) {
             return;
         }
 
-        await deploymentStore.markTokenUsed(runtime.database, token);
-
         const stat = fs.statSync(sigPath);
         // 从 token 获取 AES 加密参数，对签名文件流做 AES-256-CTR 动态加密
         const aesKey = Buffer.from(tokenRecord.aes_key || '', 'base64');
@@ -667,7 +739,16 @@ function buildDeploymentRoutes(options = {}) {
 
         res.setHeader('Content-Length', stat.size);
         res.setHeader('Content-Type', 'application/octet-stream');
-        fs.createReadStream(sigPath).pipe(cipher).pipe(res);
+
+        const fileStream = fs.createReadStream(sigPath);
+        fileStream.on('error', (err) => {
+            if (!res.headersSent) { next(err); } else { res.destroy(err); }
+        });
+        cipher.on('error', (err) => {
+            if (!res.headersSent) { next(err); } else { res.destroy(err); }
+        });
+
+        fileStream.pipe(cipher).pipe(res);
     }
 
     return {

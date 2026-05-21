@@ -53,8 +53,8 @@ namespace VHDMounter.Tests
         [Fact]
         public void IsValidTargetPath_AllowsNormalPath()
         {
-            Assert.True(DeploySecurityPolicy.IsValidTargetPath("C:/Games/Target"));
-            Assert.True(DeploySecurityPolicy.IsValidTargetPath(@"D:\SomeApp\Data"));
+            Assert.True(DeploySecurityPolicy.IsValidTargetPath(@"C:\SOFT\MyPackage"));
+            Assert.True(DeploySecurityPolicy.IsValidTargetPath(@"C:\SOFT\pkg-abc123\data"));
         }
 
         [Fact]
