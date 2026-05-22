@@ -104,11 +104,29 @@ class _OtpVerificationDialogState extends State<_OtpVerificationDialog> {
   /// 初始化生物识别服务，若可用且已绑定，立即发起一次自动验证。
   Future<void> _initBiometricAndAutoStart() async {
     final service = createBiometricOtpService();
-    if (service == null) return;
+    if (service == null) {
+      debugPrint(
+        '[OtpDialog] biometric service unavailable on this platform '
+        '(createBiometricOtpService returned null)',
+      );
+      return;
+    }
     final available = await service.isAvailable();
-    if (!available) return;
+    if (!available) {
+      debugPrint(
+        '[OtpDialog] biometric service ${service.runtimeType} reported '
+        'isAvailable=false; falling back to manual TOTP input. '
+        'iOS: 检查 Info.plist 是否含 NSFaceIDUsageDescription；'
+        'Android: 检查 USE_BIOMETRIC 权限和 FlutterFragmentActivity；'
+        '设备需先启用系统级生物识别（指纹 / 面部 / Hello）。',
+      );
+      return;
+    }
     final bound = await service.isBound();
     if (!mounted) return;
+    debugPrint(
+      '[OtpDialog] biometric ready: service=${service.runtimeType} bound=$bound',
+    );
 
     setState(() {
       _biometricService = service;
