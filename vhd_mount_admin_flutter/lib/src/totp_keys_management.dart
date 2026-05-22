@@ -1,7 +1,11 @@
 part of '../app.dart';
 
 /// TOTP 密钥管理区域组件，显示在设置页面。
-/// 列出所有活跃密钥，提供添加认证器、绑定生物识别和注销操作。
+/// 列出所有活跃密钥，提供添加认证器和注销操作。
+///
+/// 历史遗留：服务端 totp_keys 表仍保留 type=biometric / platform 字段，
+/// 用于兼容旧版客户端绑定过的生物识别密钥。新版本不再提供绑定入口，
+/// 但仍能列出 / 注销这些遗留条目。
 class TotpKeysManagementSection extends StatefulWidget {
   const TotpKeysManagementSection({
     super.key,
@@ -18,28 +22,13 @@ class TotpKeysManagementSection extends StatefulWidget {
 class _TotpKeysManagementSectionState
     extends State<TotpKeysManagementSection> {
   bool _isLoading = false;
-  BiometricOtpService? _biometricService;
-  bool _biometricAvailable = false;
 
   @override
   void initState() {
     super.initState();
-    _initBiometric();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _loadKeys();
     });
-  }
-
-  Future<void> _initBiometric() async {
-    final service = createBiometricOtpService();
-    if (service == null) return;
-    final available = await service.isAvailable();
-    if (mounted && available) {
-      setState(() {
-        _biometricService = service;
-        _biometricAvailable = true;
-      });
-    }
   }
 
   Future<void> _loadKeys() async {
@@ -227,105 +216,6 @@ class _TotpKeysManagementSectionState
     );
   }
 
-  Future<void> _bindBiometric() async {
-    if (_biometricService == null) return;
-
-    // 1) 防御性检查：如果设备上已经存有绑定，先确认要不要覆盖
-    if (await _biometricService!.isBound()) {
-      if (!mounted) return;
-      final overwrite = await showConfirmDialog(
-        context,
-        title: '已存在生物识别绑定',
-        message:
-            '当前设备已经绑定过 ${_biometricService!.displayName}。\n继续将覆盖现有绑定，并在服务端创建一条新的密钥（旧密钥可在列表中手动注销）。\n\n确认继续吗？',
-        confirmLabel: '继续绑定',
-      );
-      if (overwrite != true) return;
-    }
-
-    // 2) 让用户为这台设备的生物识别密钥起名
-    if (!mounted) return;
-    final defaultName = _defaultBiometricKeyName();
-    final name = await _promptForKeyName(
-      title: '为生物识别密钥命名',
-      hintText: '例如：${_biometricService!.displayName} (我的笔记本)',
-      submitLabel: '继续',
-      initialValue: defaultName,
-    );
-    if (name == null || name.isEmpty) return;
-
-    // 3) 服务端先注册一条 biometric 类型密钥
-    TotpKeyCreationResult? created;
-    try {
-      created = await widget.controller.createTotpKey(
-        name: name,
-        type: 'biometric',
-        platform: _biometricService!.platformIdentifier,
-      );
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(describeError(error))),
-      );
-      return;
-    }
-
-    // 4) 本地通过生物识别认证后写入 secret
-    try {
-      await _biometricService!.bind(
-        totpSecret: created.totpSecret,
-        keyId: created.id,
-      );
-    } on BiometricBindCancelledException {
-      // 用户取消：删除刚创建的服务端密钥，避免成为孤儿
-      await _rollbackOrphanKey(created.id);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('已取消生物识别绑定。')),
-      );
-      return;
-    } catch (error) {
-      // 其它错误（存储写入失败等）：同样回滚
-      await _rollbackOrphanKey(created.id);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(describeError(error))),
-      );
-      return;
-    }
-
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('"$name" 已绑定成功。')),
-    );
-  }
-
-  /// 生成默认的生物识别密钥名称：`<显示名> (<主机名>)`。
-  /// 主机名读取失败（如某些平台抛异常）时退化为只用显示名。
-  String _defaultBiometricKeyName() {
-    final displayName = _biometricService!.displayName;
-    String? host;
-    try {
-      host = Platform.localHostname;
-    } catch (_) {
-      host = null;
-    }
-    if (host == null || host.isEmpty || host == 'localhost') {
-      return displayName;
-    }
-    return '$displayName ($host)';
-  }
-
-  /// 删除服务端那条已经创建、但本地绑定失败的"孤儿"密钥。
-  /// 任何错误都吞掉：服务端如果删不掉，用户也能在列表里手动注销。
-  Future<void> _rollbackOrphanKey(String keyId) async {
-    try {
-      await widget.controller.deleteTotpKey(keyId);
-    } catch (_) {
-      // 静默忽略；密钥仍可在列表中手动注销
-    }
-  }
-
   Future<void> _revokeKey(TotpKeyRecord key) async {
     final confirmed = await showConfirmDialog(
       context,
@@ -351,13 +241,12 @@ class _TotpKeysManagementSectionState
 
   IconData _typeIcon(TotpKeyRecord key) {
     if (key.isAuthenticator) return Icons.key_rounded;
+    // 历史 biometric 条目：保留图标以便用户辨识
     switch (key.platform) {
-      case 'windows-hello':
-        return Icons.fingerprint_rounded;
       case 'face-id':
         return Icons.face_rounded;
+      case 'windows-hello':
       case 'android-biometric':
-        return Icons.fingerprint_rounded;
       default:
         return Icons.fingerprint_rounded;
     }
@@ -373,7 +262,7 @@ class _TotpKeysManagementSectionState
 
     return SectionPanel(
       title: 'TOTP 密钥管理',
-      subtitle: '管理已绑定的认证器和生物识别密钥。',
+      subtitle: '管理已绑定的认证器密钥。',
       icon: Icons.security_rounded,
       color: AppPalette.coral,
       child: Column(
@@ -388,12 +277,6 @@ class _TotpKeysManagementSectionState
                 icon: const Icon(Icons.add_rounded),
                 label: const Text('添加认证器'),
               ),
-              if (_biometricAvailable)
-                FilledButton.tonalIcon(
-                  onPressed: _bindBiometric,
-                  icon: Icon(_biometricService!.icon),
-                  label: Text('绑定${_biometricService!.displayName}'),
-                ),
             ],
           ),
           const SizedBox(height: 16),

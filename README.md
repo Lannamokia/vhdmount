@@ -43,8 +43,7 @@
   - 跨平台管理客户端，负责初始化、登录、OTP 验证、机台管理、证书管理、审计查看、部署管理和安全设置。
   - 当前工程已包含 Windows、Android 和 iOS 平台骨架；iOS 构建仍需 macOS + Xcode。
   - 已集成 OTP 自动守卫：高敏操作触发时自动弹窗，验证成功后透明重试原始操作。
-  - 服务端支持多 TOTP 密钥（认证器 + 生物识别）；客户端在设置页提供"TOTP 密钥管理"区域用于添加 / 注销 / 绑定。
-  - 跨平台生物识别 OTP 快捷验证：Windows Hello（Credential Manager + DPAPI）、iOS Face ID / Touch ID（Keychain）、Android BiometricPrompt（Keystore）。
+  - 服务端支持多 TOTP 密钥架构；客户端在设置页提供"TOTP 密钥管理"区域用于添加 / 注销认证器密钥。
   - Windows 桌面端集成"离线工具"页（仅在 `Platform.isWindows` 且已认证时显示），等价于 VHDMountAdminTools 的全部能力 + 软件部署本地打包器。
   - 证书页面提供"生成证书"按钮（仅 Windows 桌面），生成成功后自动调用 `addTrustedCertificate` 导入服务端信任列表。
 
@@ -228,7 +227,7 @@ MachineLogUploadMaxSpoolBytes=52428800
   - `POST /api/auth/otp/rotate/complete`
 - 服务端支持多 TOTP 密钥架构：
   - `totpKeys` 数组替代旧的单 `totpSecret` 字段，旧配置在加载时自动迁移为单元素数组（type 为 `authenticator`，名称 "初始认证器"）。
-  - 每个密钥包含 `id`、`name`、`type`（`authenticator` / `biometric`）、`platform`（仅 biometric 类型，如 `windows-hello` / `face-id` / `android-biometric`）、`secret`、`createdAt`、`lastUsedAt`。
+  - 每个密钥包含 `id`、`name`、`type`（`authenticator`；历史 `biometric` 条目仍兼容存量数据但客户端不再生成新的）、`platform`、`secret`、`createdAt`、`lastUsedAt`。
   - `verifyTotp` 遍历所有活跃密钥，任一匹配即视为成功，并更新该密钥的 `lastUsedAt`。
   - 至少保留一个 `authenticator` 类型密钥，最后一个不可被注销。
   - OTP 轮换（rotate）会全量重置为单个新 `authenticator` 密钥。
@@ -259,7 +258,7 @@ MachineLogUploadMaxSpoolBytes=52428800
 - `POST /api/auth/otp/rotate/prepare`
 - `POST /api/auth/otp/rotate/complete`
 - `GET /api/auth/otp/keys`（列出当前活跃 TOTP 密钥，不含 secret，仅需登录态）
-- `POST /api/auth/otp/keys`（注册新密钥，type 为 `authenticator` 或 `biometric`，仅创建时返回一次 `secret` + `otpauthUrl`，需 OTP step-up）
+- `POST /api/auth/otp/keys`（注册新密钥，type 为 `authenticator`；服务端仍接受 `biometric` 以兼容历史客户端，但当前 UI 不再生成此类型；仅创建时返回一次 `secret` + `otpauthUrl`，需 OTP step-up）
 - `DELETE /api/auth/otp/keys/:keyId`（注销指定密钥；保护最后一个 `authenticator` 类型密钥不被删除，需 OTP step-up）
 
 设置与机台日志：

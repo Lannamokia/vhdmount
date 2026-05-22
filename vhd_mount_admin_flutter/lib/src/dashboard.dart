@@ -71,34 +71,6 @@ class DashboardScreen extends StatelessWidget {
       ],
     ];
 
-    Future<void> openOtpDialog() async {
-      final code = await showSingleInputDialog(
-        context,
-        title: 'OTP 二次验证',
-        label: '验证码',
-        obscureText: false,
-      );
-      if (code == null || code.trim().isEmpty) {
-        return;
-      }
-      try {
-        await controller.verifyOtp(code.trim());
-        if (!context.mounted) {
-          return;
-        }
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('OTP 验证成功。')));
-      } catch (error) {
-        if (!context.mounted) {
-          return;
-        }
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(describeError(error))));
-      }
-    }
-
     return LayoutBuilder(
       builder: (context, constraints) {
         final mobile = constraints.maxWidth < 720;
@@ -196,11 +168,6 @@ class DashboardScreen extends StatelessWidget {
             title: 'VHD Mount Admin',
             subtitle: '',
             actions: <Widget>[
-              FilledButton.tonalIcon(
-                onPressed: openOtpDialog,
-                icon: const Icon(Icons.key_rounded),
-                label: Text(controller.otpVerified ? '重新验证 OTP' : '验证 OTP'),
-              ),
               OutlinedButton.icon(
                 onPressed: () async {
                   await controller.bootstrap();

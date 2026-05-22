@@ -158,7 +158,7 @@ Flutter 管理客户端是统一的管理入口，支持 Windows、Android 和 i
 - 验证失败时在对话框内显示错误，**不关闭对话框**，可继续输入
 - 用户取消时静默返回，不显示额外错误
 
-顶部 PageHeader 中的"验证 OTP"按钮仍保留，作为主动验证入口（避免后续操作过程中被 403 打断）。
+OTP 自动守卫接管了所有需要二次验证的入口，因此当前界面顶部不再单独提供"验证 OTP"按钮——按需自动弹窗即可。
 
 ### 仪表盘
 
@@ -318,51 +318,28 @@ PageHeader 中的"生成证书"按钮可一站式完成本地签发 + 服务端�
 
 **TOTP 密钥管理：**
 
-服务端支持多个并行 TOTP 密钥，分两类：
+服务端支持多个并行 TOTP 密钥（`authenticator` 类型）。所有 `authenticator` 密钥共同决定服务端的 OTP 验证集合，任一密钥生成的验证码都能通过。
 
-| 类型 | 用途 |
-|------|------|
-| `authenticator` | 标准认证器（Google Authenticator / Microsoft Authenticator 等）；至少保留一个不可被注销 |
-| `biometric` | 设备生物识别绑定（Windows Hello / Face ID / Android 指纹） |
+每个密钥包含：`id`、`name`、`type`、`platform`（保留字段，新版客户端只生成 `authenticator`）、`createdAt`、`lastUsedAt`。
 
-每个密钥包含：`id`、`name`、`type`、`platform`（仅 biometric）、`createdAt`、`lastUsedAt`。所有密钥管理操作均需 OTP step-up（页面会自动通过 OTP 守卫处理）。
+> 历史遗留：若旧客户端曾创建过 `type=biometric` 的密钥，列表里仍能看到并手动注销，但当前版本不再生成新的 biometric 条目，也不会再用本地生物识别快捷生成验证码——所有 OTP 都通过验证码输入完成。
 
 **添加认证器：**
 
-1. 点击"添加认证器"，填写密钥名称（如 `Google Authenticator (笔记本)`）
+1. 点击"添加认证器"，填写密钥名称（如 `Google Authenticator (笔记本)`），需 OTP step-up
 2. 客户端调用 `POST /api/auth/otp/keys`（type: `authenticator`），服务端生成新密钥
 3. 弹窗显示二维码 + 密钥文本（**仅创建时显示一次**）
 4. 使用手机验证器扫码或手动输入密钥
 5. 点击"已完成绑定"关闭弹窗
 
-**绑定生物识别（仅在设备支持时可见）：**
-
-1. 点击"绑定 Windows Hello / Face ID / 指纹验证"
-2. 客户端调用 `POST /api/auth/otp/keys`（type: `biometric`，platform 自动填充）创建新密钥
-3. 通过设备生物识别认证，将新密钥的 `secret` 加密存储到本地（Windows Credential Manager + DPAPI / iOS Keychain / Android Keystore）
-4. 绑定完成后，OTP 验证对话框中会出现生物识别快捷按钮
-
 **注销密钥：**
 
 1. 点击密钥卡片上的"注销"
 2. 弹出确认对话框
-3. 确认后调用 `DELETE /api/auth/otp/keys/:keyId`
+3. 确认后调用 `DELETE /api/auth/otp/keys/:keyId`，需 OTP step-up
 4. 服务端校验：若试图注销最后一个 `authenticator` 类型密钥，会被拒绝并返回错误
-5. 注销成功后，本地若有对应的生物识别绑定，下次验证时检测到密钥失效会自动 `unbind()`
 
-**生物识别快捷验证：**
-
-OTP 验证对话框在已绑定生物识别且设备支持时显示生物识别按钮：
-
-| 平台 | 显示名称 | 安全存储 |
-|------|----------|----------|
-| Windows | Windows Hello | Credential Manager + DPAPI |
-| iOS | Face ID 或 Touch ID | Keychain（`KeychainAccessibility.unlocked_this_device`，等效 kSecAccessControlBiometryCurrentSet） |
-| Android | 指纹验证 | EncryptedSharedPreferences + BiometricPrompt 前置认证 |
-
-点击按钮后调用平台 API 完成生物识别认证，自动生成 RFC 6238 TOTP 验证码（HMAC-SHA1, 6 位, 30 秒窗口）并提交服务端。验证失败 / 取消时保持对话框打开，仍可手动输入；服务端拒绝（密钥已被注销或本地存储失效）时自动清除本地绑定并提示重新绑定。
-
-> iOS 用户更换 Face ID / Touch ID 注册信息（如添加新面容）后，受 Keychain 保护的密钥自动失效，需要重新绑定。
+**列出密钥：** 仅需登录态，进入设置页时不会触发 OTP 弹窗。
 
 **更换 OTP 绑定密钥：**
 
@@ -461,7 +438,6 @@ OTP 验证对话框在已绑定生物识别且设备支持时显示生物识别�
 ### TOTP 密钥管理
 
 - 添加新认证器密钥
-- 绑定生物识别密钥
 - 注销指定密钥
 
 > 列出当前已绑定的 TOTP 密钥不需要 OTP（接口仅返回 id / 名称 / 类型 / 时间戳等元数据，不含任何 secret），所以打开设置页时不会触发验证窗。
@@ -579,6 +555,6 @@ OTP 验证对话框在已绑定生物识别且设备支持时显示生物识别�
 - **私钥保管**：更新签名私钥一旦泄露，攻击者可伪造更新包植入恶意代码
 - **密码强度**：管理员密码至少 12 位；PFX 密码至少 8 位
 - **OTP 验证**：高敏感操作（证书管理、生成证书自动导入、EVHD 明文读取、机台审批/重置、部署管理、TOTP 密钥管理、日志导出、密码修改）必须完成 OTP 验证；未验证时管理客户端会自动拦截并弹出验证窗
-- **多 TOTP 密钥**：建议至少保留两个 `authenticator` 类型密钥，避免单一手机丢失导致无法登录；可同时绑定多台设备的生物识别作为快捷入口
+- **多 TOTP 密钥**：建议至少保留两个 `authenticator` 类型密钥，避免单一手机丢失导致无法登录
 - **审计追踪**：所有管理操作均记录审计日志，包括操作者、时间、IP、结果
 - **证书有效期**：注册证书有效天数允许范围为 1 到 3650 天，建议根据实际部署周期设置

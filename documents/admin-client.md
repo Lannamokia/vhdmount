@@ -74,7 +74,6 @@ flutter run -d ios
   - 清单打包与签名（RSA-PSS SHA-256）
   - 注册证书包生成（X.509 + PFX + trust.json + client-config.ini）
   - 软件部署本地打包器（`software-deploy` / `file-deploy`）
-- **跨平台生物识别 OTP**：Windows Hello（Credential Manager + DPAPI）、iOS Face ID / Touch ID（Keychain）、Android BiometricPrompt（Keystore）
 - 移动端响应式布局，远程管理页面（机台、日志、证书、审计、设置、部署）在窄屏下可正常使用
 
 ## 新功能速览
@@ -100,41 +99,18 @@ flutter run -d ios
 2. 验证成功后透明地重试原始操作
 3. 用户取消时静默返回，不显示额外错误
 4. 验证失败时在对话框内显示错误提示，不关闭对话框
-5. 顶部 PageHeader 中的"验证 OTP"按钮仍保留，作为主动验证入口
 
 ### TOTP 密钥管理（设置页面）
 
-服务端支持多个并行 TOTP 密钥，分两类：
+服务端支持多个并行 `authenticator` 类型 TOTP 密钥（标准 Google Authenticator / Microsoft Authenticator 等）。
 
-| 类型 | 用途 |
-|------|------|
-| `authenticator` | 标准认证器（如 Google Authenticator / Microsoft Authenticator）；至少保留一个 |
-| `biometric` | 设备生物识别绑定（Windows Hello / Face ID / Android 指纹） |
+> 历史遗留：服务端 `totp_keys` 表仍保留 `type=biometric` 与 `platform` 字段，用于兼容旧版客户端绑定过的生物识别密钥；当前客户端不再生成或自动使用此类条目，但仍能在列表中看到并手动注销。
 
-设置页"TOTP 密钥管理"区域提供以下操作（均需 OTP step-up）：
+设置页"TOTP 密钥管理"区域提供以下操作：
 
-- **添加认证器**：服务端生成新密钥，弹出 QR 码 + 密钥文本，使用验证器扫描后即可生效
-- **绑定生物识别**（仅在设备支持时可见）：服务端创建 biometric 类型密钥，本地通过平台生物识别加密存储 `secret`
-- **注销密钥**：从服务端注销指定密钥；最后一个 authenticator 密钥受保护不可注销
-
-### 生物识别 OTP 快捷验证
-
-OTP 验证对话框在以下条件成立时显示生物识别按钮：
-
-- 当前平台支持生物识别（`isAvailable() == true`）
-- 本地已绑定生物识别 TOTP（`isBound() == true`）
-
-按钮图标和标签按平台区分：
-
-| 平台 | 显示名称 | 图标 |
-|------|----------|------|
-| Windows | Windows Hello | 指纹 |
-| iOS | Face ID 或 Touch ID | 面容 / 指纹 |
-| Android | 指纹验证 | 指纹 |
-
-点击按钮后调用平台 API 完成生物识别认证，自动生成 RFC 6238 TOTP 验证码（HMAC-SHA1, 6 位, 30 秒窗口）并提交服务端。失败 / 取消时保持对话框打开，仍可手动输入；服务端拒绝（密钥已被注销）时自动清除本地绑定并提示重新绑定。
-
-iOS 上 Keychain 配合 `kSecAccessControlBiometryCurrentSet`（实现使用 `KeychainAccessibility.unlocked_this_device`）；Android 使用 `EncryptedSharedPreferences` + `BiometricPrompt` 前置认证。两个平台在生物识别注册信息变更后，本地存储读取失败会自动触发 `unbind()`。
+- **添加认证器**（需 OTP step-up）：服务端生成新密钥，弹出 QR 码 + 密钥文本，使用验证器扫描后即可生效
+- **注销密钥**（需 OTP step-up）：从服务端注销指定密钥；最后一个 authenticator 密钥受保护不可注销
+- **列出密钥**：仅需登录态，进入设置页时不会触发 OTP 弹窗
 
 ### 证书页面"生成证书"按钮（仅 Windows 桌面）
 
