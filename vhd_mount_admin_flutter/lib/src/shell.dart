@@ -299,6 +299,8 @@ class _AdminRootState extends State<AdminRoot> {
                 await controller.loadLogRetentionSettings();
               } else if (index == 5) {
                 await controller.loadDeploymentPackages();
+              } else if (index == 6) {
+                // RustDeskRemoteControlView 内部各 Tab 自行触发首次加载（OTP guard 在内部处理）。
               }
             },
           );

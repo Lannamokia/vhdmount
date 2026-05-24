@@ -35,6 +35,7 @@
 
 const crypto = require('crypto');
 const express = require('express');
+const http = require('node:http');
 
 const SIGNATURE_WINDOW_MS = 5 * 60 * 1000;
 const NONCE_TTL_MS = 6 * 60 * 1000;
@@ -239,16 +240,79 @@ function makeMachineRateLimiter(name, kind) {
 }
 
 /**
- * Revocation 通知占位：trustedController / bridgeSecret 写操作时调用。
- * Wave 4 任务 15.4 / 10.2 接入真正的 revocationRoutes.js 之前，本函数 noop +
- * 控制台 warn 即可，不影响功能闭环。
+ * Revocation 通知 fire-and-forget POST（Wave 5 任务 10.2 / 决策点 4 落地）。
+ *
+ * 触发时机：trustedController 写操作（add / remove）、bridgeSecret 录入新版本，
+ * 调用方传入 (machineId, reason)，本函数把通知 POST 给机台一侧的
+ * RevocationListener（默认 http://127.0.0.1:7891/rustdesk/revoke）。
+ *
+ * 本 feature 假设 loopback 部署 / 内网路由 —— 反向通道**不**做签名验证，
+ * 仅靠 loopback prefix + Windows 防火墙规则限制访问。
+ *
+ * machineId == '*' 表示广播：当前简化实现下（loopback / 单机部署）只 POST 一次；
+ * 多机环境的真正广播由 SnapshotRefreshLoop / BridgeSecretClient 周期刷新自然兜底
+ * （5–10 分钟内最终一致）。
+ *
+ * 错误一律吞噉（"5 分钟内未送达由 SnapshotRefreshLoop 自然失效兜底"）；
+ * 超时 2 秒；用 node:http 避免引入额外依赖。
+ *
+ * @param {string} machineId 机台 ID 或 '*' 表示广播。
+ * @param {string} reason 'denied' | 'secret_outdated'（与 RevocationFrame.reason 字面量集合一致）。
+ * @param {{ port?: number, host?: string }} [options] 测试钩子，覆盖默认 host/port。
  */
-function dispatchRevocationToMachine(machineId, reason) {
-    // eslint-disable-next-line no-console
-    console.warn(
-        '[bridgeRoutes] dispatchRevocationToMachine noop (Wave 4 接入)',
-        { machineId, reason },
+function dispatchRevocationToMachine(machineId, reason, options = {}) {
+    const port = Number.parseInt(
+        options.port != null
+            ? String(options.port)
+            : (process.env.BRIDGE_REVOCATION_PORT || '7891'),
+        10,
     );
+    const host = options.host || process.env.BRIDGE_REVOCATION_HOST || '127.0.0.1';
+
+    const body = JSON.stringify({
+        reason,
+        issuedAt: Date.now(),
+        machineId: machineId == null ? null : String(machineId),
+    });
+
+    let req;
+    try {
+        req = http.request({
+            method: 'POST',
+            host,
+            port,
+            path: '/rustdesk/revoke',
+            timeout: 2000,
+            headers: {
+                'content-type': 'application/json; charset=utf-8',
+                'content-length': Buffer.byteLength(body, 'utf8'),
+            },
+        });
+    } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[bridgeRoutes] dispatchRevocationToMachine 构造请求失败（已忽略）:', err.message);
+        return;
+    }
+
+    // 错误一律吞 —— 反向通道是 best-effort
+    req.on('error', (err) => {
+        // eslint-disable-next-line no-console
+        console.warn('[bridgeRoutes] dispatchRevocationToMachine 请求失败（已忽略）:', err.message);
+    });
+    req.on('timeout', () => {
+        try { req.destroy(new Error('revocation POST timeout')); } catch { /* ignore */ }
+    });
+    // 响应不消费 —— 但要把 socket data 抽干，让 keep-alive 句柄能被回收
+    req.on('response', (res) => {
+        try { res.resume(); } catch { /* ignore */ }
+    });
+    try {
+        req.write(body);
+        req.end();
+    } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[bridgeRoutes] dispatchRevocationToMachine 写入失败（已忽略）:', err.message);
+    }
 }
 
 function createBridgeRoutes(deps) {

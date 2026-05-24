@@ -61,6 +61,12 @@ class DashboardScreen extends StatelessWidget {
         icon: Icons.rocket_launch_rounded,
         color: AppPalette.coral,
       ),
+      const DashboardDestinationSpec(
+        label: 'RustDesk 远程控制',
+        subtitle: '可信主控端、命名管道密钥',
+        icon: Icons.cast_rounded,
+        color: AppPalette.sky,
+      ),
       if (Platform.isWindows) ...[
         const DashboardDestinationSpec(
           label: '离线工具',
@@ -129,6 +135,11 @@ class DashboardScreen extends StatelessWidget {
           SettingsView(controller: controller, embedInParentScroll: mobile),
           DeploymentsView(
             key: const Key('deployments_view'),
+            controller: controller,
+            embedInParentScroll: mobile,
+          ),
+          RustDeskRemoteControlView(
+            key: const Key('rustdesk_remote_control_view'),
             controller: controller,
             embedInParentScroll: mobile,
           ),
