@@ -33,3 +33,4 @@ part 'src/services/otp_guard.dart';
 part 'src/totp_keys_management.dart';
 part 'src/trusted_controllers.dart';
 part 'src/bridge_secret.dart';
+part 'src/rustdesk_remote_control.dart';

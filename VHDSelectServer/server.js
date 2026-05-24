@@ -23,6 +23,14 @@ const {
 } = require('./machineLogServer');
 const { RegistrationAuthError, verifySignedRegistrationRequest } = require('./registrationAuth');
 const { SecurityStore } = require('./securityStore');
+const { TrustedControllerStore } = require('./trustedControllerStore');
+const { BridgeSecretStore } = require('./bridgeSecretStore');
+const { WrapKeyStore } = require('./wrapKeyStore');
+const { PolicySigningStore } = require('./policySigningStore');
+const { ReportStore } = require('./reportStore');
+const { createBridgeRoutes } = require('./bridgeRoutes');
+const { createTrustedControllerRoutes } = require('./trustedControllerRoutes');
+const { createBridgeSecretRoutes } = require('./bridgeSecretRoutes');
 const {
     ValidationError,
     assertCursor,
@@ -291,6 +299,37 @@ async function createApp(options = {}) {
             runtime.database = null;
             runtime.databaseError = error;
             logger.error('启动时连接数据库失败:', error.message);
+        }
+    }
+
+    // RustDesk 桥相关存储（任务 15.5）：在数据库就绪后实例化，挂到 runtime 上让中间件 / 路由共享
+    runtime.trustedControllerStore = null;
+    runtime.bridgeSecretStore = null;
+    runtime.wrapKeyStore = null;
+    runtime.policySigningStore = null;
+    runtime.reportStore = null;
+    const bridgeWarn = (msg) => {
+        if (typeof logger.warn === 'function') logger.warn(msg);
+        else if (typeof logger.log === 'function') logger.log(msg);
+    };
+    if (runtime.database) {
+        runtime.trustedControllerStore = new TrustedControllerStore(runtime.database, logger);
+        runtime.bridgeSecretStore = new BridgeSecretStore(runtime.database, logger);
+        runtime.wrapKeyStore = new WrapKeyStore(runtime.database, logger);
+        runtime.policySigningStore = new PolicySigningStore(runtime.database, logger);
+        runtime.reportStore = new ReportStore(runtime.database, logger);
+
+        // 启动期钩子：服务端首次启动时生成 Bridge_Policy_Signing_Pubkey 初始密钥对（任务 14.4 / Requirement 15.10）
+        try {
+            await runtime.policySigningStore.ensureBridgePolicyKey();
+        } catch (error) {
+            logger.error('启动时初始化 Bridge_Policy_Signing_Pubkey 失败:', error.message);
+        }
+
+        try {
+            await runtime.trustedControllerStore.ensureLoaded();
+        } catch (error) {
+            bridgeWarn('启动时加载 trustedControllerStore watermark 失败: ' + error.message);
         }
     }
 
@@ -568,6 +607,23 @@ async function createApp(options = {}) {
             runtime.securityConfig = securityStore.loadSecurityConfig();
             if (!runtime.sessionSecrets.includes(config.sessionSecret)) {
                 runtime.sessionSecrets.unshift(config.sessionSecret);
+            }
+
+            // RustDesk 桥存储（init/complete 路径）：与启动期保持同样的实例化顺序（任务 15.5）
+            runtime.trustedControllerStore = new TrustedControllerStore(runtime.database, logger);
+            runtime.bridgeSecretStore = new BridgeSecretStore(runtime.database, logger);
+            runtime.wrapKeyStore = new WrapKeyStore(runtime.database, logger);
+            runtime.policySigningStore = new PolicySigningStore(runtime.database, logger);
+            runtime.reportStore = new ReportStore(runtime.database, logger);
+            try {
+                await runtime.policySigningStore.ensureBridgePolicyKey();
+            } catch (err) {
+                logger.error('init/complete 后初始化 Bridge_Policy_Signing_Pubkey 失败:', err.message);
+            }
+            try {
+                await runtime.trustedControllerStore.ensureLoaded();
+            } catch (err) {
+                bridgeWarn('init/complete 后加载 trustedControllerStore watermark 失败: ' + err.message);
             }
 
             const defaultVhdKeyword = req.body?.defaultVhdKeyword
@@ -1702,6 +1758,37 @@ async function createApp(options = {}) {
 
     app.get('/api/deployments/packages/:id/download', deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.downloadPackage));
     app.get('/api/deployments/packages/:id/signature', deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.downloadSignature));
+
+    // ---------- RustDesk 桥相关路由（任务 15.5） ----------
+    // 机台端点：/api/machines/:machineId/rustdesk/* 接在 /api/machines/:machineId/deployments/* 之后
+    // admin 端点：/api/security/* 接在 /api/security/trusted-certificates/* 之后
+    function buildBridgeRouteDeps() {
+        return {
+            trustedControllerStore: runtime.trustedControllerStore,
+            bridgeSecretStore: runtime.bridgeSecretStore,
+            wrapKeyStore: runtime.wrapKeyStore,
+            policySigningStore: runtime.policySigningStore,
+            reportStore: runtime.reportStore,
+            requireAuth,
+            requireOtpStepUp,
+            requireDatabase,
+            writeAudit: (req, fields) => runtime.writeAudit(req, fields),
+        };
+    }
+
+    if (runtime.trustedControllerStore && runtime.bridgeSecretStore && runtime.wrapKeyStore
+        && runtime.policySigningStore && runtime.reportStore) {
+        const bridgeRoutes = createBridgeRoutes(buildBridgeRouteDeps());
+        app.use('/api/machines', bridgeRoutes.router);
+
+        const trustedControllerRoutes = createTrustedControllerRoutes(buildBridgeRouteDeps());
+        app.use('/api/security', trustedControllerRoutes.router);
+
+        const bridgeSecretRoutes = createBridgeSecretRoutes(buildBridgeRouteDeps());
+        app.use('/api/security', bridgeSecretRoutes.router);
+    } else {
+        bridgeWarn('RustDesk 桥路由未挂载：runtime 缺少 bridge 存储实例（数据库未就绪？）');
+    }
 
     app.get('/', (req, res) => {
         res.setHeader('Cache-Control', 'no-store');
