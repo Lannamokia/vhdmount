@@ -1544,6 +1544,24 @@ abstract class AdminApi {
   });
 
   Future<void> deleteTotpKey(String keyId);
+
+  // ---- RustDesk Bridge admin endpoints (rustdesk-bridge-host feature, Requirement 13.1 / 15.4) ----
+
+  Future<List<TrustedRustDeskController>> getTrustedRustDeskControllers();
+
+  Future<TrustedRustDeskController> upsertTrustedRustDeskController(
+    TrustedRustDeskControllerDraft draft,
+  );
+
+  Future<void> deleteTrustedRustDeskController(String id);
+
+  Future<List<BridgeSecretVersionMetadata>> getBridgeSecretVersions();
+
+  Future<BridgeSecretVersionMetadata> uploadBridgeSecret({
+    required BridgeSecretInputFormat format,
+    required List<int> rawBytes,
+    String? auditNote,
+  });
 }
 
 class _MultipartFile {
@@ -2397,4 +2415,267 @@ class HttpAdminApi implements AdminApi {
       '/api/auth/otp/keys/${encodePathSegment(keyId)}',
     );
   }
+
+  // ---- RustDesk Bridge admin endpoints (rustdesk-bridge-host feature) ----
+
+  @override
+  Future<List<TrustedRustDeskController>>
+      getTrustedRustDeskControllers() async {
+    final json = await _requestJson(
+      'GET',
+      '/api/security/trusted-rustdesk-controllers',
+    );
+    return (json['controllers'] as List<dynamic>? ?? <dynamic>[])
+        .whereType<Map<String, dynamic>>()
+        .map(TrustedRustDeskController.fromJson)
+        .toList();
+  }
+
+  @override
+  Future<TrustedRustDeskController> upsertTrustedRustDeskController(
+    TrustedRustDeskControllerDraft draft,
+  ) async {
+    final json = await _requestJson(
+      'POST',
+      '/api/security/trusted-rustdesk-controllers',
+      body: draft.toJson(),
+    );
+    final entry = json['controller'];
+    if (entry is Map<String, dynamic>) {
+      return TrustedRustDeskController.fromJson(entry);
+    }
+    return TrustedRustDeskController.fromJson(json);
+  }
+
+  @override
+  Future<void> deleteTrustedRustDeskController(String id) async {
+    await _requestJson(
+      'DELETE',
+      '/api/security/trusted-rustdesk-controllers/${encodePathSegment(id)}',
+    );
+  }
+
+  @override
+  Future<List<BridgeSecretVersionMetadata>> getBridgeSecretVersions() async {
+    final json = await _requestJson(
+      'GET',
+      '/api/security/rustdesk-bridge-secret',
+    );
+    return (json['versions'] as List<dynamic>? ?? <dynamic>[])
+        .whereType<Map<String, dynamic>>()
+        .map(BridgeSecretVersionMetadata.fromJson)
+        .toList();
+  }
+
+  @override
+  Future<BridgeSecretVersionMetadata> uploadBridgeSecret({
+    required BridgeSecretInputFormat format,
+    required List<int> rawBytes,
+    String? auditNote,
+  }) async {
+    if (rawBytes.length != 32) {
+      throw AdminApiException('RustDeskClientSharedSecret 必须正好 32 字节');
+    }
+    final body = <String, dynamic>{
+      'format': format.wireValue,
+      'keyMaterialBase64': base64Encode(rawBytes),
+    };
+    if (auditNote != null && auditNote.trim().isNotEmpty) {
+      body['auditNote'] = auditNote.trim();
+    }
+    final json = await _requestJson(
+      'POST',
+      '/api/security/rustdesk-bridge-secret',
+      body: body,
+    );
+    final entry = json['version'];
+    if (entry is Map<String, dynamic>) {
+      return BridgeSecretVersionMetadata.fromJson(entry);
+    }
+    return BridgeSecretVersionMetadata.fromJson(json);
+  }
 }
+
+
+// ─── RustDesk Bridge data models (rustdesk-bridge-host feature) ─────────────────
+
+/// Bridge secret 录入格式枚举（任务 17.1）。
+/// 与 design.md §"决策点 1：Flutter 录入 + VHDSelectServer 持久化" 保持一致。
+enum BridgeSecretInputFormat {
+  hex,
+  base64,
+  binary,
+}
+
+extension BridgeSecretInputFormatLabel on BridgeSecretInputFormat {
+  String get wireValue {
+    switch (this) {
+      case BridgeSecretInputFormat.hex:
+        return 'hex';
+      case BridgeSecretInputFormat.base64:
+        return 'base64';
+      case BridgeSecretInputFormat.binary:
+        return 'binary';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case BridgeSecretInputFormat.hex:
+        return '十六进制（64 字符）';
+      case BridgeSecretInputFormat.base64:
+        return 'Base64（43-44 字符）';
+      case BridgeSecretInputFormat.binary:
+        return '二进制文件（32 字节）';
+    }
+  }
+}
+
+/// Bridge secret 版本元数据 —— **不**包含 keyMaterial 字节
+/// （Requirement 13.1：管理面只展示版本元数据；明文 secret 走 TPM 包裹下行）。
+class BridgeSecretVersionMetadata {
+  const BridgeSecretVersionMetadata({
+    required this.secretVersion,
+    required this.createdAt,
+    this.activatedAt,
+    this.createdByUserId,
+    this.auditNote,
+  });
+
+  final int secretVersion;
+  final String createdAt;
+  final String? activatedAt;
+  final String? createdByUserId;
+  final String? auditNote;
+
+  bool get isActive => activatedAt != null && activatedAt!.isNotEmpty;
+
+  factory BridgeSecretVersionMetadata.fromJson(Map<String, dynamic> json) {
+    return BridgeSecretVersionMetadata(
+      secretVersion: (json['secretVersion'] as num?)?.toInt() ?? 0,
+      createdAt: (json['createdAt'] as String?) ?? '',
+      activatedAt: json['activatedAt'] as String?,
+      createdByUserId: json['createdByUserId'] as String?,
+      auditNote: json['auditNote'] as String?,
+    );
+  }
+
+  String get localizedCreatedAt =>
+      createdAt.isEmpty ? '未知时间' : formatAuditTimestamp(createdAt);
+
+  String get localizedActivatedAt {
+    if (activatedAt == null || activatedAt!.isEmpty) {
+      return '未激活';
+    }
+    return formatAuditTimestamp(activatedAt!);
+  }
+}
+
+/// 可信 RustDesk 主控端记录（任务 14.1 服务端表 trusted_rustdesk_controllers）。
+class TrustedRustDeskController {
+  const TrustedRustDeskController({
+    required this.id,
+    required this.controllerId,
+    this.controllerHwidHash,
+    this.label,
+    required this.scope,
+    required this.enabled,
+    required this.createdAt,
+    this.expiresAt,
+    this.auditNote,
+  });
+
+  final String id;
+  final String controllerId;
+  final String? controllerHwidHash;
+  final String? label;
+  final String scope;
+  final bool enabled;
+  final String createdAt;
+  final String? expiresAt;
+  final String? auditNote;
+
+  bool get isMachineScoped => scope.startsWith('machine:');
+  bool get isGlobalScope => scope == 'global';
+  String? get scopedMachineId =>
+      isMachineScoped ? scope.substring('machine:'.length) : null;
+
+  factory TrustedRustDeskController.fromJson(Map<String, dynamic> json) {
+    return TrustedRustDeskController(
+      id: (json['id'] as String?) ?? '',
+      controllerId: (json['controllerId'] as String?) ?? '',
+      controllerHwidHash: json['controllerHwidHash'] as String?,
+      label: json['label'] as String?,
+      scope: (json['scope'] as String?) ?? 'global',
+      enabled: json['enabled'] == true,
+      createdAt: (json['createdAt'] as String?) ?? '',
+      expiresAt: json['expiresAt'] as String?,
+      auditNote: json['auditNote'] as String?,
+    );
+  }
+
+  String get localizedCreatedAt =>
+      createdAt.isEmpty ? '未知时间' : formatAuditTimestamp(createdAt);
+
+  String get localizedExpiresAt {
+    if (expiresAt == null || expiresAt!.isEmpty) {
+      return '永不过期';
+    }
+    return formatAuditTimestamp(expiresAt!);
+  }
+
+  String get scopeLabel =>
+      isGlobalScope ? '全局' : '机台 ${scopedMachineId ?? ''}';
+}
+
+/// 提交可信主控端时使用的草稿（upsert / create 共用，id 为空表示新增）。
+class TrustedRustDeskControllerDraft {
+  const TrustedRustDeskControllerDraft({
+    this.id,
+    required this.controllerId,
+    this.controllerHwidHash,
+    this.label,
+    required this.scope,
+    required this.enabled,
+    this.expiresAt,
+    this.auditNote,
+  });
+
+  /// id 为空表示新增。
+  final String? id;
+  final String controllerId;
+  final String? controllerHwidHash;
+  final String? label;
+  final String scope;
+  final bool enabled;
+  final String? expiresAt;
+  final String? auditNote;
+
+  Map<String, dynamic> toJson() {
+    final map = <String, dynamic>{
+      'controllerId': controllerId,
+      'scope': scope,
+      'enabled': enabled,
+    };
+    if (controllerHwidHash != null && controllerHwidHash!.isNotEmpty) {
+      map['controllerHwidHash'] = controllerHwidHash;
+    }
+    if (label != null && label!.trim().isNotEmpty) {
+      map['label'] = label!.trim();
+    }
+    if (expiresAt != null && expiresAt!.trim().isNotEmpty) {
+      map['expiresAt'] = expiresAt!.trim();
+    }
+    if (auditNote != null && auditNote!.trim().isNotEmpty) {
+      map['auditNote'] = auditNote!.trim();
+    }
+    if (id != null && id!.trim().isNotEmpty) {
+      map['id'] = id!.trim();
+    }
+    return map;
+  }
+}
+
+/// HTTP 端点实现挂在 HttpAdminApi 类内部（@override 路径），无需 extension 重复定义。
+/// 仅保留数据模型与枚举在本 part 文件中。
+

@@ -715,4 +715,104 @@ class FakeAdminApi implements AdminApi {
 
   @override
   Future<void> restoreSession() async {}
+
+  // ─── RustDesk Bridge fakes (rustdesk-bridge-host feature) ─────────────
+  List<TrustedRustDeskController> trustedRustDeskControllers =
+      <TrustedRustDeskController>[];
+  List<BridgeSecretVersionMetadata> bridgeSecretVersions =
+      <BridgeSecretVersionMetadata>[];
+
+  int getTrustedRustDeskControllersCalls = 0;
+  int upsertTrustedRustDeskControllerCalls = 0;
+  int deleteTrustedRustDeskControllerCalls = 0;
+  int getBridgeSecretVersionsCalls = 0;
+  int uploadBridgeSecretCalls = 0;
+  TrustedRustDeskControllerDraft? lastUpsertTrustedRustDeskController;
+  String? lastDeletedTrustedRustDeskControllerId;
+  BridgeSecretInputFormat? lastUploadBridgeSecretFormat;
+  List<int>? lastUploadBridgeSecretBytes;
+  String? lastUploadBridgeSecretAuditNote;
+
+  @override
+  Future<List<TrustedRustDeskController>>
+      getTrustedRustDeskControllers() async {
+    getTrustedRustDeskControllersCalls += 1;
+    return trustedRustDeskControllers;
+  }
+
+  @override
+  Future<TrustedRustDeskController> upsertTrustedRustDeskController(
+    TrustedRustDeskControllerDraft draft,
+  ) async {
+    upsertTrustedRustDeskControllerCalls += 1;
+    lastUpsertTrustedRustDeskController = draft;
+    final entry = TrustedRustDeskController(
+      id: draft.id ?? 'fake-${trustedRustDeskControllers.length + 1}',
+      controllerId: draft.controllerId,
+      controllerHwidHash: draft.controllerHwidHash,
+      label: draft.label,
+      scope: draft.scope,
+      enabled: draft.enabled,
+      createdAt: DateTime.now().toUtc().toIso8601String(),
+      expiresAt: draft.expiresAt,
+      auditNote: draft.auditNote,
+    );
+    trustedRustDeskControllers = <TrustedRustDeskController>[
+      ...trustedRustDeskControllers.where((c) => c.id != entry.id),
+      entry,
+    ];
+    return entry;
+  }
+
+  @override
+  Future<void> deleteTrustedRustDeskController(String id) async {
+    deleteTrustedRustDeskControllerCalls += 1;
+    lastDeletedTrustedRustDeskControllerId = id;
+    trustedRustDeskControllers =
+        trustedRustDeskControllers.where((c) => c.id != id).toList();
+  }
+
+  @override
+  Future<List<BridgeSecretVersionMetadata>> getBridgeSecretVersions() async {
+    getBridgeSecretVersionsCalls += 1;
+    return bridgeSecretVersions;
+  }
+
+  @override
+  Future<BridgeSecretVersionMetadata> uploadBridgeSecret({
+    required BridgeSecretInputFormat format,
+    required List<int> rawBytes,
+    String? auditNote,
+  }) async {
+    uploadBridgeSecretCalls += 1;
+    lastUploadBridgeSecretFormat = format;
+    lastUploadBridgeSecretBytes = List<int>.from(rawBytes);
+    lastUploadBridgeSecretAuditNote = auditNote;
+    if (rawBytes.length != 32) {
+      throw AdminApiException('RustDeskClientSharedSecret 必须正好 32 字节');
+    }
+    final nextVersion = bridgeSecretVersions.fold<int>(
+          -1,
+          (acc, v) => v.secretVersion > acc ? v.secretVersion : acc,
+        ) +
+        1;
+    final entry = BridgeSecretVersionMetadata(
+      secretVersion: nextVersion,
+      createdAt: DateTime.now().toUtc().toIso8601String(),
+      activatedAt: DateTime.now().toUtc().toIso8601String(),
+      auditNote: auditNote,
+    );
+    // 老版本 activatedAt 清空（与 bridgeSecretStore.js insertAndActivate 行为一致）
+    bridgeSecretVersions = <BridgeSecretVersionMetadata>[
+      ...bridgeSecretVersions.map((v) => BridgeSecretVersionMetadata(
+            secretVersion: v.secretVersion,
+            createdAt: v.createdAt,
+            activatedAt: null,
+            createdByUserId: v.createdByUserId,
+            auditNote: v.auditNote,
+          )),
+      entry,
+    ];
+    return entry;
+  }
 }

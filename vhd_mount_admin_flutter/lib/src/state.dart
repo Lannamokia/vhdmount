@@ -943,6 +943,53 @@ class AppController extends ChangeNotifier {
     await loadTotpKeys();
   }
 
+  // ─── RustDesk Bridge：可信主控端 + Bridge_Secret 版本元数据 ────────────────────
+  // 任务 17.1：扩展 AppState 数据模型 + load/upsert/delete + load/upload 方法。
+  // 写操作的 OTP step-up 由 _runAction 的统一拦截 + dialogs.dart 既有组件触发。
+
+  List<TrustedRustDeskController> trustedRustDeskControllers =
+      <TrustedRustDeskController>[];
+  List<BridgeSecretVersionMetadata> bridgeSecretVersions =
+      <BridgeSecretVersionMetadata>[];
+
+  Future<void> loadTrustedRustDeskControllers() async {
+    trustedRustDeskControllers =
+        await _runAction(api.getTrustedRustDeskControllers);
+    notifyListeners();
+  }
+
+  Future<void> upsertTrustedRustDeskController(
+    TrustedRustDeskControllerDraft draft,
+  ) async {
+    await _runAction(() => api.upsertTrustedRustDeskController(draft));
+    await loadTrustedRustDeskControllers();
+  }
+
+  Future<void> deleteTrustedRustDeskController(String id) async {
+    await _runAction(() => api.deleteTrustedRustDeskController(id));
+    await loadTrustedRustDeskControllers();
+  }
+
+  Future<void> loadBridgeSecretVersions() async {
+    bridgeSecretVersions = await _runAction(api.getBridgeSecretVersions);
+    notifyListeners();
+  }
+
+  Future<void> uploadBridgeSecret({
+    required BridgeSecretInputFormat format,
+    required List<int> rawBytes,
+    String? auditNote,
+  }) async {
+    await _runAction(
+      () => api.uploadBridgeSecret(
+        format: format,
+        rawBytes: rawBytes,
+        auditNote: auditNote,
+      ),
+    );
+    await loadBridgeSecretVersions();
+  }
+
   @override
   void dispose() {
     _otpExpiryTimer?.cancel();
