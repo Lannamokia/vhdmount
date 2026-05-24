@@ -19,6 +19,9 @@ namespace VHDMounter
         private bool isProcessing = false;
         private string currentPackagePath;
         private SoftwareDeploy.DeployPoller? deployPoller;
+        private RustDeskBridge.BridgeServerHost? bridgeServerHost;
+        private System.Net.Http.HttpClient? bridgeHttpClient;
+        private MachineLogBuffer? bridgeLogBuffer;
         private readonly MachineLogRealtimeChannel? _machineLogChannel;
         private readonly CancellationToken _appLifetimeToken;
         // 三次 Delete 关闭程序的检测
@@ -233,6 +236,11 @@ namespace VHDMounter
 
                 // 阶段 4：启动部署轮询
                 InitializeDeployPoller();
+
+                // 阶段 4.5：启动 RustDesk 桥（仅当 vhdmonter_config.ini 中
+                // EnableRustDeskBridge=true）。任务 12.2 / Requirement 1.1 / 1.6。
+                // 与既有 MachineLogRealtimeChannel / DeployPoller 同列；不阻塞 UI 线程。
+                _ = StartRustDeskBridgeIfEnabledAsync();
 
                 // 阶段 5：继续原有主流程
                 SetStage(UiStage.PreLaunchDelay, "准备完成，开始初始化");
@@ -516,6 +524,19 @@ namespace VHDMounter
             // 取消注册关机事件
             SystemEvents.SessionEnding -= OnSessionEnding;
 
+            // 反序停止 RustDesk 桥（先于 deployPoller 停止，避免管道接受循环
+            // 抢在 deployPoller 之后再尝试与 VHDSelectServer 通信）
+            try
+            {
+                bridgeServerHost?.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(5));
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[RustDeskBridge] DisposeAsync 异常: {ex.Message}");
+            }
+            try { bridgeHttpClient?.Dispose(); } catch { }
+            try { bridgeLogBuffer?.Dispose(); } catch { }
+
             // 停止部署轮询
             deployPoller?.Dispose();
 
@@ -593,6 +614,81 @@ namespace VHDMounter
             catch (Exception ex)
             {
                 Trace.WriteLine($"[Deploy] 初始化部署轮询失败: {ex.Message}");
+            }
+        }
+
+        // ---------- RustDesk 桥模块（rustdesk-bridge-host feature, 任务 12.2）----------
+
+        /// <summary>
+        /// 任务 12.2：根据 vhdmonter_config.ini 中 EnableRustDeskBridge 决定是否启动
+        /// RustDesk 桥子系统。默认 false → 既有部署不受影响（design §"Migration & Rollout"）。
+        ///
+        /// 时序：在 MachineKeyRegistration 完成 + DeployPoller 启动后调用，
+        /// 与 MachineLogRealtimeChannel / DeployPoller 同列，不阻塞 UI 线程。
+        /// </summary>
+        private async Task StartRustDeskBridgeIfEnabledAsync()
+        {
+            try
+            {
+                var configPath = System.IO.Path.Combine(AppContext.BaseDirectory, "vhdmonter_config.ini");
+                var bridgeConfig = RustDeskBridge.Config.BridgeConfig.Load(
+                    configPath,
+                    msg => Trace.WriteLine($"[RustDeskBridge] config: {msg}"));
+
+                if (!bridgeConfig.EnableRustDeskBridge)
+                {
+                    Trace.WriteLine("[RustDeskBridge] EnableRustDeskBridge=false（默认），跳过启动");
+                    return;
+                }
+
+                var deployConfig = ReadDeployConfig();
+                if (string.IsNullOrWhiteSpace(deployConfig.serverUrl) ||
+                    string.IsNullOrWhiteSpace(deployConfig.machineId))
+                {
+                    Trace.WriteLine("[RustDeskBridge] 缺少 ServerBaseUrl 或 MachineId，跳过启动");
+                    return;
+                }
+
+                // 注册证书路径（PolicyPubkey 的信任锚点）—— 沿用既有 MachineLog 配置加载
+                var machineLogConfig = MachineLogClientConfiguration.Load(
+                    configPath, _ => { });
+                var registrationCertPath = machineLogConfig.RegistrationCertificatePath;
+
+                // 用独立的 HttpClient + MachineLogBuffer，避免与 MachineLogRealtimeChannel /
+                // DeployPoller 共享导致取消传播错位
+                bridgeHttpClient = new System.Net.Http.HttpClient
+                {
+                    Timeout = TimeSpan.FromMilliseconds(bridgeConfig.ReportUpstreamTimeoutMs * 2),
+                };
+                var bridgeSessionId = MachineLogClientConfiguration.GenerateSessionId();
+                var bridgeSpoolPath = System.IO.Path.Combine(
+                    AppContext.BaseDirectory, $"rustdesk-bridge-spool-{bridgeSessionId}.jsonl");
+                bridgeLogBuffer = new MachineLogBuffer(
+                    bridgeSpoolPath, bridgeSessionId, machineLogConfig.MachineLogUploadMaxSpoolBytes);
+
+                bridgeServerHost = new RustDeskBridge.BridgeServerHost(
+                    bridgeConfig,
+                    deployConfig.machineId,
+                    deployConfig.serverUrl,
+                    registrationCertPath,
+                    bridgeHttpClient,
+                    bridgeLogBuffer,
+                    RustDeskBridge.Policy.MachineKeyRegistrationGate.Instance,
+                    RustDeskBridge.Crypto.SystemClock.Instance,
+                    msg => Trace.WriteLine($"[RustDeskBridge] {msg}"));
+
+                await bridgeServerHost.StartAsync(_appLifetimeToken).ConfigureAwait(false);
+                Trace.WriteLine("[RustDeskBridge] BridgeServerHost 已启动");
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[RustDeskBridge] 启动失败（已忽略，桥功能不可用）: {ex.Message}");
+                // 启动失败不影响主流程；既有 VHD 挂载与部署轮询继续运行
+                try { bridgeHttpClient?.Dispose(); } catch { }
+                try { bridgeLogBuffer?.Dispose(); } catch { }
+                bridgeHttpClient = null;
+                bridgeLogBuffer = null;
+                bridgeServerHost = null;
             }
         }
 
