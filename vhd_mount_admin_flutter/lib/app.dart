@@ -31,3 +31,5 @@ part 'src/services/certificate_generator_service.dart';
 part 'src/offline_tools.dart';
 part 'src/services/otp_guard.dart';
 part 'src/totp_keys_management.dart';
+part 'src/trusted_controllers.dart';
+part 'src/bridge_secret.dart';
