@@ -18,6 +18,29 @@ namespace VHDMounter
             "(?i)(\"(?:password|secret|token|authorization|ciphertext|totpSecret|totpCode|sessionSecret|evhdPassword|registrationCertificatePassword)\"\\s*:\\s*\")([^\"]*)(\")",
             RegexOptions.Compiled);
 
+        // --- RustDesk 桥相关脱敏规则（rustdesk-bridge-host feature, Requirement 11.3）---
+
+        // 1) RustDesk Bridge 字段（controllerName / controllerHwid / passwordCipher /
+        //    wrapKeyCipher / iv / authTag / mac / proof / signature）：JSON 形式 → 哈希指代
+        private static readonly Regex RustDeskBridgeJsonFieldsPattern = new Regex(
+            "(?i)(\"(?:controllerName|controllerHwid|passwordCipher|wrapKeyCipher|authTag|mac|proof|signature|iv)\"\\s*:\\s*\")([^\"]*)(\")",
+            RegexOptions.Compiled);
+
+        // 2) RustDesk Bridge 字段（同上）：inline 形式（key=value 或 key: value）
+        private static readonly Regex RustDeskBridgeInlineFieldsPattern = new Regex(
+            "(?i)(\\b(?:controllerName|controllerHwid|passwordCipher|wrapKeyCipher|authTag|mac|proof|signature)\\b\\s*[:=]\\s*)([^\\s,;]+)",
+            RegexOptions.Compiled);
+
+        // 3) TPM 句柄字面量
+        private static readonly Regex TpmHandlePattern = new Regex(
+            "(?i)(VHDMounterKey_[A-Za-z0-9_-]+|Microsoft Software Key Storage Provider)",
+            RegexOptions.Compiled);
+
+        // 4) RSA / EC / 私钥 PEM 头尾及内部 base64
+        private static readonly Regex PrivateKeyPemPattern = new Regex(
+            "-----BEGIN (?:RSA |EC |DSA |ENCRYPTED )?PRIVATE KEY-----[\\s\\S]*?-----END (?:RSA |EC |DSA |ENCRYPTED )?PRIVATE KEY-----",
+            RegexOptions.Compiled);
+
         private static readonly Regex PrefixPattern = new Regex(
             "^(?<prefix>[A-Za-z0-9_]+):\\s*(?<message>.*)$",
             RegexOptions.Compiled);
@@ -37,6 +60,13 @@ namespace VHDMounter
             sanitized = InlineSecretPattern.Replace(sanitized, "$1***");
             sanitized = QuerySecretPattern.Replace(sanitized, "$1***");
             sanitized = JsonSecretPattern.Replace(sanitized, "$1***$3");
+
+            // RustDesk 桥（rustdesk-bridge-host feature, Requirement 11.3）
+            sanitized = RustDeskBridgeJsonFieldsPattern.Replace(sanitized, "$1***$3");
+            sanitized = RustDeskBridgeInlineFieldsPattern.Replace(sanitized, "$1***");
+            sanitized = TpmHandlePattern.Replace(sanitized, "***");
+            sanitized = PrivateKeyPemPattern.Replace(sanitized, "[PRIVATE_KEY_REDACTED]");
+
             return sanitized.Replace("\0", string.Empty).TrimEnd();
         }
 
