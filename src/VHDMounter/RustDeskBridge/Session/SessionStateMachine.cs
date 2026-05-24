@@ -99,10 +99,32 @@ namespace VHDMounter.RustDeskBridge.Session
         /// <summary>
         /// 与 <see cref="PipeAcceptLoop.SessionRunnerDelegate"/> 签名一致。本方法
         /// 完整跑完一次会话；返回（正常 return / 抛异常）后 PipeAcceptLoop 关闭管道并重建。
+        ///
+        /// 内部创建 <see cref="BridgeSession"/> 并在 finally 中 Dispose。BridgeServerHost
+        /// 走的是 <see cref="RunSessionAsync"/> 重载，会从外部传入并跟踪 session 实例。
         /// </summary>
         public async Task RunAsync(NamedPipeServerStream pipe, bool isCoolingDown, CancellationToken ct)
         {
             using var session = new BridgeSession(pipe);
+            await RunSessionInnerAsync(session, isCoolingDown, ct).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// 任务 12.1 引入的最小重载：调用方持有 <see cref="BridgeSession"/> 并自行管理
+        /// 生命周期（BridgeServerHost 用此重载把当前会话注入 RevocationPublisher 的
+        /// <c>getActiveSession</c> 委托），方法内部仅调
+        /// <see cref="BridgeSession.Close"/>，<b>不</b> Dispose。
+        /// </summary>
+        public Task RunSessionAsync(BridgeSession session, bool isCoolingDown, CancellationToken ct)
+        {
+            if (session == null) throw new ArgumentNullException(nameof(session));
+            return RunSessionInnerAsync(session, isCoolingDown, ct);
+        }
+
+        // 共享主循环：与原 RunAsync(NamedPipeServerStream, ...) 字节同构，不 Dispose session。
+        private async Task RunSessionInnerAsync(BridgeSession session, bool isCoolingDown, CancellationToken ct)
+        {
+            var pipe = session.Pipe;
             try
             {
                 if (isCoolingDown)
