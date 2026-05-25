@@ -631,13 +631,48 @@ namespace VHDMounter
             try
             {
                 var configPath = System.IO.Path.Combine(AppContext.BaseDirectory, "vhdmonter_config.ini");
+                var configExists = System.IO.File.Exists(configPath);
+                Trace.WriteLine(
+                    $"[RustDeskBridge] 准备加载配置 path={configPath} exists={configExists}");
                 var bridgeConfig = RustDeskBridge.Config.BridgeConfig.Load(
                     configPath,
                     msg => Trace.WriteLine($"[RustDeskBridge] config: {msg}"));
 
                 if (!bridgeConfig.EnableRustDeskBridge)
                 {
-                    Trace.WriteLine("[RustDeskBridge] EnableRustDeskBridge=false（默认），跳过启动");
+                    // 不再写「默认」字样——区分不开「默认 false」与「显式 false」会让排查
+                    // 误以为配置没生效。同时把 raw 值（去 BOM 去 trim 后字节序列）打到日志，
+                    // 方便检测全角字符 / U+200B 零宽空格 / 错放的 inline `;` 注释 等。
+                    var rawDump = "(file missing)";
+                    if (configExists)
+                    {
+                        try
+                        {
+                            var rawLines = System.IO.File.ReadAllLines(configPath);
+                            var hits = new System.Collections.Generic.List<string>();
+                            for (var i = 0; i < rawLines.Length; i++)
+                            {
+                                var trimmed = rawLines[i]?.Trim() ?? string.Empty;
+                                if (trimmed.StartsWith(";") || trimmed.StartsWith("[")) continue;
+                                if (trimmed.IndexOf("EnableRustDeskBridge",
+                                        StringComparison.OrdinalIgnoreCase) < 0) continue;
+                                var raw = rawLines[i] ?? string.Empty;
+                                var bytes = System.Text.Encoding.UTF8.GetBytes(raw);
+                                var hex = BitConverter.ToString(bytes).Replace("-", " ");
+                                hits.Add($"line#{i + 1}: \"{raw}\" hex={hex}");
+                            }
+                            rawDump = hits.Count == 0
+                                ? "(no EnableRustDeskBridge line found)"
+                                : string.Join(" | ", hits);
+                        }
+                        catch (Exception readEx)
+                        {
+                            rawDump = $"(read failed: {readEx.Message})";
+                        }
+                    }
+                    Trace.WriteLine(
+                        $"[RustDeskBridge] EnableRustDeskBridge=false，跳过启动；" +
+                        $"parsed value=false；raw lines containing key: {rawDump}");
                     return;
                 }
 

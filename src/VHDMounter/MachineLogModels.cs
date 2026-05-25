@@ -76,20 +76,7 @@ namespace VHDMounter
             var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             if (File.Exists(configPath))
             {
-                foreach (var rawLine in File.ReadAllLines(configPath))
-                {
-                    var line = rawLine?.Trim();
-                    if (string.IsNullOrWhiteSpace(line) || line.StartsWith(";") || line.StartsWith("["))
-                    {
-                        continue;
-                    }
-
-                    var parts = line.Split('=', 2);
-                    if (parts.Length == 2)
-                    {
-                        values[parts[0].Trim()] = parts[1].Trim();
-                    }
-                }
+                IniLineParser.ParseInto(configPath, values, diagnostics);
             }
             else
             {
