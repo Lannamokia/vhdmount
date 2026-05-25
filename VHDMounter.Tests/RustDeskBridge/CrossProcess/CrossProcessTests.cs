@@ -25,7 +25,7 @@ namespace VHDMounter.Tests.RustDeskBridge.CrossProcess
     ///   非 elevated 时 BridgePipeFactory 创建的管道 DACL 拒绝 NamedPipeClientStream 接入，
     ///   测试 SKIP（仍算 pass）。
     /// - "PIPE_REJECT_REMOTE_CLIENTS 拒绝 SMB / 网络命名空间" 在单机测试环境中无法跨网测，
-    ///   降级为代码扫描：通过反射验证 BridgePipeFactory 调 CreateNamedPipeW 时 dwOpenMode
+    ///   降级为代码扫描：通过反射验证 BridgePipeFactory 调 CreateNamedPipeW 时 dwPipeMode
     ///   含 PIPE_REJECT_REMOTE_CLIENTS 标志（0x00000008）。
     /// - "DACL 拒绝普通用户" 通过让 NamedPipeClientStream 在用户态尝试连接，期望
     ///   ACCESS_DENIED；但本测试已经在 admin 进程内，无法直接降权 spawn 子进程模拟用户身份。
@@ -72,16 +72,19 @@ namespace VHDMounter.Tests.RustDeskBridge.CrossProcess
         // ---- (b) PIPE_REJECT_REMOTE_CLIENTS 代码扫描（不需要 elevated） ----
 
         [Fact]
-        public void BridgePipeFactory_DwOpenMode_Includes_PipeRejectRemoteClients()
+        public void BridgePipeFactory_DwPipeMode_Includes_PipeRejectRemoteClients()
         {
-            // BridgePipeFactory 内部把 CreateNamedPipeW 的 dwOpenMode 设为
-            //   PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | PIPE_REJECT_REMOTE_CLIENTS
-            // 我们通过反射读取常量字段，断言 PIPE_REJECT_REMOTE_CLIENTS = 0x8 出现在 dwOpenMode 表达式上。
-            // 由于 dwOpenMode 是函数体内的字面量 OR 表达式，无法直接 reflect；这里验证常量字段本身存在
-            // 且数值匹配。配合 BridgePipeFactoryDaclTests 字节比对，三处证据形成完整证明链：
+            // BridgePipeFactory 内部把 CreateNamedPipeW 的 dwPipeMode 设为
+            //   PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS
+            // 我们通过反射读取常量字段，断言 PIPE_REJECT_REMOTE_CLIENTS = 0x8 存在且数值正确。
+            // 配合 BridgePipeFactoryDaclTests 字节比对，三处证据形成完整证明链：
             //   1) DACL 字节比对（只有 Administrators+SYSTEM）
             //   2) 常量字段 PIPE_REJECT_REMOTE_CLIENTS == 0x8
-            //   3) 源码 grep 确认 dwOpenMode 表达式包含该字段（人工 review）
+            //   3) 源码 grep 确认 dwPipeMode 表达式包含该字段（人工 review）
+            //
+            // 历史背景：该位最初被错放到 dwOpenMode 上，本地 Windows 10/11 桌面静默
+            // 忽略而通过；Windows Server 2022/2025（GHA windows-latest 镜像）会以
+            // ERROR_INVALID_PARAMETER (87) 拒绝。修复后位移到 dwPipeMode，与 MSDN 一致。
             var type = typeof(BridgePipeFactory);
             var field = type.GetField("PIPE_REJECT_REMOTE_CLIENTS", BindingFlags.NonPublic | BindingFlags.Static);
             Assert.NotNull(field);

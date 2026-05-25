@@ -19,13 +19,13 @@ namespace VHDMounter.RustDeskBridge.Pipe
     /// </list>
     /// 对 Users / Everyone / Authenticated Users / ANONYMOUS LOGON / NETWORK <b>不</b>授予任何 ACE。
     ///
-    /// dwOpenMode 含 <c>PIPE_REJECT_REMOTE_CLIENTS (0x00000008)</c>；管道路径恒为
+    /// dwPipeMode 含 <c>PIPE_REJECT_REMOTE_CLIENTS (0x00000008)</c>；管道路径恒为
     /// <c>\\.\pipe\VHDMount.RustDeskBridge</c>。
     ///
     /// .NET 8 的 <see cref="PipeOptions"/> 枚举不含 <c>RejectRemoteClients</c>（.NET 9 才加），
     /// 因此本工厂 P/Invoke 直接调 <c>CreateNamedPipeW</c>，把
     /// <c>SECURITY_ATTRIBUTES.lpSecurityDescriptor</c> 指向我们手工构造的 DACL，
-    /// dwOpenMode 显式 OR 上 <c>PIPE_REJECT_REMOTE_CLIENTS</c>。
+    /// dwPipeMode 显式 OR 上 <c>PIPE_REJECT_REMOTE_CLIENTS</c>。
     ///
     /// 拿到原生 HANDLE 之后再用 <see cref="SafePipeHandle"/> 包装，最后构造
     /// <see cref="NamedPipeServerStream"/>（<c>NamedPipeServerStream(SafePipeHandle, bool, bool)</c>），
@@ -43,12 +43,16 @@ namespace VHDMounter.RustDeskBridge.Pipe
         private const uint PIPE_ACCESS_DUPLEX = 0x00000003;
         private const uint FILE_FLAG_OVERLAPPED = 0x40000000;
         private const uint FILE_FLAG_FIRST_PIPE_INSTANCE = 0x00080000;
-        private const uint PIPE_REJECT_REMOTE_CLIENTS = 0x00000008;
 
         // dwPipeMode 标志（CreateNamedPipeW 第三参）
         private const uint PIPE_TYPE_BYTE = 0x00000000;
         private const uint PIPE_READMODE_BYTE = 0x00000000;
         private const uint PIPE_WAIT = 0x00000000;
+        // 远程客户端模式位：MSDN 把它归在 dwPipeMode（不是 dwOpenMode）。
+        // 把它放在 dwOpenMode 上 Windows 10/11 桌面会静默忽略，但 Windows
+        // Server 2022/2025（GHA windows-latest 镜像）会直接以 ERROR_INVALID_PARAMETER (87)
+        // 拒绝调用——这是一条历史 bug，本来就应当落在 dwPipeMode。
+        private const uint PIPE_REJECT_REMOTE_CLIENTS = 0x00000008;
 
         // 缓冲 / 实例上限
         private const uint NMPWAIT_DEFAULT_TIMEOUT_MS = 0;
@@ -92,8 +96,15 @@ namespace VHDMounter.RustDeskBridge.Pipe
                 var fullPath = $@"\\.\pipe\{pipeName}";
                 var rawHandle = CreateNamedPipeW(
                     lpName: fullPath,
-                    dwOpenMode: PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | PIPE_REJECT_REMOTE_CLIENTS,
-                    dwPipeMode: PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                    // dwOpenMode 仅接受 PIPE_ACCESS_* + FILE_FLAG_* + 安全位；
+                    // PIPE_REJECT_REMOTE_CLIENTS (0x00000008) 必须落到 dwPipeMode，
+                    // 否则 Windows Server 2022/2025 内核会以 ERROR_INVALID_PARAMETER (87)
+                    // 拒绝（Windows 10/11 桌面对 dwOpenMode 的非法位静默忽略，会
+                    // 掩盖这条 bug）。详见 MSDN CreateNamedPipeW 文档「dwPipeMode -
+                    // 远程客户端模式」一节。
+                    dwOpenMode: PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+                    dwPipeMode: PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT
+                                | PIPE_REJECT_REMOTE_CLIENTS,
                     nMaxInstances: MaxInstances,
                     nOutBufferSize: (uint)FrameCodec.MaxFrameBytes,
                     nInBufferSize: (uint)FrameCodec.MaxFrameBytes,
