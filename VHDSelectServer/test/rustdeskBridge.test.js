@@ -238,6 +238,10 @@ function buildExpressApp(stores, { authenticated = true, otpVerified = true, aud
     // 假 runtime
     app.locals.runtime = {
         database: stores.database,
+        // bridgeRoutes.requireBridgeMachineSignature 共用 deploymentRoutes 的
+        // nonce 缓存（避免 nonce 重放）；server.js 启动时初始化为 Map，
+        // 这里测试夹具同样给一个空 Map，否则 nonce 检查会撞 undefined.entries。
+        deploymentRequestNonceCache: new Map(),
         securityConfig: {
             // 为 policy-pubkey 端点提供注册证书签名私钥 + 证书 PEM
             // 这里用与 policySigningStore 相同的 keypair（只是测试用）
@@ -615,4 +619,78 @@ test('rustdesk-bridge-host > Property 17 (server): listForMachine never returns 
                 `machine ${machineId} 的 entries 中出现 scope=${e.scope}（应当只能是 global 或 machine:${machineId}）`);
         }
     }
+});
+
+
+// ─── 回归测试：bridgeRoutes 通过 app.use('/api/machines', router) 挂载时，
+// requireBridgeMachineSignature 必须对完整 URL 路径 /api/machines/...
+// 做签名校验，而**不**是被 sub-router 剥掉前缀后的相对路径。
+//
+// 历史 bug：服务端原本用 req.path 构造签名 payload，挂载到 sub-router 后
+// req.path 会失去 '/api/machines' 前缀（变成 /M1/rustdesk/...），机台一侧
+// 用 RustDeskReportSigner 签的是 RequestUri.AbsolutePath 即完整路径，
+// 两侧 hash 字节流不同，verifier.verify 必然返回 false → 401「机台签名校验失败」。
+// 修复：服务端改用 req.originalUrl.split('?')[0] 拿到不被路由剥前缀的路径。
+// 这条测试用一对真实 RSA 密钥跑端到端签名 → 验证流程，覆盖 sub-router 挂载链路。
+
+test('rustdesk-bridge-host > regression: signature verifies under '
+    + 'app.use(/api/machines, router) sub-mount (full URL path covered)', async () => {
+    const machineId = 'M-REGRESSION-1';
+
+    // 1) 模拟一台已注册 + 已审批机台：用一对临时 RSA-2048 密钥构造 pubkey_pem
+    const machineKey = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const pubkeyPem = machineKey.publicKey.export({ type: 'spki', format: 'pem' });
+    const stores = buildFakeStores({
+        machines: [{
+            machine_id: machineId,
+            pubkey_pem: pubkeyPem,
+            key_id: `VHDMounterKey_${machineId}`,
+            approved: true,
+            revoked: false,
+        }],
+    });
+    const app = buildExpressApp(stores);
+
+    // 2) 模拟 RustDeskReportSigner.SignPolicyPubkeyFetch 的 9 行 \n payload
+    //    （这是机台一侧实际发出的请求字节流）
+    const keyId = `VHDMounterKey_${machineId}`;
+    const timestamp = Date.now();
+    const nonce = crypto.randomBytes(16).toString('hex');
+    const method = 'GET';
+    const fullPath = `/api/machines/${machineId}/rustdesk/policy-pubkey`;
+    const host = '127.0.0.1';
+    const emptyBodyHash = crypto.createHash('sha256').update('', 'utf8').digest('hex');
+    const payload = [
+        'VHDMounterPolicyPubkeyFetchV1',
+        machineId,
+        keyId,
+        method,
+        fullPath,                // ← 与 RustDeskReportSigner 一致：完整 URL 路径，含 /api/machines 前缀
+        host,
+        String(timestamp),
+        nonce,
+        emptyBodyHash,
+    ].join('\n');
+    const signature = crypto.sign('RSA-SHA256', Buffer.from(payload, 'utf8'), {
+        key: machineKey.privateKey,
+        padding: crypto.constants.RSA_PKCS1_PADDING,
+    }).toString('base64');
+
+    // 3) 发起请求：通过 supertest 触发 app.use('/api/machines', bridgeRoutes.router) 挂载链路
+    const res = await request(app)
+        .get(fullPath)
+        .set('Host', host)
+        .set('X-VHDM-KeyId', keyId)
+        .set('X-VHDM-Timestamp', String(timestamp))
+        .set('X-VHDM-Nonce', nonce)
+        .set('X-VHDM-Signature', signature);
+
+    // 4) 关键不变量：签名通过中间件，**不**会因路径前缀剥离而 401
+    //    （即使下游 handler 因 fakeStore 缺其它依赖再退化别的状态码也无所谓——
+    //    我们只关心 requireBridgeMachineSignature 这一关）
+    assert.notEqual(res.status, 401,
+        `requireBridgeMachineSignature 应当通过完整 URL 路径校验签名，'
+        + '当前响应：${res.status} ${res.text}`);
+    assert.notEqual(res.status, 403,
+        '签名应当通过、不应被 keyId 不匹配阻挡（keyId 在 stores 中已对齐）');
 });

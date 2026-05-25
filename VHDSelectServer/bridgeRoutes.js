@@ -154,12 +154,27 @@ function makeRequireBridgeMachineSignature(routeKey) {
 
             const bodyHash = buildBodyHashHex(req);
             const requestHost = (req.get('host') || '').split(':')[0];
+            // 关键：bridgeRoutes 通过 app.use('/api/machines', router) 挂载，
+            // router 内 handler 的 req.path 会**剥掉 mount 前缀** —— 例如真实请求
+            // GET /api/machines/M-1/rustdesk/policy-pubkey 进入 handler 后
+            // req.path == '/M-1/rustdesk/policy-pubkey'。
+            // 而机台一侧用 RustDeskReportSigner.SignXxx 签的是 request.RequestUri
+            // .AbsolutePath，即 '/api/machines/M-1/rustdesk/policy-pubkey'。
+            // 直接 req.path 会让两边 hash 的字节序列差一段 '/api/machines'，
+            // verifier.verify 必然返回 false → 401「机台签名校验失败」。
+            // 这也是为什么本中间件比 deploymentRoutes 的等价校验更脆弱
+            // —— 后者是 app.get(fullPath) 直接挂在 app 上，无 mount 前缀剥离问题。
+            //
+            // 修复：用 req.originalUrl 拿请求原始 URL，再 split('?')[0] 去掉 query。
+            // req.originalUrl 在任何 router 嵌套层级都保持不变。
+            const requestPath = String(req.originalUrl || '').split('?')[0]
+                || (req.baseUrl || '') + (req.path || '');
             const payload = buildSigningPayload({
                 payloadVersion,
                 machineId,
                 keyId,
                 method: req.method,
-                path: req.path,
+                path: requestPath,
                 host: requestHost,
                 timestamp,
                 nonce,
