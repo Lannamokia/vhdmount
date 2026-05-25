@@ -22,15 +22,23 @@ namespace VHDMounter.RustDeskBridge.Pipe
         /// <summary>
         /// 按外壳层语义读取一帧。返回 UTF-8 编码的 JSON 字节数组（无尾随 NUL）。
         /// </summary>
+        /// <exception cref="EndOfStreamException">
+        /// 对端在帧边界正常关闭管道（首字节都没读到）。这是 <b>正常</b> 会话结束，
+        /// 不属于协议错误；调用方应当安静关闭会话，<b>不</b>记录为 ERROR / 协议异常。
+        /// </exception>
         /// <exception cref="InvalidDataException">
-        /// 长度前缀 &gt; <see cref="MaxFrameBytes"/>，或读取被对端意外关闭。
+        /// 长度前缀 &gt; <see cref="MaxFrameBytes"/>，或<b>读到一半</b>被对端关闭
+        /// （已读了部分长度前缀字节或部分载荷字节再断开）。这才是真正的协议异常。
         /// </exception>
         public static async ValueTask<byte[]> ReadFrameAsync(Stream pipe, CancellationToken ct)
         {
             if (pipe == null) throw new ArgumentNullException(nameof(pipe));
 
             var lengthBuffer = new byte[4];
-            await ReadExactAsync(pipe, lengthBuffer, ct).ConfigureAwait(false);
+            // 关键区别：读 length-prefix 时第一次 read 就返回 0 → 视为对端在帧边界
+            // 上正常关闭，抛 EndOfStreamException 让调用方安静收尾。
+            // 已经读了部分前缀字节再断 → 协议异常。
+            await ReadExactAsync(pipe, lengthBuffer, ct, allowCleanEofAtStart: true).ConfigureAwait(false);
 
             var length = BinaryPrimitives.ReadUInt32LittleEndian(lengthBuffer);
             if (length > MaxFrameBytes)
@@ -44,8 +52,9 @@ namespace VHDMounter.RustDeskBridge.Pipe
                 return Array.Empty<byte>();
             }
 
+            // 长度前缀已经读到了 → 必须把载荷读完，半截断开 = 协议异常
             var payload = new byte[length];
-            await ReadExactAsync(pipe, payload, ct).ConfigureAwait(false);
+            await ReadExactAsync(pipe, payload, ct, allowCleanEofAtStart: false).ConfigureAwait(false);
             return payload;
         }
 
@@ -73,7 +82,8 @@ namespace VHDMounter.RustDeskBridge.Pipe
             await pipe.FlushAsync(ct).ConfigureAwait(false);
         }
 
-        private static async ValueTask ReadExactAsync(Stream pipe, byte[] buffer, CancellationToken ct)
+        private static async ValueTask ReadExactAsync(
+            Stream pipe, byte[] buffer, CancellationToken ct, bool allowCleanEofAtStart)
         {
             var offset = 0;
             while (offset < buffer.Length)
@@ -82,7 +92,14 @@ namespace VHDMounter.RustDeskBridge.Pipe
                     .ConfigureAwait(false);
                 if (read == 0)
                 {
-                    throw new InvalidDataException("RustDesk 桥管道在帧读取中途被对端关闭");
+                    if (allowCleanEofAtStart && offset == 0)
+                    {
+                        // 帧边界上对端正常关闭 —— 不是协议错误
+                        throw new EndOfStreamException(
+                            "RustDesk 桥管道已被对端关闭（无新帧）");
+                    }
+                    throw new InvalidDataException(
+                        "RustDesk 桥管道在帧读取中途被对端关闭");
                 }
                 offset += read;
             }

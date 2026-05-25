@@ -173,6 +173,7 @@ namespace VHDMounter.RustDeskBridge.Session
             {
                 _ = await FrameCodec.ReadFrameAsync(pipe, ct).ConfigureAwait(false);
             }
+            catch (EndOfStreamException) { /* 对端正常关闭 —— 静默 */ }
             catch (InvalidDataException) { /* 客户端发了非法帧 —— 仍按 rate_limited 回复 */ }
             catch (IOException) { /* 客户端直接断开 */ }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
@@ -191,6 +192,12 @@ namespace VHDMounter.RustDeskBridge.Session
             try
             {
                 firstFrame = await FrameCodec.ReadFrameAsync(pipe, ct).ConfigureAwait(false);
+            }
+            catch (EndOfStreamException)
+            {
+                // 对端在没发首帧的情况下正常关闭管道（连接试探 / 客户端进程退出 / RustDesk
+                // 主动 disconnect）。这是正常会话结束，不是协议错误，不写 ERROR 级日志。
+                return false;
             }
             catch (InvalidDataException ex)
             {
@@ -344,6 +351,11 @@ namespace VHDMounter.RustDeskBridge.Session
                     try
                     {
                         frameBytes = await FrameCodec.ReadFrameAsync(pipe, ct).ConfigureAwait(false);
+                    }
+                    catch (EndOfStreamException)
+                    {
+                        // 对端在帧边界正常关闭 —— 已握手会话的正常退出路径
+                        return;
                     }
                     catch (InvalidDataException ex)
                     {

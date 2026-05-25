@@ -77,6 +77,31 @@ namespace VHDMounter.Tests.RustDeskBridge.Properties
         }
 
         [Fact]
+        public void ReadFrame_CleanEofAtFrameBoundary_ThrowsEndOfStreamException()
+        {
+            // 对端在帧边界正常关闭：empty stream，对端没发任何字节就 EOF。
+            // 这是会话正常退出，**不**应当被 SessionStateMachine 当协议错误打 ERROR。
+            using var pipe = new MemoryStream();
+            // pipe 立即 EOF，第一次 read 就返回 0
+            Assert.Throws<EndOfStreamException>(() =>
+                FrameCodec.ReadFrameAsync(pipe, CancellationToken.None)
+                    .AsTask().GetAwaiter().GetResult());
+        }
+
+        [Fact]
+        public void ReadFrame_HalfwayThroughLengthPrefix_StillThrowsInvalidData()
+        {
+            // 已经读了部分长度前缀字节再断开 → 半截断开 = 协议错误，仍是 InvalidDataException
+            using var pipe = new MemoryStream();
+            pipe.WriteByte(0x10);
+            pipe.WriteByte(0x00); // 写了 2/4 字节就 EOF
+            pipe.Position = 0;
+            Assert.Throws<InvalidDataException>(() =>
+                FrameCodec.ReadFrameAsync(pipe, CancellationToken.None)
+                    .AsTask().GetAwaiter().GetResult());
+        }
+
+        [Fact]
         public void RoundTrip_EmptyJsonObject()
         {
             var json = Encoding.UTF8.GetBytes("{}");
