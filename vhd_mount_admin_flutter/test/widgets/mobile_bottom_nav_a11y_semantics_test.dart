@@ -30,7 +30,6 @@
 // Property 14（destinations_*_test.dart 中的元数据一致性）保证。
 
 import 'package:flutter/material.dart';
-import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vhd_mount_admin_flutter/app.dart';
 
@@ -104,7 +103,7 @@ void main() {
               'label 完全相等',
         );
         expect(
-          node.hasFlag(SemanticsFlag.isButton),
+          node.flagsCollection.isButton,
           isTrue,
           reason: 'primary slot "${spec.label}" 的 Semantics 必须带 isButton flag',
         );
@@ -124,7 +123,7 @@ void main() {
         reason: 'overflow trigger 的 Semantics.label 必须为 "更多"',
       );
       expect(
-        triggerNode.hasFlag(SemanticsFlag.isButton),
+        triggerNode.flagsCollection.isButton,
         isTrue,
         reason: 'overflow trigger 的 Semantics 必须带 isButton flag',
       );
@@ -154,7 +153,7 @@ void main() {
               'label 完全相等',
         );
         expect(
-          node.hasFlag(SemanticsFlag.isButton),
+          node.flagsCollection.isButton,
           isTrue,
           reason: 'overflow row "${spec.label}" 的 Semantics 必须带 isButton flag',
         );

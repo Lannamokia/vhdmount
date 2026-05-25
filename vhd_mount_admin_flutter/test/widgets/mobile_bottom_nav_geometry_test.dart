@@ -37,7 +37,6 @@
 // 通过的几何断言伪装成失败。其它任何错误（断言失败、空指针、未识别的渲染
 // 错误等）一律按原样转发给默认错误处理器，保证本测试仍然能捕获真实回归。
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vhd_mount_admin_flutter/app.dart';

@@ -30,7 +30,6 @@
 // 对每个 activeKey 与 sheetOpen 组合各跑一个 [testWidgets]；
 // 失败信息携带 `(activeKey, sheetOpen)` 上下文便于定位。
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vhd_mount_admin_flutter/app.dart';
@@ -97,7 +96,7 @@ class _HarnessState extends State<_Harness> {
 
 /// MobileBottomNav 主槽 / 溢出触发器槽 / 溢出行的 Semantics 节点形状统一为
 /// `Semantics(container: true, button: true, excludeSemantics: true,
-/// label: <user-visible name>, selected: <bool>)`。这条精确签名同时排除掉
+/// label: \<user-visible name\>, selected: \<bool\>)`。这条精确签名同时排除掉
 /// MaterialApp / Localizations / ListTile 等其他 Semantics 节点，保证 label
 /// 在 widget 树中只命中一个目标节点。
 List<Semantics> _findSlotSemantics(WidgetTester tester, String label) {
