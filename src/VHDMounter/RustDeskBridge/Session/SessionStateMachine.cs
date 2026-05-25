@@ -734,17 +734,24 @@ namespace VHDMounter.RustDeskBridge.Session
         // ---------- 内部辅助 ----------
 
         /// <summary>
-        /// 事件 1 / 2：把客户端 PID + token SID 打到 trace。失败仅返回 unknown，不抛。
+        /// 事件 1 / 2：把客户端 PID + token SID + image basename + session id 打到 trace。
+        /// 失败时尽量打出 best-effort 字段（PID 通常能拿到，SID/image 可能失败）。
         /// </summary>
         private void EmitClientIdentityTrace(NamedPipeServerStream pipe, string phase)
         {
             try
             {
-                var (pid, sid) = VHDMounter.RustDeskBridge.Pipe.PipeClientIdentity.TryQuery(pipe);
+                var info = VHDMounter.RustDeskBridge.Pipe.PipeClientIdentity.TryQuery(pipe);
                 _diagnostics(
                     $"Bridge[event=pipe_connect_accepted] phase={phase} " +
-                    $"client_pid={(pid?.ToString() ?? "unknown")} client_sid={(sid ?? "unknown")} " +
-                    $"is_local_system={(string.Equals(sid, "S-1-5-18", StringComparison.Ordinal))}");
+                    $"client_pid={(info.Pid?.ToString() ?? "unknown")} " +
+                    $"client_image={(info.ImageBaseName ?? "unknown")} " +
+                    $"client_sid={(info.SidString ?? "unknown")} " +
+                    $"client_session={(info.SessionId?.ToString() ?? "unknown")} " +
+                    $"is_local_system={info.IsLocalSystem}" +
+                    (string.IsNullOrEmpty(info.LastError)
+                        ? string.Empty
+                        : $" identity_error={Truncate(info.LastError, 120)}"));
             }
             catch
             {
