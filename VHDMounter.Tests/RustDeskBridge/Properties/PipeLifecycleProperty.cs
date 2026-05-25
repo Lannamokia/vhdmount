@@ -103,8 +103,14 @@ namespace VHDMounter.Tests.RustDeskBridge.Properties
             {
                 var connected = await ConnectClientWithinAsync(_pipeName, TimeSpan.FromSeconds(5));
                 Assert.True(connected, $"第 {i + 1} 次客户端连接超时（PipeAcceptLoop 未在 1 秒内重建）");
-                // 给 sessionRunner / pipe.Dispose / 重建 一点时间
-                await Task.Delay(200);
+                // 客户端 ConnectAsync 完成 ≠ 服务端 sessionRunner 已经被调用：
+                // 服务端 WaitForConnectionAsync 在 ThreadPool 上排队 resume，
+                // sessionRunner 才执行；在繁忙的 CI runner 上这一段调度可能落到
+                // 几百毫秒。轮询 sessionsHandled 比固定 Task.Delay 更稳。
+                await WaitForSessionsAsync(() => Volatile.Read(ref sessionsHandled),
+                    atLeast: i + 1, timeout: TimeSpan.FromSeconds(5),
+                    because: $"sessionRunner 第 {i + 1} 次未在 5 秒内被调用——"
+                           + "PipeAcceptLoop 可能未在 §1.5 的 1 秒预算内重建管道");
             }
 
             cts.Cancel();
@@ -162,7 +168,21 @@ namespace VHDMounter.Tests.RustDeskBridge.Properties
             });
 
             await Task.WhenAll(t1, t2);
-            await Task.Delay(500); // 让计数收敛
+            // 等到两个 session 都被串行处理完毕（concurrentSessions 归零）。
+            // 原版固定 Task.Delay(500) 在 GHA windows-latest 上不够稳定：
+            // 第二个 sessionRunner 的 await Task.Delay(150, ct) 排队 + ThreadPool
+            // resume 在繁忙 CI 上可能落到几百毫秒以外，让 maxConcurrent 还没收敛
+            // 就被 cancel 打断。轮询 concurrentSessions == 0 是直接观察服务端
+            // 真实状态的方式。
+            await WaitForSessionsAsync(
+                probe: () =>
+                {
+                    lock (lockObj) return concurrentSessions == 0 ? 1 : 0;
+                },
+                atLeast: 1,
+                timeout: TimeSpan.FromSeconds(10),
+                because: "两个 session 未在 10 秒内全部完成—— "
+                       + "可能 PipeAcceptLoop 串行预算被打破");
 
             cts.Cancel();
             await loop.StopAsync();
@@ -200,11 +220,27 @@ namespace VHDMounter.Tests.RustDeskBridge.Properties
             // 第一次连接 → sessionRunner 抛异常
             Assert.True(await ConnectClientWithinAsync(_pipeName, TimeSpan.FromSeconds(5)),
                 "第一次连接超时");
-            await Task.Delay(200);
+            // 客户端 ConnectAsync 完成 ≠ 服务端 sessionRunner 已经被调用：服务端
+            // WaitForConnectionAsync 在 ThreadPool 上排队 resume，sessionRunner 才
+            // 执行；在繁忙的 CI runner 上这一段调度可能落到几百毫秒。直接 Task.Delay
+            // 是 race —— 改为轮询 sessionsHandled，保证看到「第一次抛出」这一事件
+            // 后再让 PipeAcceptLoop 走 §1.5 的 1 秒重建路径。
+            await WaitForSessionsAsync(() => Volatile.Read(ref sessionsHandled), atLeast: 1,
+                timeout: TimeSpan.FromSeconds(5),
+                because: "sessionRunner 第 1 次未在 5 秒内被调用");
 
             // 第二次连接 → 应当能成功（PipeAcceptLoop 已重建）
             Assert.True(await ConnectClientWithinAsync(_pipeName, TimeSpan.FromSeconds(5)),
                 "sessionRunner 抛异常后 PipeAcceptLoop 没有 1 秒内重建管道");
+            // 同样轮询：等到 sessionRunner 被调用第 2 次（即 PipeAcceptLoop 重建
+            // 后接受了第二次连接），再去 cancel + StopAsync。原版用 cts.Cancel()
+            // 紧跟 ConnectClientWithinAsync 之后，在 GHA windows-latest 上有
+            // race —— 客户端 kernel 已经返回，但服务端 WaitForConnectionAsync
+            // resume 的 ThreadPool work item 还没跑到，sessionRunner 自然没递增。
+            await WaitForSessionsAsync(() => Volatile.Read(ref sessionsHandled), atLeast: 2,
+                timeout: TimeSpan.FromSeconds(5),
+                because: "sessionRunner 第 2 次未在 5 秒内被调用——PipeAcceptLoop "
+                       + "未在 §1.5 的 1 秒预算内重建管道并接受第二次连接");
 
             cts.Cancel();
             await loop.StopAsync();
@@ -229,6 +265,28 @@ namespace VHDMounter.Tests.RustDeskBridge.Properties
             {
                 return false;
             }
+        }
+
+        /// <summary>
+        /// 轮询 <paramref name="probe"/> 直到读到值 ≥ <paramref name="atLeast"/>，
+        /// 或在 <paramref name="timeout"/> 内未达成则 <see cref="Assert.Fail(string)"/>。
+        ///
+        /// 用于替代「客户端 ConnectAsync 完成后 Task.Delay(N)」这种依赖固定休眠
+        /// 让服务端 sessionRunner 完成调度的脆弱写法 —— GHA windows-latest 共享
+        /// VM 上 ThreadPool 调度可能落到几百毫秒以外，固定 Delay 是 race。
+        /// </summary>
+        private static async Task WaitForSessionsAsync(
+            Func<int> probe, int atLeast, TimeSpan timeout, string because)
+        {
+            var deadline = DateTime.UtcNow + timeout;
+            while (DateTime.UtcNow < deadline)
+            {
+                if (probe() >= atLeast) return;
+                await Task.Delay(20).ConfigureAwait(false);
+            }
+            // 最后一次复查，给极端 GC pause 留个机会。
+            if (probe() >= atLeast) return;
+            Assert.Fail($"{because}（实际值 {probe()}，期望 ≥ {atLeast}）");
         }
     }
 }
