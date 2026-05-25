@@ -18,6 +18,8 @@ part 'src/core.dart';
 part 'src/data.dart';
 part 'src/state.dart';
 part 'src/shell.dart';
+part 'src/dashboard_destinations.dart';
+part 'src/mobile_bottom_nav.dart';
 part 'src/dashboard.dart';
 part 'src/deployments.dart';
 part 'src/machine_logs.dart';

@@ -4,86 +4,37 @@ class DashboardScreen extends StatelessWidget {
   const DashboardScreen({
     super.key,
     required this.controller,
-    required this.selectedIndex,
+    required this.selectedKey,
     required this.onDestinationSelected,
   });
 
   final AppController controller;
-  final int selectedIndex;
-  final ValueChanged<int> onDestinationSelected;
+  final DestinationKey selectedKey;
+  final ValueChanged<DestinationKey> onDestinationSelected;
 
   @override
   Widget build(BuildContext context) {
     Future<void> openLogsForMachine(String machineId) async {
       await controller.loadMachineLogSessions(machineId: machineId);
-      onDestinationSelected(1);
+      onDestinationSelected(DestinationKey.machineLogs);
     }
 
     Future<void> openAuditForMachine(String machineId) async {
       await controller.loadAudit(machineId: machineId);
-      onDestinationSelected(3);
+      onDestinationSelected(DestinationKey.audit);
     }
-
-    final destinations = <DashboardDestinationSpec>[
-      const DashboardDestinationSpec(
-        label: '机器管理',
-        subtitle: '审批、保护、EVHD',
-        icon: Icons.dns_rounded,
-        color: AppPalette.coral,
-      ),
-      const DashboardDestinationSpec(
-        label: '机台日志',
-        subtitle: '会话、分页、详情',
-        icon: Icons.receipt_long_rounded,
-        color: AppPalette.sun,
-      ),
-      const DashboardDestinationSpec(
-        label: '证书',
-        subtitle: '信任链、PEM、移除',
-        icon: Icons.verified_user_rounded,
-        color: AppPalette.sky,
-      ),
-      const DashboardDestinationSpec(
-        label: '审计',
-        subtitle: '过滤、搜索、回溯',
-        icon: Icons.history_rounded,
-        color: AppPalette.mint,
-      ),
-      const DashboardDestinationSpec(
-        label: '设置',
-        subtitle: 'OTP、密码、默认值',
-        icon: Icons.tune_rounded,
-        color: AppPalette.sun,
-      ),
-      const DashboardDestinationSpec(
-        label: '部署管理',
-        subtitle: '包上传、任务下发、历史',
-        icon: Icons.rocket_launch_rounded,
-        color: AppPalette.coral,
-      ),
-      const DashboardDestinationSpec(
-        label: 'RustDesk 远程控制',
-        subtitle: '可信主控端、命名管道密钥',
-        icon: Icons.cast_rounded,
-        color: AppPalette.sky,
-      ),
-      if (Platform.isWindows) ...[
-        const DashboardDestinationSpec(
-          label: '离线工具',
-          subtitle: '密钥、清单、证书',
-          icon: Icons.build_circle_rounded,
-          color: AppPalette.sky,
-        ),
-      ],
-    ];
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final mobile = constraints.maxWidth < 720;
-        final compact =
-            mobile ||
-            constraints.maxWidth < 1100 ||
-            constraints.maxHeight < 720;
+        final classification = LayoutClassification.classify(
+          constraints.maxWidth,
+          constraints.maxHeight,
+        );
+        final mobile = classification.mobile;
+        final compact = classification.compact;
+        final destinations = compact
+            ? DashboardDestinations.mobile()
+            : DashboardDestinations.desktop(isWindows: Platform.isWindows);
         final extendBodyForBottomNav = mobile && compact;
         final showOverviewCaptions = !mobile;
         final overviewCards = <Widget>[
@@ -122,31 +73,47 @@ class DashboardScreen extends StatelessWidget {
             caption: showOverviewCaptions ? '当前连接的管理服务地址。' : null,
           ),
         ];
-        final pages = <Widget>[
-          MachinesView(
+        final pagesByKey = <DestinationKey, Widget>{
+          DestinationKey.machines: MachinesView(
             controller: controller,
             onOpenLogsForMachine: openLogsForMachine,
             onOpenAuditForMachine: openAuditForMachine,
             embedInParentScroll: mobile,
           ),
-          MachineLogsView(controller: controller, embedInParentScroll: mobile),
-          CertificatesView(controller: controller, embedInParentScroll: mobile),
-          AuditView(controller: controller, embedInParentScroll: mobile),
-          SettingsView(controller: controller, embedInParentScroll: mobile),
-          DeploymentsView(
+          DestinationKey.machineLogs: MachineLogsView(
+            controller: controller,
+            embedInParentScroll: mobile,
+          ),
+          DestinationKey.certificates: CertificatesView(
+            controller: controller,
+            embedInParentScroll: mobile,
+          ),
+          DestinationKey.audit: AuditView(
+            controller: controller,
+            embedInParentScroll: mobile,
+          ),
+          DestinationKey.settings: SettingsView(
+            controller: controller,
+            embedInParentScroll: mobile,
+          ),
+          DestinationKey.deployments: DeploymentsView(
             key: const Key('deployments_view'),
             controller: controller,
             embedInParentScroll: mobile,
           ),
-          RustDeskRemoteControlView(
+          DestinationKey.rustDeskRemoteControl: RustDeskRemoteControlView(
             key: const Key('rustdesk_remote_control_view'),
             controller: controller,
             embedInParentScroll: mobile,
           ),
-          if (Platform.isWindows) ...[
-            OfflineToolsView(controller: controller),
-          ],
-        ];
+        };
+        if (Platform.isWindows) {
+          pagesByKey[DestinationKey.offlineTools] = OfflineToolsView(
+            controller: controller,
+          );
+        }
+        final activePage =
+            pagesByKey[selectedKey] ?? pagesByKey[DestinationKey.machines]!;
         final overviewSection = OverviewStatsGrid(
           cards: overviewCards,
           singleRow: compact && !mobile,
@@ -168,8 +135,8 @@ class DashboardScreen extends StatelessWidget {
             );
           },
           child: KeyedSubtree(
-            key: ValueKey<int>(selectedIndex),
-            child: pages[selectedIndex],
+            key: ValueKey<DestinationKey>(selectedKey),
+            child: activePage,
           ),
         );
 
@@ -214,17 +181,10 @@ class DashboardScreen extends StatelessWidget {
           backgroundColor: AppPalette.canvasWarm,
           extendBody: extendBodyForBottomNav,
           bottomNavigationBar: compact
-              ? NavigationBar(
-                  selectedIndex: selectedIndex,
+              ? MobileBottomNav(
+                  layout: DashboardDestinations.mobileNavLayout(),
+                  activeKey: selectedKey,
                   onDestinationSelected: onDestinationSelected,
-                  destinations: destinations
-                      .map(
-                        (item) => NavigationDestination(
-                          icon: Icon(item.icon),
-                          label: item.label,
-                        ),
-                      )
-                      .toList(),
                 )
               : null,
           body: AdminBackdrop(
@@ -234,7 +194,11 @@ class DashboardScreen extends StatelessWidget {
                 child: mobile
                     ? SingleChildScrollView(
                         padding: EdgeInsets.only(
-                          bottom: extendBodyForBottomNav ? 112 : 20,
+                          bottom: extendBodyForBottomNav
+                              ? MobileBottomNav.kHeight +
+                                    MediaQuery.viewPaddingOf(context).bottom +
+                                    36
+                              : 20,
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -303,9 +267,13 @@ class DashboardScreen extends StatelessWidget {
                                                   destinations[index].subtitle,
                                               icon: destinations[index].icon,
                                               color: destinations[index].color,
-                                              selected: selectedIndex == index,
+                                              selected:
+                                                  destinations[index].key ==
+                                                  selectedKey,
                                               onTap: () =>
-                                                  onDestinationSelected(index),
+                                                  onDestinationSelected(
+                                                    destinations[index].key,
+                                                  ),
                                             ),
                                             if (index !=
                                                 destinations.length - 1)

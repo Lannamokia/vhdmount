@@ -190,7 +190,13 @@ class AppPalette {
   static const Color surfaceStrong = Color(0xFFFFFFFF);
   static const Color border = Color(0xFFE7DDCF);
   static const Color ink = Color(0xFF193239);
-  static const Color muted = Color(0xFF6A7F85);
+  // muted 是次级文字 / 未选中图标的统一前景色，主要落在 surface / surfaceStrong /
+  // canvasWarm / canvasCool 等几乎纯白的背景上。原值 0xFF6A7F85 在白底下的
+  // WCAG 2.1 contrast ≈ 4.21:1，恰好低于 AA 4.5:1 阈值（mobile-bottom-nav-redesign
+  // R5.4：MobileBottomNav 未选中槽位 label/icon vs surfaceStrong ≥ 4.5:1）。
+  // 这里把同一蓝灰色调系微微下调亮度（保持 hue），把白底对比度抬到 ≈ 4.96:1，
+  // 同时不影响 ink/danger 等主前景色的视觉关系。
+  static const Color muted = Color(0xFF617378);
   static const Color mint = Color(0xFF26B38D);
   static const Color mintDeep = Color(0xFF0F7762);
   static const Color coral = Color(0xFFFF8F6C);
@@ -962,14 +968,35 @@ class OverviewStatsGrid extends StatelessWidget {
   }
 }
 
+/// 稳定指代每个 Dashboard Destination 的标识符。
+///
+/// 该 key 独立于 destinations 列表中的位置索引，供 MobileBottomNav 与
+/// DesktopSidebar 共享一份 Destination 元数据契约，并允许 `openLogsForMachine`
+/// 之类的跨页跳转按 key 而非整数索引派发。
+enum DestinationKey {
+  machines,
+  machineLogs,
+  certificates,
+  audit,
+  settings,
+  deployments,
+  rustDeskRemoteControl,
+  offlineTools,
+}
+
 class DashboardDestinationSpec {
   const DashboardDestinationSpec({
     required this.label,
     required this.subtitle,
     required this.icon,
     required this.color,
+    // 过渡期默认值：现有 `dashboard.dart` 中的 destinations 实例尚未迁移到
+    // 按 key 派发的契约，会在后续任务（4.4 / 5.x）中改造。届时本默认值会被
+    // 移除，恢复为 `required this.key`。
+    this.key = DestinationKey.machines,
   });
 
+  final DestinationKey key;
   final String label;
   final String subtitle;
   final IconData icon;
