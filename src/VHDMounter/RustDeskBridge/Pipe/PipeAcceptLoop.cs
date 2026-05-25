@@ -80,6 +80,13 @@ namespace VHDMounter.RustDeskBridge.Pipe
         // 与 StartAsync 无关。
         private TaskCompletionSource<bool> _firstPipeReady;
 
+        // RunAsync 中最近一次 CreatePipeInstance 失败的诊断信息。
+        //
+        // StartReadyTimeout 触发时把它合进 TimeoutException 消息里，让调用方
+        // （特别是 CI 测试）能看到 Win32 错误码与原始失败描述，不必猜「为什么 30s 内
+        // 没创建成功」。在 OK 路径上这个字段保持 null，对生产调用方透明。
+        private (int Win32Code, string Detail)? _lastCreateFailure;
+
         public PipeAcceptLoop(
             string pipeName,
             SessionRunnerDelegate sessionRunner,
@@ -137,8 +144,12 @@ namespace VHDMounter.RustDeskBridge.Pipe
             {
                 // StartReadyTimeout 触发，把循环也停掉
                 try { _cts.Cancel(); } catch { /* ignore */ }
+                var failure = _lastCreateFailure;
+                var detail = failure.HasValue
+                    ? $"；最近一次 CreateNamedPipeW 失败：win32={failure.Value.Win32Code} {failure.Value.Detail}"
+                    : "（未观察到 CreatePipeInstance 失败诊断；可能 ThreadPool starvation 让 RunAsync 始终未被调度）";
                 throw new TimeoutException(
-                    $"PipeAcceptLoop 在 {(int)StartReadyTimeout.TotalSeconds}s 内未能完成首个管道实例创建");
+                    $"PipeAcceptLoop 在 {(int)StartReadyTimeout.TotalSeconds}s 内未能完成首个管道实例创建{detail}");
             }
         }
 
@@ -167,6 +178,7 @@ namespace VHDMounter.RustDeskBridge.Pipe
                 _cts = null;
                 _runner = null;
                 _firstPipeReady = null;
+                _lastCreateFailure = null;
             }
         }
 
@@ -213,6 +225,7 @@ namespace VHDMounter.RustDeskBridge.Pipe
                     when (ex.InnerException is Win32Exception w32 && w32.NativeErrorCode == Win32ErrorAllPipeInstancesBusy)
                 {
                     _diagnostics($"RustDesk 桥管道被占用，{(int)PipeBusyBackoff.TotalSeconds}s 后重试");
+                    _lastCreateFailure = (w32.NativeErrorCode, Truncate(ex.Message, 200));
                     LogPipeCreateFailure(w32.NativeErrorCode, ex.Message);
                     await DelayOrCancel(PipeBusyBackoff, ct).ConfigureAwait(false);
                     continue;
@@ -225,6 +238,7 @@ namespace VHDMounter.RustDeskBridge.Pipe
                         $"RustDesk 桥管道创建失败（第 {consecutiveOtherFailures} 次），" +
                         $"{(int)backoff.TotalSeconds}s 后重试：{ex.Message}");
                     var win32Code = ex.InnerException is Win32Exception w ? w.NativeErrorCode : 0;
+                    _lastCreateFailure = (win32Code, Truncate(ex.Message, 200));
                     LogPipeCreateFailure(win32Code, ex.Message);
                     await DelayOrCancel(backoff, ct).ConfigureAwait(false);
                     continue;
