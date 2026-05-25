@@ -45,6 +45,16 @@ namespace VHDMounter.RustDeskBridge.Pipe
         public static readonly TimeSpan FirstFailureBackoff = TimeSpan.FromSeconds(5);
         public static readonly TimeSpan MaxFailureBackoff = TimeSpan.FromSeconds(20);
 
+        /// <summary>
+        /// <see cref="StartAsync"/> 等待首个 pipe instance 进入 namespace 的最长时间。
+        ///
+        /// 默认 30s 给 GHA 共享 runner 留足缓冲（cold disk + Defender 扫描 + ThreadPool
+        /// 排队），但远小于 host 整体启动超时；超出则 StartAsync 抛
+        /// <see cref="TimeoutException"/> 让调用方按 host 启动失败处理（不会让 host
+        /// 永久卡在 await StartAsync）。生产环境通常只需几十毫秒。
+        /// </summary>
+        public static readonly TimeSpan StartReadyTimeout = TimeSpan.FromSeconds(30);
+
         private readonly string _pipeName;
         private readonly SessionRunnerDelegate _sessionRunner;
         private readonly HandshakeRateLimiter _rateLimiter;
@@ -54,6 +64,21 @@ namespace VHDMounter.RustDeskBridge.Pipe
 
         private CancellationTokenSource _cts;
         private Task _runner;
+
+        // 首次成功 CreateNamedPipeW 后置位的就绪信号。
+        //
+        // 没有它时 StartAsync 是 fire-and-forget：把 RunAsync 丢到 ThreadPool 就立刻
+        // 返回，客户端在 `await StartAsync` 之后立即 ConnectAsync，但此时 P/Invoke
+        // CreateNamedPipeW 还没把 pipe 挂到 named-pipe namespace 里，
+        // NamedPipeClientStream.ConnectInternal 会一直 retry 直到 timeout（在本地
+        // SSD + 空机上几十毫秒就能成功；在 GHA windows-latest 共享 VM 上可能撞到
+        // ThreadPool 调度延迟 + Defender 实时扫描，五秒级 timeout 也偶尔输掉）。
+        //
+        // 这是 production race condition：BridgeServerHost 等任何调用方都受影响，CI
+        // 只是把它暴露出来的最低成本探针。修法是让 StartAsync 等到第一个 pipe instance
+        // 真的进入 namespace 后才返回——后续的重建（§1.5）由 RunAsync 自己负责，
+        // 与 StartAsync 无关。
+        private TaskCompletionSource<bool> _firstPipeReady;
 
         public PipeAcceptLoop(
             string pipeName,
@@ -75,21 +100,55 @@ namespace VHDMounter.RustDeskBridge.Pipe
             _diagnostics = diagnostics ?? (_ => { });
         }
 
-        public Task StartAsync(CancellationToken ct)
+        public async Task StartAsync(CancellationToken ct)
         {
             if (_runner != null)
             {
                 throw new InvalidOperationException("PipeAcceptLoop 已经启动");
             }
             _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            _firstPipeReady = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
             _runner = Task.Run(() => RunAsync(_cts.Token), CancellationToken.None);
-            return Task.CompletedTask;
+
+            // 等到 RunAsync 第一次成功 CreatePipeInstance、且 pipe 已挂到 named-pipe
+            // namespace 后再返回。这样调用方在 `await StartAsync` 后可以零 race
+            // 直接 ConnectAsync。
+            //
+            // 错误传播策略：
+            //   - 调用方 ct 触发：把异常透传出去（OperationCanceledException）
+            //   - StartReadyTimeout 触发：抛 TimeoutException，由调用方 + 退到
+            //     host 启动失败路径
+            //   - RunAsync 在第一次 CreatePipeInstance 上反复抛异常：RunAsync 会按
+            //     §1.7 退避表自我重试；如果 30s 内一直拿不到 pipe，本 StartAsync
+            //     按 timeout 处理（说明环境根本起不来，不应让 host 永久卡死）
+            using var startCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            startCts.CancelAfter(StartReadyTimeout);
+            try
+            {
+                await _firstPipeReady.Task.WaitAsync(startCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // 外部取消：让 RunAsync 自己收尾，把异常向上抛
+                throw;
+            }
+            catch (OperationCanceledException)
+            {
+                // StartReadyTimeout 触发，把循环也停掉
+                try { _cts.Cancel(); } catch { /* ignore */ }
+                throw new TimeoutException(
+                    $"PipeAcceptLoop 在 {(int)StartReadyTimeout.TotalSeconds}s 内未能完成首个管道实例创建");
+            }
         }
 
         public async Task StopAsync()
         {
             if (_cts == null) return;
             try { _cts.Cancel(); } catch (ObjectDisposedException) { /* already disposed */ }
+            // 如果 StartAsync 还在 await _firstPipeReady（极端情况：调用方先 StartAsync
+            // 然后立刻 StopAsync），把 TCS 标记为取消，让 StartAsync 立即解开。
+            try { _firstPipeReady?.TrySetCanceled(); } catch { /* ignore */ }
             try
             {
                 if (_runner != null)
@@ -107,6 +166,7 @@ namespace VHDMounter.RustDeskBridge.Pipe
                 try { _cts.Dispose(); } catch { /* ignore */ }
                 _cts = null;
                 _runner = null;
+                _firstPipeReady = null;
             }
         }
 
@@ -119,6 +179,22 @@ namespace VHDMounter.RustDeskBridge.Pipe
 
         private async Task RunAsync(CancellationToken ct)
         {
+            try
+            {
+                await RunLoopAsync(ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                // 极端情况：循环退出时（例如外部 ct 在第一次 CreatePipeInstance 之前
+                // 就触发取消、或者首个 CreatePipeInstance 反复失败到 ct 取消），
+                // _firstPipeReady 仍未被解锁。这里兜底取消，避免 StartAsync 一直
+                // 阻塞到 StartReadyTimeout 才放手。
+                try { _firstPipeReady?.TrySetCanceled(); } catch { /* ignore */ }
+            }
+        }
+
+        private async Task RunLoopAsync(CancellationToken ct)
+        {
             int consecutiveOtherFailures = 0;
 
             while (!ct.IsCancellationRequested)
@@ -128,6 +204,10 @@ namespace VHDMounter.RustDeskBridge.Pipe
                 {
                     pipe = BridgePipeFactory.CreatePipeInstance(_pipeName);
                     consecutiveOtherFailures = 0;
+                    // 首个 pipe 已挂入 named-pipe namespace，解锁 StartAsync。
+                    // TrySetResult 的设计是「至多一次」：后续重建（§1.5）不会再触发，
+                    // 只有第一次创建成功的事件能解锁外部 await。
+                    _firstPipeReady?.TrySetResult(true);
                 }
                 catch (BridgePipeCreateException ex)
                     when (ex.InnerException is Win32Exception w32 && w32.NativeErrorCode == Win32ErrorAllPipeInstancesBusy)
