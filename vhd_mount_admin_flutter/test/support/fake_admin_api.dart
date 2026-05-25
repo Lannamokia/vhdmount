@@ -815,4 +815,45 @@ class FakeAdminApi implements AdminApi {
     ];
     return entry;
   }
+
+  // ─── RustDesk 上报记录 fakes ───────────────────────────────────────────
+  List<RustDeskReportSummary> rustDeskReports = <RustDeskReportSummary>[];
+  Map<String, String> rustDeskReportPlaintexts = <String, String>{};
+  int getRustDeskReportsCalls = 0;
+  int readRustDeskReportPlaintextCalls = 0;
+  String? lastReadRustDeskReportMachineId;
+  String? lastReadRustDeskReportReason;
+
+  @override
+  Future<List<RustDeskReportSummary>> getRustDeskReports() async {
+    getRustDeskReportsCalls += 1;
+    return rustDeskReports;
+  }
+
+  @override
+  Future<RustDeskReportPlaintext> readRustDeskReportPlaintext(
+    String machineId,
+    String reason,
+  ) async {
+    readRustDeskReportPlaintextCalls += 1;
+    lastReadRustDeskReportMachineId = machineId;
+    lastReadRustDeskReportReason = reason;
+    final summary = rustDeskReports.firstWhere(
+      (r) => r.machineId == machineId,
+      orElse: () => throw AdminApiException(
+        '该机台暂无 RustDesk 上报记录 (statusCode=404)',
+      ),
+    );
+    return RustDeskReportPlaintext(
+      machineId: summary.machineId,
+      rustDeskId: summary.rustDeskId,
+      passwordKind: summary.passwordKind,
+      reportedAt: summary.reportedAt,
+      passwordPlaintext: rustDeskReportPlaintexts[machineId] ?? '',
+      passwordHashPrefix: summary.passwordHashPrefix,
+      lastWrapKeyId: summary.lastWrapKeyId,
+      secretVersion: summary.secretVersion,
+      updatedAt: summary.updatedAt,
+    );
+  }
 }

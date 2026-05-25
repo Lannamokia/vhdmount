@@ -26,7 +26,7 @@ class _RustDeskRemoteControlViewState extends State<RustDeskRemoteControlView>
     with SingleTickerProviderStateMixin {
   late final TabController _tabController;
 
-  static const _tabs = <String>['可信主控端', '命名管道交互密钥'];
+  static const _tabs = <String>['可信主控端', '命名管道交互密钥', '上报记录'];
 
   @override
   void initState() {
@@ -78,6 +78,10 @@ class _RustDeskRemoteControlViewState extends State<RustDeskRemoteControlView>
                 embedInParentScroll: widget.embedInParentScroll,
               ),
               BridgeSecretView(
+                controller: widget.controller,
+                embedInParentScroll: widget.embedInParentScroll,
+              ),
+              RustDeskReportsView(
                 controller: widget.controller,
                 embedInParentScroll: widget.embedInParentScroll,
               ),

@@ -990,6 +990,29 @@ class AppController extends ChangeNotifier {
     await loadBridgeSecretVersions();
   }
 
+  // ─── RustDesk 上报记录（任务 17.x：管理面新 Tab） ─────────────────────────
+  // 机台通过 POST /api/machines/:machineId/rustdesk/report 把 RustDesk ID + 加密
+  // 后的密码上报；服务端用 K 解密落盘到 rustdesk_reports 表。本管理面读两条
+  // 端点：列表（不含明文）+ 单机 plaintext（OTP step-up）。
+
+  List<RustDeskReportSummary> rustDeskReports = <RustDeskReportSummary>[];
+
+  Future<void> loadRustDeskReports() async {
+    rustDeskReports = await _runAction(api.getRustDeskReports);
+    notifyListeners();
+  }
+
+  /// 读取单台机台的明文密码 + 完整上报摘要。OTP step-up 由 _runAction 的统一
+  /// 拦截透明触发；非空 [reason] 会写入审计行（与 EVHD 明文读取一致）。
+  Future<RustDeskReportPlaintext> readRustDeskReportPlaintext(
+    String machineId,
+    String reason,
+  ) async {
+    return _runAction(
+      () => api.readRustDeskReportPlaintext(machineId, reason),
+    );
+  }
+
   @override
   void dispose() {
     _otpExpiryTimer?.cancel();

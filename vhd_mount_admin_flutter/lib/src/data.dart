@@ -1562,6 +1562,15 @@ abstract class AdminApi {
     required List<int> rawBytes,
     String? auditNote,
   });
+
+  /// 列出全部机台最近一条 RustDesk 上报摘要（不含明文密码）。
+  Future<List<RustDeskReportSummary>> getRustDeskReports();
+
+  /// 读取单台机台的明文密码 + 完整摘要（OTP step-up + 审计）。
+  Future<RustDeskReportPlaintext> readRustDeskReportPlaintext(
+    String machineId,
+    String reason,
+  );
 }
 
 class _MultipartFile {
@@ -2494,6 +2503,36 @@ class HttpAdminApi implements AdminApi {
     }
     return BridgeSecretVersionMetadata.fromJson(json);
   }
+
+  @override
+  Future<List<RustDeskReportSummary>> getRustDeskReports() async {
+    final json = await _requestJson(
+      'GET',
+      '/api/security/rustdesk-reports',
+    );
+    return (json['reports'] as List<dynamic>? ?? <dynamic>[])
+        .whereType<Map<String, dynamic>>()
+        .map(RustDeskReportSummary.fromJson)
+        .toList();
+  }
+
+  @override
+  Future<RustDeskReportPlaintext> readRustDeskReportPlaintext(
+    String machineId,
+    String reason,
+  ) async {
+    final encodedReason = Uri.encodeQueryComponent(reason);
+    final json = await _requestJson(
+      'GET',
+      '/api/security/rustdesk-reports/${encodePathSegment(machineId)}/plaintext'
+      '?reason=$encodedReason',
+    );
+    final entry = json['report'];
+    if (entry is Map<String, dynamic>) {
+      return RustDeskReportPlaintext.fromJson(entry);
+    }
+    return RustDeskReportPlaintext.fromJson(json);
+  }
 }
 
 
@@ -2679,3 +2718,147 @@ class TrustedRustDeskControllerDraft {
 /// HTTP 端点实现挂在 HttpAdminApi 类内部（@override 路径），无需 extension 重复定义。
 /// 仅保留数据模型与枚举在本 part 文件中。
 
+
+
+/// 一台机台最近一条 RustDesk 上报摘要（**不**含明文密码）。
+///
+/// 服务端 `GET /api/security/rustdesk-reports` 返回的列表元素 + 单机查询的非
+/// plaintext 字段都用这个值对象建模。明文密码通过单独的
+/// [RustDeskReportPlaintext] 走带 OTP step-up 的端点取回。
+class RustDeskReportSummary {
+  const RustDeskReportSummary({
+    required this.machineId,
+    required this.rustDeskId,
+    required this.passwordKind,
+    required this.reportedAt,
+    this.passwordHashPrefix,
+    this.lastWrapKeyId,
+    this.secretVersion,
+    this.updatedAt,
+  });
+
+  /// 机台 ID（主键）。
+  final String machineId;
+
+  /// 机台上报的 RustDesk ID（数字字符串）。
+  final String rustDeskId;
+
+  /// 密码类型：`temporary` / `permanent` / `preset` / `absent`。
+  final String passwordKind;
+
+  /// 机台端"上报发生时间"（毫秒级时间戳，但服务端持久化为 ISO 字符串）。
+  final String reportedAt;
+
+  /// `sha256(plaintext)[..8]`：在审计中代指密码用，明文不返回时也给前端一个
+  /// 可显示的"密码指纹"。`absent` / 空密码时为 `null`。
+  final String? passwordHashPrefix;
+
+  /// 本次上报使用的 wrap_key ID（用于服务端解密 password 密文）。
+  final String? lastWrapKeyId;
+
+  /// 上报时机台用的 RustDeskClientSharedSecret 版本。
+  final int? secretVersion;
+
+  /// 服务端 upsert 写入时间。`reportedAt` 之后；通常用于刷新动画。
+  final String? updatedAt;
+
+  bool get hasPassword =>
+      passwordKind != 'absent' && (passwordHashPrefix != null);
+
+  String get passwordKindLabel {
+    switch (passwordKind) {
+      case 'temporary':
+        return '临时密码';
+      case 'permanent':
+        return '永久密码';
+      case 'preset':
+        return '预设密码';
+      case 'absent':
+        return '未设置';
+      default:
+        return passwordKind;
+    }
+  }
+
+  String get localizedReportedAt =>
+      reportedAt.isEmpty ? '未知时间' : formatAuditTimestamp(reportedAt);
+
+  String get localizedUpdatedAt {
+    if (updatedAt == null || updatedAt!.isEmpty) {
+      return localizedReportedAt;
+    }
+    return formatAuditTimestamp(updatedAt!);
+  }
+
+  factory RustDeskReportSummary.fromJson(Map<String, dynamic> json) {
+    return RustDeskReportSummary(
+      machineId: (json['machineId'] as String?) ?? '',
+      rustDeskId: (json['rustDeskId'] as String?) ?? '',
+      passwordKind: (json['passwordKind'] as String?) ?? 'absent',
+      reportedAt: (json['reportedAt'] as String?) ?? '',
+      passwordHashPrefix: json['passwordHashPrefix'] as String?,
+      lastWrapKeyId: json['lastWrapKeyId'] as String?,
+      secretVersion: json['secretVersion'] is num
+          ? (json['secretVersion'] as num).toInt()
+          : null,
+      updatedAt: json['updatedAt'] as String?,
+    );
+  }
+}
+
+/// 包含明文密码的 RustDesk 上报记录（仅 OTP step-up 通过后由后端返回）。
+///
+/// 与 [RustDeskReportSummary] 字段几乎一致，多了 `passwordPlaintext` 一项；
+/// 调用方读到后应在 UI 关闭时清空，不应长期持有。
+class RustDeskReportPlaintext {
+  const RustDeskReportPlaintext({
+    required this.machineId,
+    required this.rustDeskId,
+    required this.passwordKind,
+    required this.reportedAt,
+    required this.passwordPlaintext,
+    this.passwordHashPrefix,
+    this.lastWrapKeyId,
+    this.secretVersion,
+    this.updatedAt,
+  });
+
+  final String machineId;
+  final String rustDeskId;
+  final String passwordKind;
+  final String reportedAt;
+
+  /// 明文密码。`passwordKind == 'absent'` 时为空字符串。
+  final String passwordPlaintext;
+  final String? passwordHashPrefix;
+  final String? lastWrapKeyId;
+  final int? secretVersion;
+  final String? updatedAt;
+
+  RustDeskReportSummary toSummary() => RustDeskReportSummary(
+        machineId: machineId,
+        rustDeskId: rustDeskId,
+        passwordKind: passwordKind,
+        reportedAt: reportedAt,
+        passwordHashPrefix: passwordHashPrefix,
+        lastWrapKeyId: lastWrapKeyId,
+        secretVersion: secretVersion,
+        updatedAt: updatedAt,
+      );
+
+  factory RustDeskReportPlaintext.fromJson(Map<String, dynamic> json) {
+    return RustDeskReportPlaintext(
+      machineId: (json['machineId'] as String?) ?? '',
+      rustDeskId: (json['rustDeskId'] as String?) ?? '',
+      passwordKind: (json['passwordKind'] as String?) ?? 'absent',
+      reportedAt: (json['reportedAt'] as String?) ?? '',
+      passwordPlaintext: (json['passwordPlaintext'] as String?) ?? '',
+      passwordHashPrefix: json['passwordHashPrefix'] as String?,
+      lastWrapKeyId: json['lastWrapKeyId'] as String?,
+      secretVersion: json['secretVersion'] is num
+          ? (json['secretVersion'] as num).toInt()
+          : null,
+      updatedAt: json['updatedAt'] as String?,
+    );
+  }
+}
