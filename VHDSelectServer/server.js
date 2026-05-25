@@ -30,6 +30,7 @@ const { PolicySigningStore } = require('./policySigningStore');
 const { ReportStore } = require('./reportStore');
 const { createBridgeRoutes } = require('./bridgeRoutes');
 const { createTrustedControllerRoutes } = require('./trustedControllerRoutes');
+const { createRustDeskReportRoutes } = require('./rustDeskReportRoutes');
 const { createBridgeSecretRoutes } = require('./bridgeSecretRoutes');
 const {
     ValidationError,
@@ -1786,6 +1787,9 @@ async function createApp(options = {}) {
 
         const bridgeSecretRoutes = createBridgeSecretRoutes(buildBridgeRouteDeps());
         app.use('/api/security', bridgeSecretRoutes.router);
+
+        const rustDeskReportRoutes = createRustDeskReportRoutes(buildBridgeRouteDeps());
+        app.use('/api/security', rustDeskReportRoutes.router);
     } else {
         bridgeWarn('RustDesk 桥路由未挂载：runtime 缺少 bridge 存储实例（数据库未就绪？）');
     }

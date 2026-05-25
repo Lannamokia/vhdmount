@@ -77,6 +77,22 @@ class ReportStore {
     }
 
     /**
+     * 列出全部机台最近一条上报摘要（不含 plaintext）—— 给管理面"RustDesk 上报记录"
+     * Tab 渲染列表用。返回顺序：reported_at DESC（最新在前）。
+     */
+    async listAll() {
+        return this.database.withClient(async (client) => {
+            const result = await client.query(`
+                SELECT machine_id, rust_desk_id, password_kind, password_hash_prefix,
+                       last_wrap_key_id, secret_version, reported_at, updated_at
+                FROM rustdesk_reports
+                ORDER BY reported_at DESC NULLS LAST, machine_id ASC
+            `);
+            return result.rows.map(mapRow);
+        });
+    }
+
+    /**
      * 仅在 OTP step-up 通过后由 routes 层调用：返回明文密码。
      * 调用方负责审计 + 限流；本方法只是数据读取。
      */
