@@ -145,9 +145,25 @@ namespace VHDMounter.RustDeskBridge.Policy
                 }
 
                 // (c) 序号单调
+                //     - snapshotSeq < _lastSeq → 真正的回退，拒绝（协议异常 / 时光倒流）
+                //     - snapshotSeq == _lastSeq → 同一版本重复拉取（trustedControllerStore
+                //       的 watermark 仅在 upsert/delete 时 ++，机台周期拉取看到的就是同
+                //       一个值），视作"内容未变"安静通过：
+                //         * 不替换 buffer，旧 active 槽继续生效
+                //         * 不增加失败计数；同时把"距上次成功"的时间窗也刷新
+                //         * 不写诊断（避免每个周期刷一条 reject 日志）
                 lock (_gate)
                 {
-                    if (_hasValue && snapshotSeq <= _lastSeq)
+                    if (_hasValue && snapshotSeq == _lastSeq)
+                    {
+                        // 视作"this fetch confirmed we are still on the latest version"，
+                        // 重置健康度计数，让 IsHealthy 仍为 true。
+                        _consecutiveFailureCount = 0;
+                        _lastSuccessUtcMs = _clock.UtcNow.ToUnixTimeMilliseconds();
+                        rejectReason = null;
+                        return true;
+                    }
+                    if (_hasValue && snapshotSeq < _lastSeq)
                     {
                         rejectReason = "snapshot_seq_regress";
                         _consecutiveFailureCount++;

@@ -468,6 +468,45 @@ namespace VHDMounter.Tests.RustDeskBridge.Properties
                 evaluator.Evaluate(BuildFrame(ControllerB, ControllerHwidA), ThisMachineId).Result);
         }
 
+        [Fact]
+        public void SeqEqual_SilentNoop_KeepsHealthFresh_AndRetainsExistingActiveSlot()
+        {
+            // 回归：服务端 trustedControllerStore.snapshotVersion 仅在 admin upsert/delete
+            // 时 ++，机台周期拉取看到的就是同一个值。这里断言"同 seq" 必须当 no-op：
+            //   - TryReplace 返回 true，无 rejectReason
+            //   - active 槽不被替换：上次接受时建立的查表结果仍然命中
+            //   - IsHealthy 仍为 true
+            //   - 不刷出 ERROR / 失败计数
+            using var io = new InMemoryObfuscation();
+            var clock = new FakeClock();
+            var store = new SnapshotStore(io, clock);
+            var validator = new FixedKeyValidator();
+            var nowMs = clock.UtcNow.ToUnixTimeMilliseconds();
+
+            var json10WithA = BuildSignedSnapshotJson(ThisMachineId, 10, nowMs,
+                new[] { new SnapshotEntrySpec(ControllerA, null, "global", true, null) });
+            Assert.True(store.TryReplace(json10WithA, validator, out _));
+
+            // 推时钟一段（模拟"距上次成功的时间"），再喂同 seq 一次
+            ((FakeClock)clock).UtcNow += System.TimeSpan.FromMinutes(8);
+            // 同 seq 但 entries 是 ControllerB —— active 槽**不**应被替换；保持 ControllerA
+            var json10WithB = BuildSignedSnapshotJson(ThisMachineId, 10,
+                clock.UtcNow.ToUnixTimeMilliseconds(),
+                new[] { new SnapshotEntrySpec(ControllerB, null, "global", true, null) });
+            Assert.True(store.TryReplace(json10WithB, validator, out var rejectReason));
+            Assert.Null(rejectReason);
+
+            // 健康度：刚刚那次"同 seq"刷新了 _lastSuccessUtcMs，IsHealthy 应当为 true
+            Assert.True(store.IsHealthy);
+
+            // active 槽未替换：ControllerA 仍命中、ControllerB 未命中
+            var evaluator = new PeerApprovalEvaluator(store, new ToggleableGate());
+            Assert.Equal(PeerApprovalResponse.ResultApproved,
+                evaluator.Evaluate(BuildFrame(ControllerA, ControllerHwidA), ThisMachineId).Result);
+            Assert.Equal(PeerApprovalResponse.ResultRejected,
+                evaluator.Evaluate(BuildFrame(ControllerB, ControllerHwidA), ThisMachineId).Result);
+        }
+
         // ---------- (e) 网络中断 3 次 + > 600s → 全 rejected ----------
 
         [Fact]
