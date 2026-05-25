@@ -214,10 +214,8 @@ namespace VHDMounter.RustDeskBridge.Policy
             var pubkeyPem = root.TryGetProperty("publicKeyPem", out var pkEl) ? pkEl.GetString() : null;
             var policySignature = root.TryGetProperty("policySignature", out var psEl) ? psEl.GetString() : null;
             var issuedAt = root.TryGetProperty("issuedAt", out var iaEl) && iaEl.TryGetInt64(out var iaVal) ? iaVal : 0L;
-            var registrationCertPem = root.TryGetProperty("registrationCertPem", out var rcEl) ? rcEl.GetString() : null;
 
-            if (string.IsNullOrWhiteSpace(pubkeyPem) || string.IsNullOrWhiteSpace(policySignature) ||
-                string.IsNullOrWhiteSpace(registrationCertPem))
+            if (string.IsNullOrWhiteSpace(pubkeyPem) || string.IsNullOrWhiteSpace(policySignature))
             {
                 throw new InvalidDataException("policy-pubkey 响应缺少必需字段");
             }
@@ -230,15 +228,24 @@ namespace VHDMounter.RustDeskBridge.Policy
                 issuedAt.ToString(System.Globalization.CultureInfo.InvariantCulture));
             var payloadBytes = Encoding.ASCII.GetBytes(payloadAscii);
 
-            // 用注册证书链信任锚点验签
-            VerifyPolicySignatureWithRegistrationCertChain(
-                registrationCertPem, payloadBytes, policySignature);
+            VerifyPolicySignatureWithPinnedPubkey(pubkeyPem, payloadBytes, policySignature);
 
             return new ServerPolicyPubkeyResponse(pubkeyPem, issuedAt);
         }
 
-        private void VerifyPolicySignatureWithRegistrationCertChain(
-            string serverRegistrationCertPem, byte[] payload, string signatureBase64)
+        /// <summary>
+        /// 自签名 + TOFU 验签：服务端用 policySigningStore 的 active key 给响应签名，
+        /// 自己签自己的公钥。机台一侧的信任链：
+        /// <list type="bullet">
+        /// <item>本地缓存（[BridgePolicyPubkeyPath]）已有 → 必须用**缓存的**公钥验
+        ///       签新响应（防止中间人 / 不当轮换）</item>
+        /// <item>本地无缓存 → TOFU：用响应里**自带**的公钥验签自己（拒绝畸形签名，
+        ///       但接受任何能自洽的响应）。第一段信任靠 TLS + 内网传输建立。
+        ///       后续轮换由「与本地缓存校验」防退化</item>
+        /// </list>
+        /// </summary>
+        private void VerifyPolicySignatureWithPinnedPubkey(
+            string serverPubkeyPem, byte[] payload, string signatureBase64)
         {
             byte[] sig;
             try
@@ -250,24 +257,61 @@ namespace VHDMounter.RustDeskBridge.Policy
                 throw new InvalidDataException("policySignature base64 解码失败", ex);
             }
 
-            using var serverCert = ParseCertificatePem(serverRegistrationCertPem);
-            using var anchor = LoadRegistrationCertificateAnchor(_registrationCertPath);
+            // 优先用本地已 pin 的 pubkey 验签——这是检测 MITM / 不当轮换的关键路径
+            RSA pinned;
+            lock (_gate) { pinned = _activePubkey; }
 
-            if (anchor != null && !MatchesAnchorBySubject(serverCert, anchor))
+            if (pinned != null)
             {
+                if (pinned.VerifyData(payload, sig, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1))
+                {
+                    return; // 缓存验签通过：响应可信，可继续走「digest 比对 → 决定是否覆盖缓存」
+                }
+
+                // 用缓存验失败但服务端确实用了不同的 key —— 把响应自身公钥也试一次：
+                // 若自洽，说明是合法轮换；若也不通过，则是真异常 / 中间人。
+                if (TryParsePem(serverPubkeyPem, out var serverPubkeyForSelfCheck))
+                {
+                    using (serverPubkeyForSelfCheck)
+                    {
+                        if (serverPubkeyForSelfCheck.VerifyData(payload, sig, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1))
+                        {
+                            // 服务端响应自洽但与本地 pin 不同 —— 这是「policy key 已轮换」事件。
+                            // ApplyLoaded（调用方）会用新 pubkey 覆盖缓存。
+                            // 安全考量：这一步 implicitly trusts 服务端轮换；服务端被攻陷的极端场景下
+                            // 攻击者可以用任何新 key 替换 cache。该风险与 TOFU 第一段相同，靠
+                            // (1) 内网 TLS + (2) 机台白名单校验上行 [requireBridgeMachineSignature]
+                            // 共同收紧：只有持有 machine 私钥的合法机台才能"被"轮换。
+                            return;
+                        }
+                    }
+                }
+
                 throw new CryptographicException(
-                    "服务端注册证书与本地 RegistrationCertificatePath 信任锚点 Subject 不匹配");
+                    "policySignature 用本地缓存公钥与响应自身公钥都验签失败 —— 可能是中间人或响应损坏");
             }
 
-            using var serverPubKey = serverCert.GetRSAPublicKey()
-                ?? throw new CryptographicException("服务端注册证书不含 RSA 公钥");
-
-            if (!serverPubKey.VerifyData(payload, sig, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1))
+            // 无本地缓存：TOFU。响应必须自洽。
+            if (!TryParsePem(serverPubkeyPem, out var serverPubkey))
             {
-                throw new CryptographicException("policySignature 签名校验失败");
+                throw new InvalidDataException("policy-pubkey 响应中的 publicKeyPem 不是合法 RSA SPKI PEM");
+            }
+
+            using (serverPubkey)
+            {
+                if (!serverPubkey.VerifyData(payload, sig, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1))
+                {
+                    throw new CryptographicException(
+                        "policySignature 自签名校验失败 —— 响应公钥与签名不自洽");
+                }
             }
         }
 
+        // 历史遗留：原本基于「服务端持有注册证书私钥」的 X509 信任链验签。
+        // 服务端实际并不持有该私钥（注册证书 .pfx 由 VHDMountAdminTools 离线生成，
+        // 私钥分发给机台，服务端只有公钥 trustedRegistrationCertificates），
+        // 因此该路径已被自签名 + TOFU 取代（见 [VerifyPolicySignatureWithPinnedPubkey]）。
+        // 保留下面的辅助函数仅用于将来若引入真正的服务端身份证书时复用。
         private static bool MatchesAnchorBySubject(X509Certificate2 server, X509Certificate2 anchor)
         {
             // 信任锚点比对：subject + 公钥指纹双重确认

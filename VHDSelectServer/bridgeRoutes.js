@@ -533,48 +533,49 @@ function createBridgeRoutes(deps) {
     );
 
     // ---------- GET /api/machines/:machineId/rustdesk/policy-pubkey ----------
+    //
+    // 自签名 TOFU 设计（取代原本"用服务端注册证书私钥签名 + 一并下发证书"
+    // 的方案——后者基于一个错误前提：服务端**并不**持有注册证书的私钥。
+    // 注册证书是 VHDMountAdminTools 离线生成的 .pfx，公钥进 trustedRegistrationCertificates，
+    // 私钥分发给机台，机台用它签 /api/machines/:machineId/keys 注册请求。
+    // 服务端永远只有公钥这一侧。
+    //
+    // 修正后的信任链：
+    //   - 服务端用 policySigningStore（决策点 7 / Requirement 15.10）的 active key
+    //     给 BridgePolicyPubkeyV1 payload 自签名
+    //   - 机台首次拉取（本地缓存为空）：TOFU 接受当前响应，把 publicKeyPem
+    //     写入 BridgePolicyPubkeyPath，第一段信任建立完成（依赖 TLS + 内网传输）
+    //   - 机台二次以后拉取：用**已缓存**的 policy pubkey 验证新响应签名，
+    //     检测中间人 / 不当轮换；签名失败 → 拒绝刷新，沿用旧缓存
+    //   - 服务端轮换 policy key（regenerate）后，旧 active 被置为 NULL；
+    //     机台带着旧 cached pubkey 来验签新响应必然失败 → 触发 §10.2 反向
+    //     通知 secret_outdated 让机台重启 host 重新 bootstrap
     router.get(
         '/:machineId/rustdesk/policy-pubkey',
         makeRequireBridgeMachineSignature('GET /api/machines/:machineId/rustdesk/policy-pubkey'),
         asyncHandler(async (req, res) => {
             const machineId = req._bridgeMachineId;
             const active = await policySigningStore.getActiveSigningKey();
+            if (!active || !active.publicKeyPem) {
+                throw createJsonError(503, 'Bridge_Policy_Signing_Pubkey 未初始化');
+            }
             const issuedAt = Date.now();
 
             // BridgePolicyPubkeyV1 payload = "BridgePolicyPubkeyV1\n<machineId>\n<sha256Hex(pubkey PEM)>\n<issuedAt>"
-            // 用机台**注册证书私钥** (securityStore.signingPrivateKey) 签名 + 一并下发 registrationCertPem
-            // 让机台用 RegistrationCertificatePath 锚点验签。
             const pubkeyDigestHex = crypto.createHash('sha256')
                 .update(active.publicKeyPem, 'utf8')
                 .digest('hex');
             const payload =
                 `BridgePolicyPubkeyV1\n${machineId}\n${pubkeyDigestHex}\n${issuedAt}`;
 
-            const runtime = req.app.locals.runtime;
-            const securityConfig = runtime.securityConfig || {};
-            const signingKeyPem = securityConfig.signingPrivateKey
-                || securityConfig.signing_private_key
-                || securityConfig.serverSigningPrivateKey;
-            const registrationCertPem = securityConfig.signingCertificatePem
-                || securityConfig.signing_certificate_pem
-                || securityConfig.serverSigningCertificatePem
-                || '';
-
-            if (!signingKeyPem) {
-                throw createJsonError(503, '服务端尚未配置注册证书签名私钥');
-            }
-
-            const policySignature = crypto.sign('sha256', Buffer.from(payload, 'ascii'), {
-                key: signingKeyPem,
-                padding: crypto.constants.RSA_PKCS1_PADDING,
-            }).toString('base64');
+            const sig = await policySigningStore.signPayload(Buffer.from(payload, 'ascii'));
 
             res.json({
                 success: true,
                 publicKeyPem: active.publicKeyPem,
+                keyId: active.keyId,
                 issuedAt,
-                policySignature,
-                registrationCertPem,
+                policySignature: sig.signatureBase64,
             });
         }),
     );
