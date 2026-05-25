@@ -125,10 +125,12 @@ namespace VHDMounter.RustDeskBridge.Session
         private async Task RunSessionInnerAsync(BridgeSession session, bool isCoolingDown, CancellationToken ct)
         {
             var pipe = session.Pipe;
+            string closePath = "completed";
             try
             {
                 if (isCoolingDown)
                 {
+                    closePath = "cooldown";
                     await HandleCoolingDownAsync(pipe, ct).ConfigureAwait(false);
                     return;
                 }
@@ -136,30 +138,41 @@ namespace VHDMounter.RustDeskBridge.Session
                 // 第一帧：握手
                 if (!await HandleHandshakeAsync(pipe, session, ct).ConfigureAwait(false))
                 {
+                    closePath = "handshake_rejected_or_eof";
                     return;
                 }
 
                 // 已握手 → 进入帧路由循环
+                closePath = "handshaked_loop";
                 await RunHandshakedLoopAsync(pipe, session, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 // 进程退出 / Bridge_Server 停止
+                closePath = "host_canceled";
             }
             catch (InvalidDataException ex)
             {
+                closePath = "invalid_data";
                 _diagnostics($"Bridge session 协议错误：{ex.Message}");
             }
             catch (IOException ex)
             {
+                closePath = "io_exception";
                 _diagnostics($"Bridge session 管道 I/O 异常：{ex.Message}");
             }
             catch (Exception ex)
             {
+                closePath = "unexpected";
                 _diagnostics($"Bridge session 未预期异常：{ex.Message}");
             }
             finally
             {
+                // 事件 10：pipe_closed —— 把"为什么关闭 + 在哪个生命周期阶段关闭"
+                //          打出来，配合 RustDesk 一侧 §6 时序对账
+                _diagnostics(
+                    $"Bridge[event=pipe_closed] reason={closePath} state={session.State} " +
+                    $"handshaked={session.IsHandshaked}");
                 try { session.Close(); } catch { /* ignore */ }
             }
         }
@@ -168,6 +181,10 @@ namespace VHDMounter.RustDeskBridge.Session
 
         private async Task HandleCoolingDownAsync(NamedPipeServerStream pipe, CancellationToken ct)
         {
+            // 事件 1：pipe_connect_accepted（在 cooling-down 路径上也打一行，便于
+            // 排查"刚累积 3 次失败 + 60s 内连进来都被 rate_limited"的现场）
+            EmitClientIdentityTrace(pipe, "cooldown");
+
             // 读首帧但不解析 —— 仅是为了让客户端能等到一个连接级响应再断开
             try
             {
@@ -179,8 +196,9 @@ namespace VHDMounter.RustDeskBridge.Session
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
 
             // 不解析、不计 LRU、不算 HMAC、不增 RateLimiter 失败计数 —— 仅写一帧
-            await WriteHandshakeResponseAsync(
+            var written = await WriteHandshakeResponseAsync(
                 pipe, HandshakeResponse.Failure("rate_limited"), ct).ConfigureAwait(false);
+            _diagnostics($"Bridge[event=response_written] phase=cooldown reason=rate_limited written={written}B");
         }
 
         // ---------- 握手 ----------
@@ -188,6 +206,9 @@ namespace VHDMounter.RustDeskBridge.Session
         private async Task<bool> HandleHandshakeAsync(
             NamedPipeServerStream pipe, BridgeSession session, CancellationToken ct)
         {
+            // 事件 1 & 2：pipe_connect_accepted + client_token_check
+            EmitClientIdentityTrace(pipe, "handshake");
+
             byte[] firstFrame;
             try
             {
@@ -197,18 +218,23 @@ namespace VHDMounter.RustDeskBridge.Session
             {
                 // 对端在没发首帧的情况下正常关闭管道（连接试探 / 客户端进程退出 / RustDesk
                 // 主动 disconnect）。这是正常会话结束，不是协议错误，不写 ERROR 级日志。
+                _diagnostics("Bridge[event=pipe_closed] phase=handshake stage=before_first_byte cause=clean_eof");
                 return false;
             }
             catch (InvalidDataException ex)
             {
-                _diagnostics($"Bridge 首帧外壳解析失败：{ex.Message}");
+                _diagnostics($"Bridge[event=pipe_closed] phase=handshake stage=frame_shell cause=invalid_data detail={Truncate(ex.Message, 200)}");
                 return false; // 协议错误关闭
             }
             catch (IOException ex)
             {
-                _diagnostics($"Bridge 首帧读取失败：{ex.Message}");
+                _diagnostics($"Bridge[event=pipe_closed] phase=handshake stage=frame_shell cause=io detail={Truncate(ex.Message, 200)}");
                 return false;
             }
+
+            // 事件 3 & 4：frame_header_read + frame_payload_read（合并打一行）
+            _diagnostics(
+                $"Bridge[event=frame_payload_read] phase=handshake length={firstFrame.Length}B");
 
             // (1) 协议字面量 / secretVersion 字段类型校验：用 JsonDocument 二阶段解析，
             //     避免直接 Deserialize 时 secretVersion 字段为 string / float / 缺失被
@@ -216,14 +242,17 @@ namespace VHDMounter.RustDeskBridge.Session
             using var doc = TryParseJsonDocument(firstFrame, out var parseFailure);
             if (doc == null)
             {
-                _diagnostics("Bridge 首帧 JSON 解析失败：" + parseFailure);
+                _diagnostics(
+                    $"Bridge[event=schema_check_json_failed] phase=handshake detail={Truncate(parseFailure, 200)}");
+                _diagnostics("Bridge[event=pipe_closed] phase=handshake stage=parse cause=invalid_json");
                 return false; // 协议错误关闭管道（与首帧 protocol 字面量错同等待遇）
             }
 
             var root = doc.RootElement;
             if (root.ValueKind != JsonValueKind.Object)
             {
-                _diagnostics("Bridge 首帧不是 JSON 对象");
+                _diagnostics("Bridge[event=schema_check_root_failed] phase=handshake detail=not_object");
+                _diagnostics("Bridge[event=pipe_closed] phase=handshake stage=parse cause=root_not_object");
                 return false;
             }
 
@@ -232,14 +261,20 @@ namespace VHDMounter.RustDeskBridge.Session
                 || protocolEl.ValueKind != JsonValueKind.String
                 || !string.Equals(protocolEl.GetString(), HandshakeFrame.ProtocolLiteral, StringComparison.Ordinal))
             {
-                _diagnostics("Bridge 首帧 protocol 字段不是 VHDRustDeskBridgeHandshakeV1");
+                var observed = protocolEl.ValueKind == JsonValueKind.String
+                    ? protocolEl.GetString()
+                    : protocolEl.ValueKind.ToString();
+                _diagnostics(
+                    $"Bridge[event=schema_check_protocol_failed] phase=handshake observed={Truncate(observed, 80)} expected={HandshakeFrame.ProtocolLiteral}");
+                _diagnostics("Bridge[event=pipe_closed] phase=handshake stage=schema cause=protocol_literal");
                 return false;
             }
 
             // (2) secretVersion 必须是 u32 范围内的非负整数（Requirement 4.4）
             if (!TryReadUInt32(root, "secretVersion", out var frameSecretVersion))
             {
-                await RejectHandshakeAsync(pipe, "invalid_proof", ct).ConfigureAwait(false);
+                _diagnostics("Bridge[event=schema_check_secretVersion_failed] phase=handshake detail=missing_or_not_u32");
+                await RejectAndTraceAsync(pipe, "invalid_proof", "secretVersion_not_u32", ct).ConfigureAwait(false);
                 _handshakeRateLimiter.RecordFailure();
                 return false;
             }
@@ -252,8 +287,8 @@ namespace VHDMounter.RustDeskBridge.Session
             }
             catch (JsonException ex)
             {
-                _diagnostics("Bridge 首帧反序列化失败：" + ex.Message);
-                await RejectHandshakeAsync(pipe, "invalid_proof", ct).ConfigureAwait(false);
+                _diagnostics($"Bridge[event=schema_check_dto_failed] phase=handshake detail={Truncate(ex.Message, 200)}");
+                await RejectAndTraceAsync(pipe, "invalid_proof", "dto_deserialize", ct).ConfigureAwait(false);
                 _handshakeRateLimiter.RecordFailure();
                 return false;
             }
@@ -262,15 +297,27 @@ namespace VHDMounter.RustDeskBridge.Session
                 || string.IsNullOrEmpty(frame.Nonce)
                 || string.IsNullOrEmpty(frame.Proof))
             {
-                await RejectHandshakeAsync(pipe, "invalid_proof", ct).ConfigureAwait(false);
+                _diagnostics(
+                    $"Bridge[event=schema_check_required_failed] phase=handshake nonce_empty={string.IsNullOrEmpty(frame?.Nonce)} proof_empty={string.IsNullOrEmpty(frame?.Proof)}");
+                await RejectAndTraceAsync(pipe, "invalid_proof", "nonce_or_proof_empty", ct).ConfigureAwait(false);
                 _handshakeRateLimiter.RecordFailure();
                 return false;
             }
 
+            // 事件 5：json_parsed —— 把字段全部记录下来（除 proof / 共享密钥外），
+            //         便于现场对照 RustDesk 一侧 §6 时序的 [t2] 阶段
+            _diagnostics(
+                "Bridge[event=json_parsed] phase=handshake " +
+                $"protocol={frame.Protocol} secretVersion={frame.SecretVersion} " +
+                $"clientKind={frame.ClientKind} clientVersion={Truncate(frame.ClientVersion, 32)} " +
+                $"timestampMs={frame.TimestampMs} nonce_prefix={NoncePrefix(frame.Nonce, 8)}");
+
             // 双 sanity check：DTO 解出的 SecretVersion 应当与 JsonDocument 解出的相同
             if (frame.SecretVersion != frameSecretVersion)
             {
-                await RejectHandshakeAsync(pipe, "invalid_proof", ct).ConfigureAwait(false);
+                _diagnostics(
+                    $"Bridge[event=schema_check_secretVersion_mismatch] phase=handshake dto={frame.SecretVersion} doc={frameSecretVersion}");
+                await RejectAndTraceAsync(pipe, "invalid_proof", "secretVersion_dto_doc_mismatch", ct).ConfigureAwait(false);
                 _handshakeRateLimiter.RecordFailure();
                 return false;
             }
@@ -278,7 +325,9 @@ namespace VHDMounter.RustDeskBridge.Session
             // (4) clientKind != "rustdesk" → deny（Requirement 4.3）
             if (!string.Equals(frame.ClientKind, "rustdesk", StringComparison.Ordinal))
             {
-                await RejectHandshakeAsync(pipe, "deny", ct).ConfigureAwait(false);
+                _diagnostics(
+                    $"Bridge[event=schema_check_clientKind_failed] phase=handshake observed={Truncate(frame.ClientKind, 32)}");
+                await RejectAndTraceAsync(pipe, "deny", "clientKind_not_rustdesk", ct).ConfigureAwait(false);
                 _handshakeRateLimiter.RecordFailure();
                 return false;
             }
@@ -286,25 +335,55 @@ namespace VHDMounter.RustDeskBridge.Session
             // (5) 时间窗（Requirement 4.6）
             var nowMs = _clock.UtcNow.ToUnixTimeMilliseconds();
             const long TimeWindowMs = 300_000;
-            if (Math.Abs(nowMs - frame.TimestampMs) > TimeWindowMs)
+            var skewMs = nowMs - frame.TimestampMs;
+            if (Math.Abs(skewMs) > TimeWindowMs)
             {
-                await RejectHandshakeAsync(pipe, "invalid_proof", ct).ConfigureAwait(false);
+                _diagnostics(
+                    $"Bridge[event=schema_check_timestamp_failed] phase=handshake skewMs={skewMs} window=±{TimeWindowMs}");
+                await RejectAndTraceAsync(pipe, "invalid_proof", $"timestamp_skew_{skewMs}ms", ct).ConfigureAwait(false);
                 _handshakeRateLimiter.RecordFailure();
                 return false;
             }
 
             // (6) secretVersion 是合法 u32 但与本机 active 不等 → secret_outdated（Requirement 4.5）
-            if (frame.SecretVersion != _secretProvider.CurrentSecretVersion)
+            //     —— 同时打出 secret 是否已 loaded，避免「服务端没录入 active secret 时
+            //        本机 _activeVersion=0，正确的客户端发 secretVersion=1 反复被 reject」
+            //        百思不得其解（参见 controlled-side-handoff §9.Q4）
+            var providerVersion = _secretProvider.CurrentSecretVersion;
+            if (frame.SecretVersion != providerVersion)
             {
-                await RejectHandshakeAsync(pipe, "secret_outdated", ct).ConfigureAwait(false);
+                var providerLoaded = (_secretProvider as VHDMounter.RustDeskBridge.Crypto.BridgeSecretClient)?.IsLoaded;
+                _diagnostics(
+                    $"Bridge[event=schema_check_secretVersion_negotiation_failed] phase=handshake " +
+                    $"frame={frame.SecretVersion} active={providerVersion} secret_loaded={providerLoaded}");
+                if (providerVersion == 0)
+                {
+                    _diagnostics(
+                        "Bridge[event=secret_not_loaded_warning] phase=handshake " +
+                        "msg=本机 BridgeSecretClient 还没成功拉取 active RustDeskClientSharedSecret，" +
+                        "所有握手帧将以 secret_outdated 被拒；请检查管理面是否已录入 active secret");
+                }
+                await RejectAndTraceAsync(pipe, "secret_outdated", $"frame_v{frame.SecretVersion}_vs_active_v{providerVersion}", ct).ConfigureAwait(false);
                 _handshakeRateLimiter.RecordFailure();
                 return false;
             }
 
             // (7) HMAC proof（Requirement 3.1 / 3.4）—— 在 nonce LRU 写入之前先校验，避免错误的 proof 占据 LRU 槽位
+            //     事件 7 / 8：hmac_input_built + hmac_compare_failed
+            var hmacInput = HmacVerifier.BuildHandshakeHmacInput(
+                frame.SecretVersion, frame.Nonce, frame.TimestampMs);
+            var hmacInputDigestHex = ShortSha256Hex(hmacInput);
+            _diagnostics(
+                $"Bridge[event=hmac_input_built] phase=handshake input_len={hmacInput.Length}B input_sha256_prefix={hmacInputDigestHex}");
+
             if (!_hmac.VerifyHandshake(frame))
             {
-                await RejectHandshakeAsync(pipe, "invalid_proof", ct).ConfigureAwait(false);
+                var expectedProof = _hmac.ComputeMacBase64(hmacInput);
+                _diagnostics(
+                    $"Bridge[event=hmac_compare_failed] phase=handshake " +
+                    $"observed_proof_prefix={ShortBase64Prefix(frame.Proof, 8)} " +
+                    $"expected_proof_prefix={ShortBase64Prefix(expectedProof, 8)}");
+                await RejectAndTraceAsync(pipe, "invalid_proof", "hmac_proof_mismatch", ct).ConfigureAwait(false);
                 _handshakeRateLimiter.RecordFailure();
                 return false;
             }
@@ -312,30 +391,48 @@ namespace VHDMounter.RustDeskBridge.Session
             // (8) nonce LRU（Requirement 4.7）
             if (!_nonceLru.TryAdd(frame.SecretVersion, frame.Nonce))
             {
-                await RejectHandshakeAsync(pipe, "invalid_proof", ct).ConfigureAwait(false);
+                _diagnostics(
+                    $"Bridge[event=nonce_lru_replay] phase=handshake nonce_prefix={NoncePrefix(frame.Nonce, 8)}");
+                await RejectAndTraceAsync(pipe, "invalid_proof", "nonce_replay", ct).ConfigureAwait(false);
                 _handshakeRateLimiter.RecordFailure();
                 return false;
             }
 
             // 全部通过：握手成功
             session.MarkHandshaked(frame.SecretVersion);
-            await WriteHandshakeResponseAsync(pipe, HandshakeResponse.Success(), ct).ConfigureAwait(false);
+            var successWritten = await WriteHandshakeResponseAsync(pipe, HandshakeResponse.Success(), ct)
+                .ConfigureAwait(false);
             _diagnostics(
-                $"Bridge 握手成功 secretVersion={frame.SecretVersion} clientVersion={frame.ClientVersion}");
+                $"Bridge[event=response_written] phase=handshake reason=ok written={successWritten}B " +
+                $"secretVersion={frame.SecretVersion} clientVersion={Truncate(frame.ClientVersion, 32)}");
             return true;
         }
 
-        private async Task RejectHandshakeAsync(
-            NamedPipeServerStream pipe, string reason, CancellationToken ct)
+        private async Task RejectAndTraceAsync(
+            NamedPipeServerStream pipe, string reason, string detail, CancellationToken ct)
         {
-            await WriteHandshakeResponseAsync(pipe, HandshakeResponse.Failure(reason), ct).ConfigureAwait(false);
+            int written;
+            try
+            {
+                written = await WriteHandshakeResponseAsync(
+                    pipe, HandshakeResponse.Failure(reason), ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _diagnostics(
+                    $"Bridge[event=response_write_failed] phase=handshake reason={reason} detail={detail} " +
+                    $"err={Truncate(ex.Message, 200)}");
+                return;
+            }
+            _diagnostics(
+                $"Bridge[event=response_written] phase=handshake reason={reason} detail={detail} written={written}B");
         }
 
-        private static async Task WriteHandshakeResponseAsync(
+        private static async Task<int> WriteHandshakeResponseAsync(
             NamedPipeServerStream pipe, HandshakeResponse response, CancellationToken ct)
         {
             var bytes = JsonSerializer.SerializeToUtf8Bytes(response, ResponseSerializerOptions);
-            await FrameCodec.WriteFrameAsync(pipe, bytes, ct).ConfigureAwait(false);
+            return await FrameCodec.WriteFrameAsync(pipe, bytes, ct).ConfigureAwait(false);
         }
 
         // ---------- 已握手帧路由 ----------
@@ -635,6 +732,60 @@ namespace VHDMounter.RustDeskBridge.Session
         }
 
         // ---------- 内部辅助 ----------
+
+        /// <summary>
+        /// 事件 1 / 2：把客户端 PID + token SID 打到 trace。失败仅返回 unknown，不抛。
+        /// </summary>
+        private void EmitClientIdentityTrace(NamedPipeServerStream pipe, string phase)
+        {
+            try
+            {
+                var (pid, sid) = VHDMounter.RustDeskBridge.Pipe.PipeClientIdentity.TryQuery(pipe);
+                _diagnostics(
+                    $"Bridge[event=pipe_connect_accepted] phase={phase} " +
+                    $"client_pid={(pid?.ToString() ?? "unknown")} client_sid={(sid ?? "unknown")} " +
+                    $"is_local_system={(string.Equals(sid, "S-1-5-18", StringComparison.Ordinal))}");
+            }
+            catch
+            {
+                // 诊断输出失败永远不应中断 session
+            }
+        }
+
+        private static string Truncate(string s, int maxLength)
+        {
+            if (string.IsNullOrEmpty(s)) return string.Empty;
+            return s.Length <= maxLength ? s : s.Substring(0, maxLength);
+        }
+
+        /// <summary>
+        /// 取 nonce 的前 N 个字符（小写 hex 形态），不暴露完整 nonce。
+        /// </summary>
+        private static string NoncePrefix(string nonce, int n)
+        {
+            if (string.IsNullOrEmpty(nonce)) return "(empty)";
+            return nonce.Length <= n ? nonce : nonce.Substring(0, n);
+        }
+
+        /// <summary>
+        /// base64 的前 N 个字符；仅给"对账"诊断用，不会暴露完整 mac。
+        /// </summary>
+        private static string ShortBase64Prefix(string base64, int n)
+        {
+            if (string.IsNullOrEmpty(base64)) return "(empty)";
+            return base64.Length <= n ? base64 : base64.Substring(0, n);
+        }
+
+        /// <summary>
+        /// 输入字节的 SHA-256 前 8 个 hex 字符。仅诊断用。
+        /// </summary>
+        private static string ShortSha256Hex(byte[] bytes)
+        {
+            if (bytes == null || bytes.Length == 0) return "(empty)";
+            var hash = System.Security.Cryptography.SHA256.HashData(bytes);
+            var hex = Convert.ToHexString(hash);
+            return hex.Substring(0, 8).ToLowerInvariant();
+        }
 
         private static JsonDocument TryParseJsonDocument(byte[] bytes, out string failureMessage)
         {

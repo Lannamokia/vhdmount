@@ -60,9 +60,12 @@ namespace VHDMounter.RustDeskBridge.Pipe
 
         /// <summary>
         /// 写入一帧。<paramref name="jsonUtf8"/> 必须已经是 UTF-8 编码（无 BOM）的 JSON 字节。
+        /// 返回值是"实际写到 stream 的总字节数"（4 字节长度前缀 + payload），便于诊断埋点
+        /// 与 RustDesk_Controlled 一侧对账（docs/vhd-rustdesk-bridge-controlled-side-handoff.md
+        /// §9.Q8 / §10 事件 9）。
         /// </summary>
         /// <exception cref="ArgumentException"><paramref name="jsonUtf8"/> 长度 &gt; <see cref="MaxFrameBytes"/>。</exception>
-        public static async ValueTask WriteFrameAsync(Stream pipe, ReadOnlyMemory<byte> jsonUtf8, CancellationToken ct)
+        public static async ValueTask<int> WriteFrameAsync(Stream pipe, ReadOnlyMemory<byte> jsonUtf8, CancellationToken ct)
         {
             if (pipe == null) throw new ArgumentNullException(nameof(pipe));
             if (jsonUtf8.Length > MaxFrameBytes)
@@ -80,6 +83,7 @@ namespace VHDMounter.RustDeskBridge.Pipe
                 await pipe.WriteAsync(jsonUtf8, ct).ConfigureAwait(false);
             }
             await pipe.FlushAsync(ct).ConfigureAwait(false);
+            return 4 + jsonUtf8.Length;
         }
 
         private static async ValueTask ReadExactAsync(

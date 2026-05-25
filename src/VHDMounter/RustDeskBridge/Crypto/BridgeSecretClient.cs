@@ -109,6 +109,9 @@ namespace VHDMounter.RustDeskBridge.Crypto
         public async Task EnsureLoadedAsync(CancellationToken ct)
         {
             ThrowIfDisposed();
+            _diagnostics(
+                $"BridgeSecretClient[event=ensure_loaded_begin] " +
+                $"machineId={_machineId} server={_serverBaseUrl} maxAttempts={StartupMaxAttempts}");
 
             Exception lastException = null;
             for (var attempt = 1; attempt <= StartupMaxAttempts; attempt++)
@@ -119,13 +122,19 @@ namespace VHDMounter.RustDeskBridge.Crypto
                     var outcome = await TryFetchAndApplyAsync(ct).ConfigureAwait(false);
                     if (outcome == FetchOutcome.Success || outcome == FetchOutcome.UnchangedVersion)
                     {
-                        _diagnostics("Bridge secret 已加载到 active 槽");
+                        _diagnostics(
+                            $"BridgeSecretClient[event=ensure_loaded_success] " +
+                            $"attempt={attempt} secretVersion={_activeVersion} outcome={outcome}");
                         return;
                     }
                     if (outcome == FetchOutcome.NotConfigured)
                     {
                         // 服务端没有 active secret —— 启动期阻塞 PeerApproval，但本方法
                         // 仍以异常方式上抛（让 BridgeServerHost 走"失败但不致命"分支）
+                        _diagnostics(
+                            $"BridgeSecretClient[event=ensure_loaded_not_configured] " +
+                            $"attempt={attempt} msg=服务端无 active RustDeskClientSharedSecret，" +
+                            "握手将以 secret_outdated 全拒，请管理员到 admin 面板录入");
                         lastException = new BridgeSecretNotConfiguredException(
                             "VHDSelectServer 上不存在 active RustDeskClientSharedSecret 版本");
                     }
@@ -141,7 +150,9 @@ namespace VHDMounter.RustDeskBridge.Crypto
                 catch (Exception ex)
                 {
                     lastException = ex;
-                    _diagnostics($"Bridge secret 拉取异常（第 {attempt}/{StartupMaxAttempts} 次）：{ex.Message}");
+                    _diagnostics(
+                        $"BridgeSecretClient[event=ensure_loaded_attempt_failed] " +
+                        $"attempt={attempt}/{StartupMaxAttempts} err={ex.Message}");
                 }
 
                 if (attempt < StartupMaxAttempts)
@@ -157,6 +168,10 @@ namespace VHDMounter.RustDeskBridge.Crypto
                 }
             }
 
+            _diagnostics(
+                $"BridgeSecretClient[event=ensure_loaded_failed] " +
+                $"machineId={_machineId} loaded={_hasValue} secretVersion={_activeVersion} " +
+                $"last_err={lastException?.Message}");
             throw lastException ?? new BridgeSecretFetchException("Bridge secret 启动期装载失败");
         }
 

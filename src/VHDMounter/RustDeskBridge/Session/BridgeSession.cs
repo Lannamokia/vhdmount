@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.IO.Pipes;
 
 namespace VHDMounter.RustDeskBridge.Session
@@ -147,6 +148,15 @@ namespace VHDMounter.RustDeskBridge.Session
 
         /// <summary>
         /// 关闭管道句柄。Idempotent。
+        ///
+        /// <para>**关键**：先 <see cref="PipeStream.WaitForPipeDrain"/> 等对端把 buffer
+        /// 里的字节读完再 <see cref="NamedPipeServerStream.Disconnect"/>，否则 .NET 内部
+        /// <c>FlushAsync</c> 仅做内核 buffer 提交，紧接着 <c>Disconnect</c> 会撕掉管道
+        /// 实例 —— 内核已写入但对端尚未 read 走的字节会被丢弃。这是 RustDesk_Controlled
+        /// 一侧报「读 4 字节长度前缀后就 EOF」的根因。</para>
+        ///
+        /// <para><c>WaitForPipeDrain</c> 在对端已 RevertToSelf / 死掉时会抛 IOException，
+        /// 我们捕获后继续 <c>Disconnect</c>；上层关闭路径不应抛。</para>
         /// </summary>
         public void Close()
         {
@@ -156,6 +166,9 @@ namespace VHDMounter.RustDeskBridge.Session
                 MarkClosing();
                 if (Pipe.IsConnected)
                 {
+                    try { Pipe.WaitForPipeDrain(); }
+                    catch (IOException) { /* 对端已断开 / 半关闭 */ }
+                    catch (ObjectDisposedException) { /* 已释放 */ }
                     try { Pipe.Disconnect(); } catch { /* 已断开 */ }
                 }
             }
