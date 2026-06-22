@@ -186,9 +186,3 @@ BridgeRevocationListenPort=7891
 | 撤销通知未即时生效 | 反向通知仅 best-effort；等待下次快照周期（默认 5 分钟）或重启机台客户端 |
 | 命名管道创建失败 | 确认客户端以管理员身份运行；检查是否有其他实例占用 `\\.\pipe\VHDMount.RustDeskBridge`；检查安全软件拦截 |
 
-## 相关协议文档
-
-如需进行二次开发或排查字节级问题，可参考工程规划文档：
-
-- `docs/vhd-rustdesk-bridge-protocol.md`
-- `docs/vhd-rustdesk-bridge-controlled-side-handoff.md`
