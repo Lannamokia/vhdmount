@@ -21,6 +21,8 @@
 | [Windows 客户端安装](./client-setup) | 管理员 | 客户端安装、配置、Shell Launcher、加固 |
 | [管理客户端安装](./admin-client) | 管理员 | Flutter 管理端安装与新功能入口 |
 | [管理者指南](./admin-guide) | 管理员 | 机台审批、证书管理、部署管理、OTP 规则 |
+| [RustDesk 远程控制桥接](./rustdesk-bridge-admin-guide) | 管理员 | RustDesk 可信主控端、Bridge Secret、上报密码读取 |
+| [离线更新器](./updater) | 管理员 | NX_INS USB 更新、清单签名、自动替换 |
 | [Maimoller HID 系统菜单](./maimoller) | 与maimoller手台配套使用的用户 | HID 面板、系统菜单、按键映射 |
 | [常见问题](./faq) | 所有人 | 常见故障与排查建议 |
 

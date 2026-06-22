@@ -13,13 +13,15 @@ const guideSidebar = [
     text: '客户端与外设',
     items: [
       { text: '管理客户端安装', link: '/admin-client' },
-      { text: 'Maimoller HID 系统菜单', link: '/maimoller' }
+      { text: 'Maimoller HID 系统菜单', link: '/maimoller' },
+      { text: '离线更新器', link: '/updater' }
     ]
   },
   {
     text: '运维与管理',
     items: [
       { text: '管理者指南', link: '/admin-guide' },
+      { text: 'RustDesk 远程控制桥接', link: '/rustdesk-bridge-admin-guide' },
       { text: '常见问题', link: '/faq' }
     ]
   }
@@ -39,6 +41,8 @@ export default defineConfig({
       { text: '客户端安装', link: '/client-setup' },
       { text: '管理客户端', link: '/admin-client' },
       { text: '管理者指南', link: '/admin-guide' },
+      { text: 'RustDesk 桥接', link: '/rustdesk-bridge-admin-guide' },
+      { text: '离线更新器', link: '/updater' },
       { text: '常见问题', link: '/faq' }
     ],
     sidebar: {
