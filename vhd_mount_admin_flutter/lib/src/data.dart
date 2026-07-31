@@ -1311,79 +1311,6 @@ class DeploymentRecord {
   }
 }
 
-class TotpKeyRecord {
-  const TotpKeyRecord({
-    required this.id,
-    required this.name,
-    required this.type,
-    required this.platform,
-    required this.createdAt,
-    required this.lastUsedAt,
-  });
-
-  final String id;
-  final String name;
-  final String type;
-  final String? platform;
-  final String createdAt;
-  final String? lastUsedAt;
-
-  factory TotpKeyRecord.fromJson(Map<String, dynamic> json) {
-    return TotpKeyRecord(
-      id: (json['id'] as String?) ?? '',
-      name: (json['name'] as String?) ?? '',
-      type: (json['type'] as String?) ?? 'authenticator',
-      platform: json['platform'] as String?,
-      createdAt: (json['createdAt'] as String?) ?? '',
-      lastUsedAt: json['lastUsedAt'] as String?,
-    );
-  }
-
-  bool get isAuthenticator => type == 'authenticator';
-  bool get isBiometric => type == 'biometric';
-
-  String get localizedCreatedAt => formatAuditTimestamp(createdAt);
-  String get localizedLastUsedAt =>
-      lastUsedAt == null || lastUsedAt!.isEmpty
-          ? '从未使用'
-          : formatAuditTimestamp(lastUsedAt!);
-
-  String get displayType => isAuthenticator ? '认证器' : '生物识别';
-
-  String get displayPlatform {
-    switch (platform) {
-      case 'windows-hello':
-        return 'Windows Hello';
-      case 'face-id':
-        return 'Face ID';
-      case 'android-biometric':
-        return 'Android 指纹';
-      default:
-        return platform ?? '';
-    }
-  }
-}
-
-class TotpKeyCreationResult {
-  const TotpKeyCreationResult({
-    required this.id,
-    required this.totpSecret,
-    required this.otpauthUrl,
-  });
-
-  final String id;
-  final String totpSecret;
-  final String otpauthUrl;
-
-  factory TotpKeyCreationResult.fromJson(Map<String, dynamic> json) {
-    return TotpKeyCreationResult(
-      id: (json['id'] as String?) ?? '',
-      totpSecret: (json['totpSecret'] as String?) ?? '',
-      otpauthUrl: (json['otpauthUrl'] as String?) ?? '',
-    );
-  }
-}
-
 List<String> buildAuditMachineOptions(
   Iterable<MachineRecord> machines,
   Iterable<AuditEntry> entries,
@@ -1538,16 +1465,6 @@ abstract class AdminApi {
   Future<List<DeploymentRecord>> getMachineDeploymentHistory(String machineId);
 
   Future<void> triggerUninstall(String machineId, String recordId);
-
-  Future<List<TotpKeyRecord>> getTotpKeys();
-
-  Future<TotpKeyCreationResult> createTotpKey({
-    required String name,
-    required String type,
-    String? platform,
-  });
-
-  Future<void> deleteTotpKey(String keyId);
 
   // ---- RustDesk Bridge admin endpoints (rustdesk-bridge-host feature, Requirement 13.1 / 15.4) ----
 
@@ -2395,37 +2312,6 @@ class HttpAdminApi implements AdminApi {
     await _requestJson(
       'POST',
       '/api/machines/${encodePathSegment(machineId)}/deployments/${encodePathSegment(recordId)}/uninstall',
-    );
-  }
-
-  @override
-  Future<List<TotpKeyRecord>> getTotpKeys() async {
-    final json = await _requestJson('GET', '/api/auth/otp/keys');
-    return (json['keys'] as List<dynamic>? ?? <dynamic>[])
-        .whereType<Map<String, dynamic>>()
-        .map(TotpKeyRecord.fromJson)
-        .toList();
-  }
-
-  @override
-  Future<TotpKeyCreationResult> createTotpKey({
-    required String name,
-    required String type,
-    String? platform,
-  }) async {
-    final body = <String, dynamic>{'name': name, 'type': type};
-    if (platform != null) {
-      body['platform'] = platform;
-    }
-    final json = await _requestJson('POST', '/api/auth/otp/keys', body: body);
-    return TotpKeyCreationResult.fromJson(json);
-  }
-
-  @override
-  Future<void> deleteTotpKey(String keyId) async {
-    await _requestJson(
-      'DELETE',
-      '/api/auth/otp/keys/${encodePathSegment(keyId)}',
     );
   }
 

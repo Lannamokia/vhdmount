@@ -676,47 +676,6 @@ class FakeAdminApi implements AdminApi {
   @override
   Future<void> triggerUninstall(String machineId, String recordId) async {}
 
-  List<TotpKeyRecord> totpKeys = <TotpKeyRecord>[];
-  int getTotpKeysCalls = 0;
-  int createTotpKeyCalls = 0;
-  int deleteTotpKeyCalls = 0;
-  String? lastDeletedTotpKeyId;
-  String? lastCreatedTotpKeyName;
-  String? lastCreatedTotpKeyType;
-  String? lastCreatedTotpKeyPlatform;
-
-  @override
-  Future<List<TotpKeyRecord>> getTotpKeys() async {
-    getTotpKeysCalls += 1;
-    // Yield to event loop to avoid notifyListeners during build phase
-    await Future<void>.delayed(Duration.zero);
-    return totpKeys;
-  }
-
-  @override
-  Future<TotpKeyCreationResult> createTotpKey({
-    required String name,
-    required String type,
-    String? platform,
-  }) async {
-    createTotpKeyCalls += 1;
-    lastCreatedTotpKeyName = name;
-    lastCreatedTotpKeyType = type;
-    lastCreatedTotpKeyPlatform = platform;
-    return TotpKeyCreationResult(
-      id: 'key_${DateTime.now().millisecondsSinceEpoch}',
-      totpSecret: 'JBSWY3DPEHPK3PXP',
-      otpauthUrl: 'otpauth://totp/VHDMountServer:admin?secret=JBSWY3DPEHPK3PXP&issuer=VHDMountServer',
-    );
-  }
-
-  @override
-  Future<void> deleteTotpKey(String keyId) async {
-    deleteTotpKeyCalls += 1;
-    lastDeletedTotpKeyId = keyId;
-    totpKeys = totpKeys.where((key) => key.id != keyId).toList();
-  }
-
   @override
   Future<void> restoreSession() async {}
 

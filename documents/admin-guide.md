@@ -316,31 +316,6 @@ PageHeader 中的"生成证书"按钮可一站式完成本地签发 + 服务端�
 
 - **默认启动关键词**：修改全局默认值，影响所有未单独设置关键词的新机台
 
-**TOTP 密钥管理：**
-
-服务端支持多个并行 TOTP 密钥（`authenticator` 类型）。所有 `authenticator` 密钥共同决定服务端的 OTP 验证集合，任一密钥生成的验证码都能通过。
-
-每个密钥包含：`id`、`name`、`type`、`platform`（保留字段，新版客户端只生成 `authenticator`）、`createdAt`、`lastUsedAt`。
-
-> 历史遗留：若旧客户端曾创建过 `type=biometric` 的密钥，列表里仍能看到并手动注销，但当前版本不再生成新的 biometric 条目，也不会再用本地生物识别快捷生成验证码——所有 OTP 都通过验证码输入完成。
-
-**添加认证器：**
-
-1. 点击"添加认证器"，填写密钥名称（如 `Google Authenticator (笔记本)`），需 OTP step-up
-2. 客户端调用 `POST /api/auth/otp/keys`（type: `authenticator`），服务端生成新密钥
-3. 弹窗显示二维码 + 密钥文本（**仅创建时显示一次**）
-4. 使用手机验证器扫码或手动输入密钥
-5. 点击"已完成绑定"关闭弹窗
-
-**注销密钥：**
-
-1. 点击密钥卡片上的"注销"
-2. 弹出确认对话框
-3. 确认后调用 `DELETE /api/auth/otp/keys/:keyId`，需 OTP step-up
-4. 服务端校验：若试图注销最后一个 `authenticator` 类型密钥，会被拒绝并返回错误
-
-**列出密钥：** 仅需登录态，进入设置页时不会触发 OTP 弹窗。
-
 **更换 OTP 绑定密钥：**
 
 支持在不中断服务的情况下轮换 OTP 密钥。

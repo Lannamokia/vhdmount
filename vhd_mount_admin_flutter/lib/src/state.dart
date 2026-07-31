@@ -218,7 +218,6 @@ class AppController extends ChangeNotifier {
   List<DeploymentPackage> deploymentPackages = <DeploymentPackage>[];
   List<DeploymentTask> deploymentTasks = <DeploymentTask>[];
   List<DeploymentRecord> deploymentRecords = <DeploymentRecord>[];
-  List<TotpKeyRecord> totpKeys = <TotpKeyRecord>[];
   String? deploymentSelectedMachineId;
   String? deploymentTaskStatusFilter;
   String deploymentSelectedTab = 'packages';
@@ -919,28 +918,6 @@ class AppController extends ChangeNotifier {
   Future<void> triggerUninstall(String machineId, String recordId) async {
     await _runAction(() => api.triggerUninstall(machineId, recordId));
     await loadMachineDeploymentHistory(machineId);
-  }
-
-  Future<void> loadTotpKeys() async {
-    totpKeys = await _runAction(api.getTotpKeys);
-    notifyListeners();
-  }
-
-  Future<TotpKeyCreationResult> createTotpKey({
-    required String name,
-    required String type,
-    String? platform,
-  }) async {
-    final result = await _runAction(
-      () => api.createTotpKey(name: name, type: type, platform: platform),
-    );
-    await loadTotpKeys();
-    return result;
-  }
-
-  Future<void> deleteTotpKey(String keyId) async {
-    await _runAction(() => api.deleteTotpKey(keyId));
-    await loadTotpKeys();
   }
 
   // ─── RustDesk Bridge：可信主控端 + Bridge_Secret 版本元数据 ────────────────────

@@ -42,6 +42,10 @@ function createFakeDatabase() {
     }
 
     return {
+        async withClient(work) {
+            return work({ async query() { return { rows: [] }; } });
+        },
+        async withTransaction(work) { return this.withClient(work); },
         async getMachine(machineId) {
             const record = machines.get(machineId);
             return record ? { ...record, evhd_password_configured: Boolean(record.evhd_password) } : null;

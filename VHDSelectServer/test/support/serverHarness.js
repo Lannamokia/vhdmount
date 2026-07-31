@@ -248,6 +248,17 @@ function createFakeDatabase() {
         async close() {
             return undefined;
         },
+        async withClient(work) {
+            // Fake DB: no real SQL; bridgeSecretStore queries are no-ops returning empty rows.
+            return work({
+                async query() {
+                    return { rows: [] };
+                },
+            });
+        },
+        async withTransaction(work) {
+            return this.withClient(work);
+        },
         async getMachine(machineId) {
             return getRecord(machineId);
         },

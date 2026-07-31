@@ -100,18 +100,6 @@ flutter run -d ios
 3. 用户取消时静默返回，不显示额外错误
 4. 验证失败时在对话框内显示错误提示，不关闭对话框
 
-### TOTP 密钥管理（设置页面）
-
-服务端支持多个并行 `authenticator` 类型 TOTP 密钥（标准 Google Authenticator / Microsoft Authenticator 等）。
-
-> 历史遗留：服务端 `totp_keys` 表仍保留 `type=biometric` 与 `platform` 字段，用于兼容旧版客户端绑定过的生物识别密钥；当前客户端不再生成或自动使用此类条目，但仍能在列表中看到并手动注销。
-
-设置页"TOTP 密钥管理"区域提供以下操作：
-
-- **添加认证器**（需 OTP step-up）：服务端生成新密钥，弹出 QR 码 + 密钥文本，使用验证器扫描后即可生效
-- **注销密钥**（需 OTP step-up）：从服务端注销指定密钥；最后一个 authenticator 密钥受保护不可注销
-- **列出密钥**：仅需登录态，进入设置页时不会触发 OTP 弹窗
-
 ### 证书页面"生成证书"按钮（仅 Windows 桌面）
 
 "可信注册证书"页面在 Windows 桌面端的 PageHeader 中新增"生成证书"按钮，与"导入证书"并列：

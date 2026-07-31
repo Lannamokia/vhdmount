@@ -45,6 +45,10 @@ function createFakeDatabase() {
     return {
         async initialize() { },
         async close() { },
+        async withClient(work) {
+            return work({ async query() { return { rows: [] }; } });
+        },
+        async withTransaction(work) { return this.withClient(work); },
         async getMachine(machineId) {
             const record = machines.get(machineId);
             return record ? { ...record } : null;

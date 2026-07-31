@@ -771,8 +771,8 @@ async function createApp(options = {}) {
 
     app.post('/api/auth/otp/verify', requireAuth, sensitiveLimiter, asyncHandler(async (req, res) => {
         const code = assertString(req.body?.code, 'code', 6, 12);
-        const otpResult = securityStore.verifyTotp(code);
-        if (!otpResult.verified) {
+        const verified = securityStore.verifyTotp(code);
+        if (!verified) {
             runtime.writeAudit(req, {
                 type: 'auth.otp.verify',
                 actor: 'admin',
@@ -788,7 +788,6 @@ async function createApp(options = {}) {
             type: 'auth.otp.verify',
             actor: 'admin',
             result: 'success',
-            keyId: otpResult.keyId,
         });
 
         res.json({
@@ -815,7 +814,7 @@ async function createApp(options = {}) {
             ? assertString(req.body.accountName, 'accountName', 1, 128)
             : (runtime.securityConfig?.totpAccountName || 'admin');
 
-        if (!securityStore.verifyTotp(currentCode).verified) {
+        if (!securityStore.verifyTotp(currentCode)) {
             runtime.writeAudit(req, {
                 type: 'auth.otp.rotate.prepare',
                 actor: 'admin',
@@ -882,79 +881,6 @@ async function createApp(options = {}) {
         res.json({
             success: true,
             otpVerifiedUntil: req.session.otpVerifiedUntil,
-        });
-    }));
-
-    // --- TOTP 密钥管理 API ---
-
-    // 列出密钥仅返回元数据（id/name/type/platform/createdAt/lastUsedAt），
-    // 不含任何 secret，所以只要求登录态，不要求 OTP step-up。
-    // 进入设置页时即可正常拉取列表，避免给"日常浏览"操作带来 OTP 摩擦。
-    app.get('/api/auth/otp/keys', requireAuth, (req, res) => {
-        const keys = securityStore.listTotpKeys();
-        res.json({
-            success: true,
-            keys,
-        });
-    });
-
-    app.post('/api/auth/otp/keys', requireAuth, requireOtpStepUp, asyncHandler(async (req, res) => {
-        const name = assertString(req.body?.name, 'name', 1, 128);
-        const type = String(req.body?.type || '').trim();
-        if (type !== 'authenticator' && type !== 'biometric') {
-            throw createJsonError(400, 'type 必须为 authenticator 或 biometric');
-        }
-
-        let platform = null;
-        if (type === 'biometric') {
-            platform = String(req.body?.platform || '').trim();
-            const validPlatforms = ['windows-hello', 'face-id', 'android-biometric'];
-            if (!validPlatforms.includes(platform)) {
-                throw createJsonError(400, 'biometric 类型需要提供有效的 platform（windows-hello / face-id / android-biometric）');
-            }
-        }
-
-        const result = securityStore.addTotpKey({ name, type, platform });
-        runtime.securityConfig = securityStore.loadSecurityConfig();
-
-        runtime.writeAudit(req, {
-            type: 'auth.otp.keys.add',
-            actor: 'admin',
-            result: 'success',
-            keyId: result.id,
-            keyType: type,
-        });
-
-        res.status(201).json({
-            success: true,
-            ...result,
-        });
-    }));
-
-    app.delete('/api/auth/otp/keys/:keyId', requireAuth, requireOtpStepUp, asyncHandler(async (req, res) => {
-        const keyId = assertKeyId(req.params.keyId);
-        const result = securityStore.removeTotpKey(keyId);
-
-        if (!result.success) {
-            if (result.error === 'not_found') {
-                throw createJsonError(404, '未找到指定的 TOTP 密钥');
-            }
-            if (result.error === 'last_authenticator') {
-                throw createJsonError(409, '至少保留一个认证器类型的 TOTP 密钥');
-            }
-        }
-
-        runtime.securityConfig = securityStore.loadSecurityConfig();
-
-        runtime.writeAudit(req, {
-            type: 'auth.otp.keys.remove',
-            actor: 'admin',
-            result: 'success',
-            keyId,
-        });
-
-        res.json({
-            success: true,
         });
     }));
 

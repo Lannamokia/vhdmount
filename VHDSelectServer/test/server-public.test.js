@@ -46,6 +46,10 @@ test('带 Origin 的请求必须命中允许列表', async (t) => {
     const fakeDatabase = {
         async initialize() {},
         async close() {},
+        async withClient(work) {
+            return work({ async query() { return { rows: [] }; } });
+        },
+        async withTransaction(work) { return this.withClient(work); },
         async getMachineLogRuntimeSettings() {
             return {
                 defaultRetentionActiveDays: 7,
