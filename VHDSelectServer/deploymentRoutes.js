@@ -80,10 +80,13 @@ function assertOptionalIsoTimestamp(value, name) {
 }
 
 function computeFileHash(filePath) {
-    const hash = crypto.createHash('sha256');
-    const data = fs.readFileSync(filePath);
-    hash.update(data);
-    return hash.digest('hex');
+    return new Promise((resolve, reject) => {
+        const hash = crypto.createHash('sha256');
+        const stream = fs.createReadStream(filePath);
+        stream.on('data', (chunk) => hash.update(chunk));
+        stream.on('end', () => resolve(hash.digest('hex')));
+        stream.on('error', reject);
+    });
 }
 
 function createCtrCipher(key, iv, offset = 0) {
@@ -462,12 +465,7 @@ function buildDeploymentRoutes(options = {}) {
             packageVersion: task.packageVersion,
             packageType: task.packageType,
             packageSize: task.packageSize,
-            packageSha256: (() => {
-                try {
-                    const pkgPath = deploymentStore.getPackageFilePath(task.packageId);
-                    return fs.existsSync(pkgPath) ? computeFileHash(pkgPath) : '';
-                } catch { return ''; }
-            })(),
+            packageSha256: task.packageFileHash || '',
             downloadUrl: `/api/deployments/packages/${task.packageId}/download?token=${packageToken}&machineId=${encodeURIComponent(machine.machine_id)}&expires=${Date.now() + 3600000}`,
             signatureUrl: `/api/deployments/packages/${task.packageId}/signature?token=${signatureToken}&machineId=${encodeURIComponent(machine.machine_id)}&expires=${Date.now() + 3600000}`,
             keyCipher,

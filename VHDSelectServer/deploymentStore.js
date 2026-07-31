@@ -4,6 +4,16 @@ const path = require('path');
 
 const { ensureWritableDirectory } = require('./configStoreUtils');
 
+function computeFileHashStream(filePath) {
+    return new Promise((resolve, reject) => {
+        const hash = crypto.createHash('sha256');
+        const stream = fs.createReadStream(filePath);
+        stream.on('data', (chunk) => hash.update(chunk));
+        stream.on('end', () => resolve(hash.digest('hex')));
+        stream.on('error', reject);
+    });
+}
+
 const TOKEN_EXPIRY_MINUTES = 60;
 const DEFAULT_TASK_LEASE_SECONDS = Number(process.env.DEPLOYMENT_TASK_LEASE_SECONDS || 30 * 60);
 const PACKAGES_SUBDIR = 'deployment-packages';
@@ -67,11 +77,13 @@ class DeploymentStore {
                 copyFileIntoPlace(packageSourcePath, filePath);
                 copyFileIntoPlace(signatureSourcePath, signaturePath);
 
+                const fileHash = await computeFileHashStream(filePath);
+
                 const res = await client.query(`
-                    INSERT INTO deployment_packages (package_id, name, version, type, signer, file_path, file_size, expires_at)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + INTERVAL '30 days')
+                    INSERT INTO deployment_packages (package_id, name, version, type, signer, file_path, file_size, file_hash, expires_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW() + INTERVAL '30 days')
                     RETURNING *
-                `, [packageId, packageMeta.name, packageMeta.version, packageMeta.type, packageMeta.signer, filePath, packageMeta.fileSize]);
+                `, [packageId, packageMeta.name, packageMeta.version, packageMeta.type, packageMeta.signer, filePath, packageMeta.fileSize, fileHash]);
                 return this._mapPackageRow(res.rows[0]);
             } catch (error) {
                 try {
@@ -136,6 +148,7 @@ class DeploymentStore {
             signer: row.signer,
             filePath: row.file_path,
             fileSize: Number(row.file_size),
+            fileHash: row.file_hash || '',
             createdAt: row.created_at,
             expiresAt: row.expires_at,
         };
@@ -217,7 +230,7 @@ class DeploymentStore {
             }
 
             const result = await client.query(`
-                SELECT t.*, p.name, p.version, p.type, p.file_size
+                SELECT t.*, p.name, p.version, p.type, p.file_size, p.file_hash
                 FROM deployment_tasks t
                 JOIN deployment_packages p ON t.package_id = p.package_id
                 WHERE t.machine_id = $1
@@ -255,6 +268,7 @@ class DeploymentStore {
                         packageVersion: row.version,
                         packageType: row.type,
                         packageSize: Number(row.file_size),
+                        packageFileHash: row.file_hash || '',
                     });
                 }
             }
