@@ -234,6 +234,24 @@ function cleanupBootstrapCache(runtime) {
     }
 }
 
+function cleanupLogRateLimiters(runtime) {
+    const now = Date.now();
+    // 滑动窗口限流：删除已过窗口期的条目
+    const windowMs = (runtime.machineLogRateLimitPerMinute || 60) * 1000;
+    for (const [key, entry] of runtime.machineLogUploadWindows.entries()) {
+        if (now - entry.startedAt > windowMs) {
+            runtime.machineLogUploadWindows.delete(key);
+        }
+    }
+    // 日限字节数：只保留当日的条目
+    const todaySuffix = new Date().toISOString().slice(0, 10);
+    for (const key of runtime.machineLogDailyBytes.keys()) {
+        if (!key.endsWith(todaySuffix)) {
+            runtime.machineLogDailyBytes.delete(key);
+        }
+    }
+}
+
 function consumeSlidingWindow(map, key, maxCount, windowMs) {
     const now = Date.now();
     const current = map.get(key);
@@ -592,6 +610,7 @@ function attachMachineLogWebSocketServer({ server, runtime, logger = console }) 
     async function handleHandshakeMessage(state, message) {
         if (message.type === 'client_hello') {
             cleanupBootstrapCache(runtime);
+            cleanupLogRateLimiters(runtime);
 
             if (!runtime.initialized || !runtime.database) {
                 throw new RegistrationAuthError('服务尚未准备好');
