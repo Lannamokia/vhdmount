@@ -642,7 +642,7 @@ function buildDeploymentRoutes(options = {}) {
 
     // ---------- 下载接口（令牌验证 + UA 验证 + Range 支持） ----------
 
-    async function downloadPackage(req, res) {
+    async function downloadPackage(req, res, next) {
         const runtime = req.app.locals.runtime;
 
         if (!isValidDeploymentUserAgent(req.get('user-agent'))) {
@@ -724,7 +724,7 @@ function buildDeploymentRoutes(options = {}) {
         fileStream.pipe(cipher).pipe(res);
     }
 
-    async function downloadSignature(req, res) {
+    async function downloadSignature(req, res, next) {
         const runtime = req.app.locals.runtime;
 
         if (!isValidDeploymentUserAgent(req.get('user-agent'))) {
