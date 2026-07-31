@@ -180,7 +180,9 @@ class DeploymentPackager {
 
       // 7. 签名 ZIP
       report(0.90, 'RSA-PSS 签名...');
-      final privateKeyBytes = _readPem(privateKeyPath, 'PRIVATE KEY');
+      final pemCodec = PemCodec();
+      final pemText = await File(privateKeyPath).readAsString();
+      final privateKeyBytes = pemCodec.decode(pemText, 'PRIVATE KEY');
       final privateKey = _parsePkcs8PrivateKey(privateKeyBytes);
       final zipData = await File(zipPath).readAsBytes();
       final signature = _signPssSha256(Uint8List.fromList(zipData), privateKey);
@@ -210,23 +212,6 @@ class DeploymentPackager {
   String _sanitizeFileName(String value) {
     final invalidChars = RegExp(r'[<>:"/\|?*]');
     return value.replaceAll(invalidChars, '_');
-  }
-
-  Uint8List _readPem(String path, String type) {
-    final text = File(path).readAsStringSync();
-    final start = '-----BEGIN $type-----';
-    final end = '-----END $type-----';
-    final startIndex = text.indexOf(start);
-    final endIndex = text.indexOf(end);
-    if (startIndex < 0 || endIndex < 0) {
-      throw Exception('PEM 文件中未找到 $type');
-    }
-    final base64Text = text
-        .substring(startIndex + start.length, endIndex)
-        .replaceAll('\r', '')
-        .replaceAll('\n', '')
-        .trim();
-    return base64Decode(base64Text);
   }
 
   pc.RSAPrivateKey _parsePkcs8PrivateKey(Uint8List derBytes) {

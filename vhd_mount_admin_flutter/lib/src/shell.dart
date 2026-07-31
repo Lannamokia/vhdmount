@@ -229,7 +229,10 @@ class AdminApp extends StatelessWidget {
           }),
         ),
       ),
-      home: AdminRoot(controller: controller),
+      home: OtpHostOverlay(
+        controller: controller,
+        child: AdminRoot(controller: controller),
+      ),
     );
   }
 }
@@ -244,7 +247,7 @@ class AdminRoot extends StatefulWidget {
 }
 
 class _AdminRootState extends State<AdminRoot> {
-  int _selectedIndex = 0;
+  DestinationKey _selectedKey = DestinationKey.machines;
 
   @override
   void initState() {
@@ -273,32 +276,40 @@ class _AdminRootState extends State<AdminRoot> {
         } else {
           content = DashboardScreen(
             controller: controller,
-            selectedIndex: _selectedIndex,
-            onDestinationSelected: (index) async {
+            selectedKey: _selectedKey,
+            onDestinationSelected: (key) async {
               setState(() {
-                _selectedIndex = index;
+                _selectedKey = key;
               });
-              if (index == 0) {
-                await controller.loadMachines();
-              } else if (index == 1) {
-                await controller.loadMachineLogSessions(
-                  machineId: controller.machineLogSelectedMachineId,
-                  from: controller.machineLogFrom,
-                  to: controller.machineLogTo,
-                );
-              } else if (index == 2 && controller.otpVerified) {
-                await controller.loadCertificates();
-              } else if (index == 3) {
-                await controller.loadAudit(
-                  machineId: controller.auditFilterMachineId,
-                );
-              } else if (index == 4) {
-                await controller.loadLogRetentionSettings();
-              } else if (index == 5) {
-                await controller.loadDeploymentPackages();
-              } else if (index == 6) {
-                await controller.loadDeploymentPackages();
-                await controller.loadDeploymentTasks();
+              switch (key) {
+                case DestinationKey.machines:
+                  await controller.loadMachines();
+                case DestinationKey.machineLogs:
+                  await controller.loadMachineLogSessions(
+                    machineId: controller.machineLogSelectedMachineId,
+                    from: controller.machineLogFrom,
+                    to: controller.machineLogTo,
+                  );
+                case DestinationKey.certificates:
+                  // CertificatesView handles its own loading with OTP guard.
+                  break;
+                case DestinationKey.audit:
+                  await controller.loadAudit(
+                    machineId: controller.auditFilterMachineId,
+                  );
+                case DestinationKey.settings:
+                  await controller.loadLogRetentionSettings();
+                case DestinationKey.deployments:
+                  await controller.loadDeploymentPackages();
+                case DestinationKey.gameUpdates:
+                  await controller.loadDeploymentPackages();
+                  await controller.loadDeploymentTasks();
+                case DestinationKey.rustDeskRemoteControl:
+                  // RustDeskRemoteControlView 内部各 Tab 自行触发首次加载（OTP guard 在内部处理）。
+                  break;
+                case DestinationKey.offlineTools:
+                  // 仅桌面 Windows 可达；空动作。
+                  break;
               }
             },
           );

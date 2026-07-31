@@ -104,6 +104,8 @@ void main() {
     await tester.pumpAndSettle();
 
     // 打开「游戏更新」导航页
+    await tester.ensureVisible(find.text('游戏更新'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('游戏更新'));
     await tester.pumpAndSettle();
 
@@ -140,6 +142,8 @@ void main() {
     await tester.pumpWidget(AdminApp(controller: controller));
     await tester.pumpAndSettle();
 
+    await tester.ensureVisible(find.text('游戏更新'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('游戏更新'));
     await tester.pumpAndSettle();
 

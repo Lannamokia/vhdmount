@@ -78,6 +78,12 @@ class FakeAdminApi implements AdminApi {
   int changePasswordCalls = 0;
   int prepareOtpRotationCalls = 0;
   int completeOtpRotationCalls = 0;
+  int setMachineApprovalCalls = 0;
+
+  /// 测试钩子：当为 true 时，下一次 [setMachineApproval] 调用会先抛出
+  /// `AdminApiException(requireOtp: true)`，并自动复位为 false。
+  /// 用于测试 controller._runAction 的 OTP 自动拦截 + 透明重试逻辑。
+  bool shouldRequireOtpOnNextMachineAction = false;
   String? lastAuditMachineId;
   String? lastUpdatedDefaultVhd;
   String? lastCurrentPassword;
@@ -499,6 +505,15 @@ class FakeAdminApi implements AdminApi {
 
   @override
   Future<void> setMachineApproval(String machineId, bool approved) async {
+    setMachineApprovalCalls++;
+    if (shouldRequireOtpOnNextMachineAction) {
+      shouldRequireOtpOnNextMachineAction = false;
+      throw AdminApiException(
+        '需要 OTP 二次验证',
+        statusCode: 403,
+        requireOtp: true,
+      );
+    }
     machines = machines
         .map(
           (machine) => machine.machineId == machineId
@@ -661,6 +676,188 @@ class FakeAdminApi implements AdminApi {
   @override
   Future<void> triggerUninstall(String machineId, String recordId) async {}
 
+  List<TotpKeyRecord> totpKeys = <TotpKeyRecord>[];
+  int getTotpKeysCalls = 0;
+  int createTotpKeyCalls = 0;
+  int deleteTotpKeyCalls = 0;
+  String? lastDeletedTotpKeyId;
+  String? lastCreatedTotpKeyName;
+  String? lastCreatedTotpKeyType;
+  String? lastCreatedTotpKeyPlatform;
+
+  @override
+  Future<List<TotpKeyRecord>> getTotpKeys() async {
+    getTotpKeysCalls += 1;
+    // Yield to event loop to avoid notifyListeners during build phase
+    await Future<void>.delayed(Duration.zero);
+    return totpKeys;
+  }
+
+  @override
+  Future<TotpKeyCreationResult> createTotpKey({
+    required String name,
+    required String type,
+    String? platform,
+  }) async {
+    createTotpKeyCalls += 1;
+    lastCreatedTotpKeyName = name;
+    lastCreatedTotpKeyType = type;
+    lastCreatedTotpKeyPlatform = platform;
+    return TotpKeyCreationResult(
+      id: 'key_${DateTime.now().millisecondsSinceEpoch}',
+      totpSecret: 'JBSWY3DPEHPK3PXP',
+      otpauthUrl: 'otpauth://totp/VHDMountServer:admin?secret=JBSWY3DPEHPK3PXP&issuer=VHDMountServer',
+    );
+  }
+
+  @override
+  Future<void> deleteTotpKey(String keyId) async {
+    deleteTotpKeyCalls += 1;
+    lastDeletedTotpKeyId = keyId;
+    totpKeys = totpKeys.where((key) => key.id != keyId).toList();
+  }
+
   @override
   Future<void> restoreSession() async {}
+
+  // ─── RustDesk Bridge fakes (rustdesk-bridge-host feature) ─────────────
+  List<TrustedRustDeskController> trustedRustDeskControllers =
+      <TrustedRustDeskController>[];
+  List<BridgeSecretVersionMetadata> bridgeSecretVersions =
+      <BridgeSecretVersionMetadata>[];
+
+  int getTrustedRustDeskControllersCalls = 0;
+  int upsertTrustedRustDeskControllerCalls = 0;
+  int deleteTrustedRustDeskControllerCalls = 0;
+  int getBridgeSecretVersionsCalls = 0;
+  int uploadBridgeSecretCalls = 0;
+  TrustedRustDeskControllerDraft? lastUpsertTrustedRustDeskController;
+  String? lastDeletedTrustedRustDeskControllerId;
+  BridgeSecretInputFormat? lastUploadBridgeSecretFormat;
+  List<int>? lastUploadBridgeSecretBytes;
+  String? lastUploadBridgeSecretAuditNote;
+
+  @override
+  Future<List<TrustedRustDeskController>>
+      getTrustedRustDeskControllers() async {
+    getTrustedRustDeskControllersCalls += 1;
+    return trustedRustDeskControllers;
+  }
+
+  @override
+  Future<TrustedRustDeskController> upsertTrustedRustDeskController(
+    TrustedRustDeskControllerDraft draft,
+  ) async {
+    upsertTrustedRustDeskControllerCalls += 1;
+    lastUpsertTrustedRustDeskController = draft;
+    final entry = TrustedRustDeskController(
+      id: draft.id ?? 'fake-${trustedRustDeskControllers.length + 1}',
+      controllerId: draft.controllerId,
+      controllerHwidHash: draft.controllerHwidHash,
+      label: draft.label,
+      scope: draft.scope,
+      enabled: draft.enabled,
+      createdAt: DateTime.now().toUtc().toIso8601String(),
+      expiresAt: draft.expiresAt,
+      auditNote: draft.auditNote,
+    );
+    trustedRustDeskControllers = <TrustedRustDeskController>[
+      ...trustedRustDeskControllers.where((c) => c.id != entry.id),
+      entry,
+    ];
+    return entry;
+  }
+
+  @override
+  Future<void> deleteTrustedRustDeskController(String id) async {
+    deleteTrustedRustDeskControllerCalls += 1;
+    lastDeletedTrustedRustDeskControllerId = id;
+    trustedRustDeskControllers =
+        trustedRustDeskControllers.where((c) => c.id != id).toList();
+  }
+
+  @override
+  Future<List<BridgeSecretVersionMetadata>> getBridgeSecretVersions() async {
+    getBridgeSecretVersionsCalls += 1;
+    return bridgeSecretVersions;
+  }
+
+  @override
+  Future<BridgeSecretVersionMetadata> uploadBridgeSecret({
+    required BridgeSecretInputFormat format,
+    required List<int> rawBytes,
+    String? auditNote,
+  }) async {
+    uploadBridgeSecretCalls += 1;
+    lastUploadBridgeSecretFormat = format;
+    lastUploadBridgeSecretBytes = List<int>.from(rawBytes);
+    lastUploadBridgeSecretAuditNote = auditNote;
+    if (rawBytes.length != 32) {
+      throw AdminApiException('RustDeskClientSharedSecret 必须正好 32 字节');
+    }
+    final nextVersion = bridgeSecretVersions.fold<int>(
+          -1,
+          (acc, v) => v.secretVersion > acc ? v.secretVersion : acc,
+        ) +
+        1;
+    final entry = BridgeSecretVersionMetadata(
+      secretVersion: nextVersion,
+      createdAt: DateTime.now().toUtc().toIso8601String(),
+      activatedAt: DateTime.now().toUtc().toIso8601String(),
+      auditNote: auditNote,
+    );
+    // 老版本 activatedAt 清空（与 bridgeSecretStore.js insertAndActivate 行为一致）
+    bridgeSecretVersions = <BridgeSecretVersionMetadata>[
+      ...bridgeSecretVersions.map((v) => BridgeSecretVersionMetadata(
+            secretVersion: v.secretVersion,
+            createdAt: v.createdAt,
+            activatedAt: null,
+            createdByUserId: v.createdByUserId,
+            auditNote: v.auditNote,
+          )),
+      entry,
+    ];
+    return entry;
+  }
+
+  // ─── RustDesk 上报记录 fakes ───────────────────────────────────────────
+  List<RustDeskReportSummary> rustDeskReports = <RustDeskReportSummary>[];
+  Map<String, String> rustDeskReportPlaintexts = <String, String>{};
+  int getRustDeskReportsCalls = 0;
+  int readRustDeskReportPlaintextCalls = 0;
+  String? lastReadRustDeskReportMachineId;
+  String? lastReadRustDeskReportReason;
+
+  @override
+  Future<List<RustDeskReportSummary>> getRustDeskReports() async {
+    getRustDeskReportsCalls += 1;
+    return rustDeskReports;
+  }
+
+  @override
+  Future<RustDeskReportPlaintext> readRustDeskReportPlaintext(
+    String machineId,
+    String reason,
+  ) async {
+    readRustDeskReportPlaintextCalls += 1;
+    lastReadRustDeskReportMachineId = machineId;
+    lastReadRustDeskReportReason = reason;
+    final summary = rustDeskReports.firstWhere(
+      (r) => r.machineId == machineId,
+      orElse: () => throw AdminApiException(
+        '该机台暂无 RustDesk 上报记录 (statusCode=404)',
+      ),
+    );
+    return RustDeskReportPlaintext(
+      machineId: summary.machineId,
+      rustDeskId: summary.rustDeskId,
+      passwordKind: summary.passwordKind,
+      reportedAt: summary.reportedAt,
+      passwordPlaintext: rustDeskReportPlaintexts[machineId] ?? '',
+      passwordHashPrefix: summary.passwordHashPrefix,
+      lastWrapKeyId: summary.lastWrapKeyId,
+      secretVersion: summary.secretVersion,
+      updatedAt: summary.updatedAt,
+    );
+  }
 }

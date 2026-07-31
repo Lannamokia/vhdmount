@@ -1311,6 +1311,79 @@ class DeploymentRecord {
   }
 }
 
+class TotpKeyRecord {
+  const TotpKeyRecord({
+    required this.id,
+    required this.name,
+    required this.type,
+    required this.platform,
+    required this.createdAt,
+    required this.lastUsedAt,
+  });
+
+  final String id;
+  final String name;
+  final String type;
+  final String? platform;
+  final String createdAt;
+  final String? lastUsedAt;
+
+  factory TotpKeyRecord.fromJson(Map<String, dynamic> json) {
+    return TotpKeyRecord(
+      id: (json['id'] as String?) ?? '',
+      name: (json['name'] as String?) ?? '',
+      type: (json['type'] as String?) ?? 'authenticator',
+      platform: json['platform'] as String?,
+      createdAt: (json['createdAt'] as String?) ?? '',
+      lastUsedAt: json['lastUsedAt'] as String?,
+    );
+  }
+
+  bool get isAuthenticator => type == 'authenticator';
+  bool get isBiometric => type == 'biometric';
+
+  String get localizedCreatedAt => formatAuditTimestamp(createdAt);
+  String get localizedLastUsedAt =>
+      lastUsedAt == null || lastUsedAt!.isEmpty
+          ? '从未使用'
+          : formatAuditTimestamp(lastUsedAt!);
+
+  String get displayType => isAuthenticator ? '认证器' : '生物识别';
+
+  String get displayPlatform {
+    switch (platform) {
+      case 'windows-hello':
+        return 'Windows Hello';
+      case 'face-id':
+        return 'Face ID';
+      case 'android-biometric':
+        return 'Android 指纹';
+      default:
+        return platform ?? '';
+    }
+  }
+}
+
+class TotpKeyCreationResult {
+  const TotpKeyCreationResult({
+    required this.id,
+    required this.totpSecret,
+    required this.otpauthUrl,
+  });
+
+  final String id;
+  final String totpSecret;
+  final String otpauthUrl;
+
+  factory TotpKeyCreationResult.fromJson(Map<String, dynamic> json) {
+    return TotpKeyCreationResult(
+      id: (json['id'] as String?) ?? '',
+      totpSecret: (json['totpSecret'] as String?) ?? '',
+      otpauthUrl: (json['otpauthUrl'] as String?) ?? '',
+    );
+  }
+}
+
 List<String> buildAuditMachineOptions(
   Iterable<MachineRecord> machines,
   Iterable<AuditEntry> entries,
@@ -1465,6 +1538,43 @@ abstract class AdminApi {
   Future<List<DeploymentRecord>> getMachineDeploymentHistory(String machineId);
 
   Future<void> triggerUninstall(String machineId, String recordId);
+
+  Future<List<TotpKeyRecord>> getTotpKeys();
+
+  Future<TotpKeyCreationResult> createTotpKey({
+    required String name,
+    required String type,
+    String? platform,
+  });
+
+  Future<void> deleteTotpKey(String keyId);
+
+  // ---- RustDesk Bridge admin endpoints (rustdesk-bridge-host feature, Requirement 13.1 / 15.4) ----
+
+  Future<List<TrustedRustDeskController>> getTrustedRustDeskControllers();
+
+  Future<TrustedRustDeskController> upsertTrustedRustDeskController(
+    TrustedRustDeskControllerDraft draft,
+  );
+
+  Future<void> deleteTrustedRustDeskController(String id);
+
+  Future<List<BridgeSecretVersionMetadata>> getBridgeSecretVersions();
+
+  Future<BridgeSecretVersionMetadata> uploadBridgeSecret({
+    required BridgeSecretInputFormat format,
+    required List<int> rawBytes,
+    String? auditNote,
+  });
+
+  /// 列出全部机台最近一条 RustDesk 上报摘要（不含明文密码）。
+  Future<List<RustDeskReportSummary>> getRustDeskReports();
+
+  /// 读取单台机台的明文密码 + 完整摘要（OTP step-up + 审计）。
+  Future<RustDeskReportPlaintext> readRustDeskReportPlaintext(
+    String machineId,
+    String reason,
+  );
 }
 
 class _MultipartFile {
@@ -2285,6 +2395,474 @@ class HttpAdminApi implements AdminApi {
     await _requestJson(
       'POST',
       '/api/machines/${encodePathSegment(machineId)}/deployments/${encodePathSegment(recordId)}/uninstall',
+    );
+  }
+
+  @override
+  Future<List<TotpKeyRecord>> getTotpKeys() async {
+    final json = await _requestJson('GET', '/api/auth/otp/keys');
+    return (json['keys'] as List<dynamic>? ?? <dynamic>[])
+        .whereType<Map<String, dynamic>>()
+        .map(TotpKeyRecord.fromJson)
+        .toList();
+  }
+
+  @override
+  Future<TotpKeyCreationResult> createTotpKey({
+    required String name,
+    required String type,
+    String? platform,
+  }) async {
+    final body = <String, dynamic>{'name': name, 'type': type};
+    if (platform != null) {
+      body['platform'] = platform;
+    }
+    final json = await _requestJson('POST', '/api/auth/otp/keys', body: body);
+    return TotpKeyCreationResult.fromJson(json);
+  }
+
+  @override
+  Future<void> deleteTotpKey(String keyId) async {
+    await _requestJson(
+      'DELETE',
+      '/api/auth/otp/keys/${encodePathSegment(keyId)}',
+    );
+  }
+
+  // ---- RustDesk Bridge admin endpoints (rustdesk-bridge-host feature) ----
+
+  @override
+  Future<List<TrustedRustDeskController>>
+      getTrustedRustDeskControllers() async {
+    final json = await _requestJson(
+      'GET',
+      '/api/security/trusted-rustdesk-controllers',
+    );
+    return (json['controllers'] as List<dynamic>? ?? <dynamic>[])
+        .whereType<Map<String, dynamic>>()
+        .map(TrustedRustDeskController.fromJson)
+        .toList();
+  }
+
+  @override
+  Future<TrustedRustDeskController> upsertTrustedRustDeskController(
+    TrustedRustDeskControllerDraft draft,
+  ) async {
+    final json = await _requestJson(
+      'POST',
+      '/api/security/trusted-rustdesk-controllers',
+      body: draft.toJson(),
+    );
+    final entry = json['controller'];
+    if (entry is Map<String, dynamic>) {
+      return TrustedRustDeskController.fromJson(entry);
+    }
+    return TrustedRustDeskController.fromJson(json);
+  }
+
+  @override
+  Future<void> deleteTrustedRustDeskController(String id) async {
+    await _requestJson(
+      'DELETE',
+      '/api/security/trusted-rustdesk-controllers/${encodePathSegment(id)}',
+    );
+  }
+
+  @override
+  Future<List<BridgeSecretVersionMetadata>> getBridgeSecretVersions() async {
+    final json = await _requestJson(
+      'GET',
+      '/api/security/rustdesk-bridge-secret',
+    );
+    return (json['versions'] as List<dynamic>? ?? <dynamic>[])
+        .whereType<Map<String, dynamic>>()
+        .map(BridgeSecretVersionMetadata.fromJson)
+        .toList();
+  }
+
+  @override
+  Future<BridgeSecretVersionMetadata> uploadBridgeSecret({
+    required BridgeSecretInputFormat format,
+    required List<int> rawBytes,
+    String? auditNote,
+  }) async {
+    if (rawBytes.length != 32) {
+      throw AdminApiException('RustDeskClientSharedSecret 必须正好 32 字节');
+    }
+    final body = <String, dynamic>{
+      'format': format.wireValue,
+      'keyMaterialBase64': base64Encode(rawBytes),
+    };
+    if (auditNote != null && auditNote.trim().isNotEmpty) {
+      body['auditNote'] = auditNote.trim();
+    }
+    final json = await _requestJson(
+      'POST',
+      '/api/security/rustdesk-bridge-secret',
+      body: body,
+    );
+    final entry = json['version'];
+    if (entry is Map<String, dynamic>) {
+      return BridgeSecretVersionMetadata.fromJson(entry);
+    }
+    return BridgeSecretVersionMetadata.fromJson(json);
+  }
+
+  @override
+  Future<List<RustDeskReportSummary>> getRustDeskReports() async {
+    final json = await _requestJson(
+      'GET',
+      '/api/security/rustdesk-reports',
+    );
+    return (json['reports'] as List<dynamic>? ?? <dynamic>[])
+        .whereType<Map<String, dynamic>>()
+        .map(RustDeskReportSummary.fromJson)
+        .toList();
+  }
+
+  @override
+  Future<RustDeskReportPlaintext> readRustDeskReportPlaintext(
+    String machineId,
+    String reason,
+  ) async {
+    final encodedReason = Uri.encodeQueryComponent(reason);
+    final json = await _requestJson(
+      'GET',
+      '/api/security/rustdesk-reports/${encodePathSegment(machineId)}/plaintext'
+      '?reason=$encodedReason',
+    );
+    final entry = json['report'];
+    if (entry is Map<String, dynamic>) {
+      return RustDeskReportPlaintext.fromJson(entry);
+    }
+    return RustDeskReportPlaintext.fromJson(json);
+  }
+}
+
+
+// ─── RustDesk Bridge data models (rustdesk-bridge-host feature) ─────────────────
+
+/// Bridge secret 录入格式枚举（任务 17.1）。
+/// 与 design.md §"决策点 1：Flutter 录入 + VHDSelectServer 持久化" 保持一致。
+enum BridgeSecretInputFormat {
+  hex,
+  base64,
+  binary,
+}
+
+extension BridgeSecretInputFormatLabel on BridgeSecretInputFormat {
+  String get wireValue {
+    switch (this) {
+      case BridgeSecretInputFormat.hex:
+        return 'hex';
+      case BridgeSecretInputFormat.base64:
+        return 'base64';
+      case BridgeSecretInputFormat.binary:
+        return 'binary';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case BridgeSecretInputFormat.hex:
+        return '十六进制（64 字符）';
+      case BridgeSecretInputFormat.base64:
+        return 'Base64（43-44 字符）';
+      case BridgeSecretInputFormat.binary:
+        return '二进制文件（32 字节）';
+    }
+  }
+}
+
+/// Bridge secret 版本元数据 —— **不**包含 keyMaterial 字节
+/// （Requirement 13.1：管理面只展示版本元数据；明文 secret 走 TPM 包裹下行）。
+class BridgeSecretVersionMetadata {
+  const BridgeSecretVersionMetadata({
+    required this.secretVersion,
+    required this.createdAt,
+    this.activatedAt,
+    this.createdByUserId,
+    this.auditNote,
+  });
+
+  final int secretVersion;
+  final String createdAt;
+  final String? activatedAt;
+  final String? createdByUserId;
+  final String? auditNote;
+
+  bool get isActive => activatedAt != null && activatedAt!.isNotEmpty;
+
+  factory BridgeSecretVersionMetadata.fromJson(Map<String, dynamic> json) {
+    return BridgeSecretVersionMetadata(
+      secretVersion: (json['secretVersion'] as num?)?.toInt() ?? 0,
+      createdAt: (json['createdAt'] as String?) ?? '',
+      activatedAt: json['activatedAt'] as String?,
+      createdByUserId: json['createdByUserId'] as String?,
+      auditNote: json['auditNote'] as String?,
+    );
+  }
+
+  String get localizedCreatedAt =>
+      createdAt.isEmpty ? '未知时间' : formatAuditTimestamp(createdAt);
+
+  String get localizedActivatedAt {
+    if (activatedAt == null || activatedAt!.isEmpty) {
+      return '未激活';
+    }
+    return formatAuditTimestamp(activatedAt!);
+  }
+}
+
+/// 可信 RustDesk 主控端记录（任务 14.1 服务端表 trusted_rustdesk_controllers）。
+class TrustedRustDeskController {
+  const TrustedRustDeskController({
+    required this.id,
+    required this.controllerId,
+    this.controllerHwidHash,
+    this.label,
+    required this.scope,
+    required this.enabled,
+    required this.createdAt,
+    this.expiresAt,
+    this.auditNote,
+  });
+
+  final String id;
+  final String controllerId;
+  final String? controllerHwidHash;
+  final String? label;
+  final String scope;
+  final bool enabled;
+  final String createdAt;
+  final String? expiresAt;
+  final String? auditNote;
+
+  bool get isMachineScoped => scope.startsWith('machine:');
+  bool get isGlobalScope => scope == 'global';
+  String? get scopedMachineId =>
+      isMachineScoped ? scope.substring('machine:'.length) : null;
+
+  factory TrustedRustDeskController.fromJson(Map<String, dynamic> json) {
+    return TrustedRustDeskController(
+      id: (json['id'] as String?) ?? '',
+      controllerId: (json['controllerId'] as String?) ?? '',
+      controllerHwidHash: json['controllerHwidHash'] as String?,
+      label: json['label'] as String?,
+      scope: (json['scope'] as String?) ?? 'global',
+      enabled: json['enabled'] == true,
+      createdAt: (json['createdAt'] as String?) ?? '',
+      expiresAt: json['expiresAt'] as String?,
+      auditNote: json['auditNote'] as String?,
+    );
+  }
+
+  String get localizedCreatedAt =>
+      createdAt.isEmpty ? '未知时间' : formatAuditTimestamp(createdAt);
+
+  String get localizedExpiresAt {
+    if (expiresAt == null || expiresAt!.isEmpty) {
+      return '永不过期';
+    }
+    return formatAuditTimestamp(expiresAt!);
+  }
+
+  String get scopeLabel =>
+      isGlobalScope ? '全局' : '机台 ${scopedMachineId ?? ''}';
+}
+
+/// 提交可信主控端时使用的草稿（upsert / create 共用，id 为空表示新增）。
+class TrustedRustDeskControllerDraft {
+  const TrustedRustDeskControllerDraft({
+    this.id,
+    required this.controllerId,
+    this.controllerHwidHash,
+    this.label,
+    required this.scope,
+    required this.enabled,
+    this.expiresAt,
+    this.auditNote,
+  });
+
+  /// id 为空表示新增。
+  final String? id;
+  final String controllerId;
+  final String? controllerHwidHash;
+  final String? label;
+  final String scope;
+  final bool enabled;
+  final String? expiresAt;
+  final String? auditNote;
+
+  Map<String, dynamic> toJson() {
+    final map = <String, dynamic>{
+      'controllerId': controllerId,
+      'scope': scope,
+      'enabled': enabled,
+    };
+    if (controllerHwidHash != null && controllerHwidHash!.isNotEmpty) {
+      map['controllerHwidHash'] = controllerHwidHash;
+    }
+    if (label != null && label!.trim().isNotEmpty) {
+      map['label'] = label!.trim();
+    }
+    if (expiresAt != null && expiresAt!.trim().isNotEmpty) {
+      map['expiresAt'] = expiresAt!.trim();
+    }
+    if (auditNote != null && auditNote!.trim().isNotEmpty) {
+      map['auditNote'] = auditNote!.trim();
+    }
+    if (id != null && id!.trim().isNotEmpty) {
+      map['id'] = id!.trim();
+    }
+    return map;
+  }
+}
+
+/// HTTP 端点实现挂在 HttpAdminApi 类内部（@override 路径），无需 extension 重复定义。
+/// 仅保留数据模型与枚举在本 part 文件中。
+
+
+
+/// 一台机台最近一条 RustDesk 上报摘要（**不**含明文密码）。
+///
+/// 服务端 `GET /api/security/rustdesk-reports` 返回的列表元素 + 单机查询的非
+/// plaintext 字段都用这个值对象建模。明文密码通过单独的
+/// [RustDeskReportPlaintext] 走带 OTP step-up 的端点取回。
+class RustDeskReportSummary {
+  const RustDeskReportSummary({
+    required this.machineId,
+    required this.rustDeskId,
+    required this.passwordKind,
+    required this.reportedAt,
+    this.passwordHashPrefix,
+    this.lastWrapKeyId,
+    this.secretVersion,
+    this.updatedAt,
+  });
+
+  /// 机台 ID（主键）。
+  final String machineId;
+
+  /// 机台上报的 RustDesk ID（数字字符串）。
+  final String rustDeskId;
+
+  /// 密码类型：`temporary` / `permanent` / `preset` / `absent`。
+  final String passwordKind;
+
+  /// 机台端"上报发生时间"（毫秒级时间戳，但服务端持久化为 ISO 字符串）。
+  final String reportedAt;
+
+  /// `sha256(plaintext)[..8]`：在审计中代指密码用，明文不返回时也给前端一个
+  /// 可显示的"密码指纹"。`absent` / 空密码时为 `null`。
+  final String? passwordHashPrefix;
+
+  /// 本次上报使用的 wrap_key ID（用于服务端解密 password 密文）。
+  final String? lastWrapKeyId;
+
+  /// 上报时机台用的 RustDeskClientSharedSecret 版本。
+  final int? secretVersion;
+
+  /// 服务端 upsert 写入时间。`reportedAt` 之后；通常用于刷新动画。
+  final String? updatedAt;
+
+  bool get hasPassword =>
+      passwordKind != 'absent' && (passwordHashPrefix != null);
+
+  String get passwordKindLabel {
+    switch (passwordKind) {
+      case 'temporary':
+        return '临时密码';
+      case 'permanent':
+        return '永久密码';
+      case 'preset':
+        return '预设密码';
+      case 'absent':
+        return '未设置';
+      default:
+        return passwordKind;
+    }
+  }
+
+  String get localizedReportedAt =>
+      reportedAt.isEmpty ? '未知时间' : formatAuditTimestamp(reportedAt);
+
+  String get localizedUpdatedAt {
+    if (updatedAt == null || updatedAt!.isEmpty) {
+      return localizedReportedAt;
+    }
+    return formatAuditTimestamp(updatedAt!);
+  }
+
+  factory RustDeskReportSummary.fromJson(Map<String, dynamic> json) {
+    return RustDeskReportSummary(
+      machineId: (json['machineId'] as String?) ?? '',
+      rustDeskId: (json['rustDeskId'] as String?) ?? '',
+      passwordKind: (json['passwordKind'] as String?) ?? 'absent',
+      reportedAt: (json['reportedAt'] as String?) ?? '',
+      passwordHashPrefix: json['passwordHashPrefix'] as String?,
+      lastWrapKeyId: json['lastWrapKeyId'] as String?,
+      secretVersion: json['secretVersion'] is num
+          ? (json['secretVersion'] as num).toInt()
+          : null,
+      updatedAt: json['updatedAt'] as String?,
+    );
+  }
+}
+
+/// 包含明文密码的 RustDesk 上报记录（仅 OTP step-up 通过后由后端返回）。
+///
+/// 与 [RustDeskReportSummary] 字段几乎一致，多了 `passwordPlaintext` 一项；
+/// 调用方读到后应在 UI 关闭时清空，不应长期持有。
+class RustDeskReportPlaintext {
+  const RustDeskReportPlaintext({
+    required this.machineId,
+    required this.rustDeskId,
+    required this.passwordKind,
+    required this.reportedAt,
+    required this.passwordPlaintext,
+    this.passwordHashPrefix,
+    this.lastWrapKeyId,
+    this.secretVersion,
+    this.updatedAt,
+  });
+
+  final String machineId;
+  final String rustDeskId;
+  final String passwordKind;
+  final String reportedAt;
+
+  /// 明文密码。`passwordKind == 'absent'` 时为空字符串。
+  final String passwordPlaintext;
+  final String? passwordHashPrefix;
+  final String? lastWrapKeyId;
+  final int? secretVersion;
+  final String? updatedAt;
+
+  RustDeskReportSummary toSummary() => RustDeskReportSummary(
+        machineId: machineId,
+        rustDeskId: rustDeskId,
+        passwordKind: passwordKind,
+        reportedAt: reportedAt,
+        passwordHashPrefix: passwordHashPrefix,
+        lastWrapKeyId: lastWrapKeyId,
+        secretVersion: secretVersion,
+        updatedAt: updatedAt,
+      );
+
+  factory RustDeskReportPlaintext.fromJson(Map<String, dynamic> json) {
+    return RustDeskReportPlaintext(
+      machineId: (json['machineId'] as String?) ?? '',
+      rustDeskId: (json['rustDeskId'] as String?) ?? '',
+      passwordKind: (json['passwordKind'] as String?) ?? 'absent',
+      reportedAt: (json['reportedAt'] as String?) ?? '',
+      passwordPlaintext: (json['passwordPlaintext'] as String?) ?? '',
+      passwordHashPrefix: json['passwordHashPrefix'] as String?,
+      lastWrapKeyId: json['lastWrapKeyId'] as String?,
+      secretVersion: json['secretVersion'] is num
+          ? (json['secretVersion'] as num).toInt()
+          : null,
+      updatedAt: json['updatedAt'] as String?,
     );
   }
 }

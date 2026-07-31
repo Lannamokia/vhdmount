@@ -78,6 +78,79 @@ namespace VHDMounter
             return true;
         }
 
+        /// <summary>
+        /// 入队一条已经构造完成的 RustDesk 桥日志条目。调用方负责字段填充
+        /// （Component / Level / EventKey / OccurredAt / Message），脱敏请走
+        /// <see cref="MachineLogSanitizer.Sanitize"/> 在调用前应用。
+        ///
+        /// 不修改私有路径、不引入新枚举（与既有 Trace 监听入队风格一致）。
+        /// 返回 true 表示入队成功；返回 false 表示该条目无效（SessionId 缺失等）。
+        /// </summary>
+        public bool EnqueueRustDeskBridgeEntry(MachineLogEntry entry)
+        {
+            ThrowIfDisposed();
+
+            if (entry == null || string.IsNullOrWhiteSpace(entry.Message))
+            {
+                return false;
+            }
+
+            lock (syncRoot)
+            {
+                if (string.IsNullOrEmpty(entry.SessionId))
+                {
+                    entry.SessionId = CurrentSessionId;
+                }
+
+                if (entry.Seq <= 0)
+                {
+                    entry.Seq = GetNextSeqLocked(entry.SessionId);
+                }
+                else if (!nextSeqBySession.TryGetValue(entry.SessionId, out var nextSeq) || entry.Seq >= nextSeq)
+                {
+                    nextSeqBySession[entry.SessionId] = entry.Seq + 1;
+                }
+
+                if (string.IsNullOrEmpty(entry.OccurredAt))
+                {
+                    entry.OccurredAt = DateTimeOffset.UtcNow.ToString(
+                        "yyyy-MM-ddTHH:mm:ss.fffZ",
+                        System.Globalization.CultureInfo.InvariantCulture);
+                }
+
+                if (string.IsNullOrEmpty(entry.Level))
+                {
+                    entry.Level = "info";
+                }
+
+                if (string.IsNullOrEmpty(entry.Component))
+                {
+                    entry.Component = "rustdesk-bridge";
+                }
+
+                if (string.IsNullOrEmpty(entry.EventKey))
+                {
+                    entry.EventKey = "TRACE_LINE";
+                }
+
+                if (string.IsNullOrEmpty(entry.RawText))
+                {
+                    entry.RawText = entry.Message;
+                }
+
+                if (entry.Metadata == null)
+                {
+                    entry.Metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                }
+
+                PersistEntryLocked(entry);
+                TrimToBudgetLocked();
+            }
+
+            ReleaseEntriesSignal();
+            return true;
+        }
+
         public IReadOnlyList<string> GetPendingSessionIds()
         {
             ThrowIfDisposed();

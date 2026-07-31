@@ -1,0 +1,819 @@
+using System;
+using System.IO;
+using System.IO.Pipes;
+using System.Linq;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Threading;
+using System.Threading.Tasks;
+using VHDMounter.RustDeskBridge.Crypto;
+using VHDMounter.RustDeskBridge.Frames;
+using VHDMounter.RustDeskBridge.Log;
+using VHDMounter.RustDeskBridge.Pipe;
+using VHDMounter.RustDeskBridge.Policy;
+using VHDMounter.RustDeskBridge.RateLimit;
+using VHDMounter.RustDeskBridge.Upload;
+
+namespace VHDMounter.RustDeskBridge.Session
+{
+    /// <summary>
+    /// 整个 RustDesk 桥的核心整合者：单次 Bridge_Session 帧路由器（任务 9.4）。
+    ///
+    /// 由 <see cref="PipeAcceptLoop"/> 在每次 ConnectNamedPipe 成功后调用一次
+    /// <see cref="RunAsync"/>，完整跑完一次会话生命周期：
+    ///
+    /// <list type="number">
+    /// <item>冷却期分支：<c>isCoolingDown == true</c> → 读首帧（不解析）→
+    ///       直接回 <c>HandshakeResponse { ok: false, reason: "rate_limited" }</c> → 关闭管道 → return</item>
+    /// <item>第一帧必须是 <c>VHDRustDeskBridgeHandshakeV1</c>，否则视为协议错误关闭（Requirement 4.2）</item>
+    /// <item>握手帧字段约束：按 design §"错误码到 reason 字面量的映射表" 路由 reason
+    ///       <list type="bullet">
+    ///       <item>secretVersion 字段不存在 / 不是 JSON 数字 / 超出 u32 范围 → invalid_proof（Requirement 4.4）</item>
+    ///       <item>nonce / timestampMs / clientKind / proof 任一不通过 → invalid_proof（Requirement 4.4 / 4.6 / 4.7）</item>
+    ///       <item>clientKind != "rustdesk" → deny（Requirement 4.3）</item>
+    ///       <item>secretVersion 是合法 u32 但版本不等 → secret_outdated（Requirement 4.5）</item>
+    ///       <item>全部通过 → ok: true + LRU.TryAdd + session.MarkHandshaked</item>
+    ///       </list></item>
+    /// <item>Handshaked 状态下路由 Report / Log / PeerApproval；未握手收到任一 → 协议错误关闭（Requirement 5.2 / 7.2 / 9.2）</item>
+    /// <item>任意帧解码失败 / I/O 异常 → 关闭会话；调用方负责重建管道</item>
+    /// </list>
+    ///
+    /// 任何反向写出都会经过 <see cref="FrameCodec.WriteFrameAsync"/>，由 FrameCodec
+    /// 负责 4 字节小端长度前缀外壳。
+    /// </summary>
+    internal sealed class SessionStateMachine
+    {
+        private static readonly JsonSerializerOptions ResponseSerializerOptions = new JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        };
+
+        private readonly HmacVerifier _hmac;
+        private readonly HandshakeNonceLruCache _nonceLru;
+        private readonly SnapshotStore _snapshots;
+        private readonly PeerApprovalEvaluator _peerApprovals;
+        private readonly LogIngestor _logs;
+        private readonly BridgeLogDropCounter _logDropCounter;
+        private readonly LastReportedSnapshot _lastReported;
+        private readonly ReportRateLimiter _reportRateLimiter;
+        private readonly ReportUploadQueue _reportQueue;
+        private readonly HandshakeRateLimiter _handshakeRateLimiter;
+        private readonly IBridgeSecretProvider _secretProvider;
+        private readonly string _thisMachineId;
+        private readonly IClock _clock;
+        private readonly Action<string> _diagnostics;
+
+        public SessionStateMachine(
+            HmacVerifier hmac,
+            HandshakeNonceLruCache nonceLru,
+            SnapshotStore snapshots,
+            PeerApprovalEvaluator peerApprovals,
+            LogIngestor logs,
+            BridgeLogDropCounter logDropCounter,
+            LastReportedSnapshot lastReported,
+            ReportRateLimiter reportRateLimiter,
+            ReportUploadQueue reportQueue,
+            HandshakeRateLimiter handshakeRateLimiter,
+            IBridgeSecretProvider secretProvider,
+            string thisMachineId,
+            IClock clock,
+            Action<string> diagnostics = null)
+        {
+            _hmac = hmac ?? throw new ArgumentNullException(nameof(hmac));
+            _nonceLru = nonceLru ?? throw new ArgumentNullException(nameof(nonceLru));
+            _snapshots = snapshots ?? throw new ArgumentNullException(nameof(snapshots));
+            _peerApprovals = peerApprovals ?? throw new ArgumentNullException(nameof(peerApprovals));
+            _logs = logs ?? throw new ArgumentNullException(nameof(logs));
+            _logDropCounter = logDropCounter ?? throw new ArgumentNullException(nameof(logDropCounter));
+            _lastReported = lastReported ?? throw new ArgumentNullException(nameof(lastReported));
+            _reportRateLimiter = reportRateLimiter ?? throw new ArgumentNullException(nameof(reportRateLimiter));
+            _reportQueue = reportQueue ?? throw new ArgumentNullException(nameof(reportQueue));
+            _handshakeRateLimiter = handshakeRateLimiter ?? throw new ArgumentNullException(nameof(handshakeRateLimiter));
+            _secretProvider = secretProvider ?? throw new ArgumentNullException(nameof(secretProvider));
+            _thisMachineId = thisMachineId ?? throw new ArgumentNullException(nameof(thisMachineId));
+            _clock = clock ?? throw new ArgumentNullException(nameof(clock));
+            _diagnostics = diagnostics ?? (_ => { });
+        }
+
+        /// <summary>
+        /// 与 <see cref="PipeAcceptLoop.SessionRunnerDelegate"/> 签名一致。本方法
+        /// 完整跑完一次会话；返回（正常 return / 抛异常）后 PipeAcceptLoop 关闭管道并重建。
+        ///
+        /// 内部创建 <see cref="BridgeSession"/> 并在 finally 中 Dispose。BridgeServerHost
+        /// 走的是 <see cref="RunSessionAsync"/> 重载，会从外部传入并跟踪 session 实例。
+        /// </summary>
+        public async Task RunAsync(NamedPipeServerStream pipe, bool isCoolingDown, CancellationToken ct)
+        {
+            using var session = new BridgeSession(pipe);
+            await RunSessionInnerAsync(session, isCoolingDown, ct).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// 任务 12.1 引入的最小重载：调用方持有 <see cref="BridgeSession"/> 并自行管理
+        /// 生命周期（BridgeServerHost 用此重载把当前会话注入 RevocationPublisher 的
+        /// <c>getActiveSession</c> 委托），方法内部仅调
+        /// <see cref="BridgeSession.Close"/>，<b>不</b> Dispose。
+        /// </summary>
+        public Task RunSessionAsync(BridgeSession session, bool isCoolingDown, CancellationToken ct)
+        {
+            if (session == null) throw new ArgumentNullException(nameof(session));
+            return RunSessionInnerAsync(session, isCoolingDown, ct);
+        }
+
+        // 共享主循环：与原 RunAsync(NamedPipeServerStream, ...) 字节同构，不 Dispose session。
+        private async Task RunSessionInnerAsync(BridgeSession session, bool isCoolingDown, CancellationToken ct)
+        {
+            var pipe = session.Pipe;
+            string closePath = "completed";
+            try
+            {
+                if (isCoolingDown)
+                {
+                    closePath = "cooldown";
+                    await HandleCoolingDownAsync(pipe, ct).ConfigureAwait(false);
+                    return;
+                }
+
+                // 第一帧：握手
+                if (!await HandleHandshakeAsync(pipe, session, ct).ConfigureAwait(false))
+                {
+                    closePath = "handshake_rejected_or_eof";
+                    return;
+                }
+
+                // 已握手 → 进入帧路由循环
+                closePath = "handshaked_loop";
+                await RunHandshakedLoopAsync(pipe, session, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // 进程退出 / Bridge_Server 停止
+                closePath = "host_canceled";
+            }
+            catch (InvalidDataException ex)
+            {
+                closePath = "invalid_data";
+                _diagnostics($"Bridge session 协议错误：{ex.Message}");
+            }
+            catch (IOException ex)
+            {
+                closePath = "io_exception";
+                _diagnostics($"Bridge session 管道 I/O 异常：{ex.Message}");
+            }
+            catch (Exception ex)
+            {
+                closePath = "unexpected";
+                _diagnostics($"Bridge session 未预期异常：{ex.Message}");
+            }
+            finally
+            {
+                // 事件 10：pipe_closed —— 把"为什么关闭 + 在哪个生命周期阶段关闭"
+                //          打出来，配合 RustDesk 一侧 §6 时序对账
+                _diagnostics(
+                    $"Bridge[event=pipe_closed] reason={closePath} state={session.State} " +
+                    $"handshaked={session.IsHandshaked}");
+                try { session.Close(); } catch { /* ignore */ }
+            }
+        }
+
+        // ---------- 冷却期分支（Requirement 14.2） ----------
+
+        private async Task HandleCoolingDownAsync(NamedPipeServerStream pipe, CancellationToken ct)
+        {
+            // 事件 1：pipe_connect_accepted（在 cooling-down 路径上也打一行，便于
+            // 排查"刚累积 3 次失败 + 60s 内连进来都被 rate_limited"的现场）
+            EmitClientIdentityTrace(pipe, "cooldown");
+
+            // 读首帧但不解析 —— 仅是为了让客户端能等到一个连接级响应再断开
+            try
+            {
+                _ = await FrameCodec.ReadFrameAsync(pipe, ct).ConfigureAwait(false);
+            }
+            catch (EndOfStreamException) { /* 对端正常关闭 —— 静默 */ }
+            catch (InvalidDataException) { /* 客户端发了非法帧 —— 仍按 rate_limited 回复 */ }
+            catch (IOException) { /* 客户端直接断开 */ }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
+
+            // 不解析、不计 LRU、不算 HMAC、不增 RateLimiter 失败计数 —— 仅写一帧
+            var written = await WriteHandshakeResponseAsync(
+                pipe, HandshakeResponse.Failure("rate_limited"), ct).ConfigureAwait(false);
+            _diagnostics($"Bridge[event=response_written] phase=cooldown reason=rate_limited written={written}B");
+        }
+
+        // ---------- 握手 ----------
+
+        private async Task<bool> HandleHandshakeAsync(
+            NamedPipeServerStream pipe, BridgeSession session, CancellationToken ct)
+        {
+            // 事件 1 & 2：pipe_connect_accepted + client_token_check
+            EmitClientIdentityTrace(pipe, "handshake");
+
+            byte[] firstFrame;
+            try
+            {
+                firstFrame = await FrameCodec.ReadFrameAsync(pipe, ct).ConfigureAwait(false);
+            }
+            catch (EndOfStreamException)
+            {
+                // 对端在没发首帧的情况下正常关闭管道（连接试探 / 客户端进程退出 / RustDesk
+                // 主动 disconnect）。这是正常会话结束，不是协议错误，不写 ERROR 级日志。
+                _diagnostics("Bridge[event=pipe_closed] phase=handshake stage=before_first_byte cause=clean_eof");
+                return false;
+            }
+            catch (InvalidDataException ex)
+            {
+                _diagnostics($"Bridge[event=pipe_closed] phase=handshake stage=frame_shell cause=invalid_data detail={Truncate(ex.Message, 200)}");
+                return false; // 协议错误关闭
+            }
+            catch (IOException ex)
+            {
+                _diagnostics($"Bridge[event=pipe_closed] phase=handshake stage=frame_shell cause=io detail={Truncate(ex.Message, 200)}");
+                return false;
+            }
+
+            // 事件 3 & 4：frame_header_read + frame_payload_read（合并打一行）
+            _diagnostics(
+                $"Bridge[event=frame_payload_read] phase=handshake length={firstFrame.Length}B");
+
+            // (1) 协议字面量 / secretVersion 字段类型校验：用 JsonDocument 二阶段解析，
+            //     避免直接 Deserialize 时 secretVersion 字段为 string / float / 缺失被
+            //     STJ 视为协议错误（应当走 invalid_proof）。
+            using var doc = TryParseJsonDocument(firstFrame, out var parseFailure);
+            if (doc == null)
+            {
+                _diagnostics(
+                    $"Bridge[event=schema_check_json_failed] phase=handshake detail={Truncate(parseFailure, 200)}");
+                _diagnostics("Bridge[event=pipe_closed] phase=handshake stage=parse cause=invalid_json");
+                return false; // 协议错误关闭管道（与首帧 protocol 字面量错同等待遇）
+            }
+
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                _diagnostics("Bridge[event=schema_check_root_failed] phase=handshake detail=not_object");
+                _diagnostics("Bridge[event=pipe_closed] phase=handshake stage=parse cause=root_not_object");
+                return false;
+            }
+
+            // 必须严格等于 HandshakeFrame.ProtocolLiteral，否则关闭（Requirement 4.2）
+            if (!root.TryGetProperty("protocol", out var protocolEl)
+                || protocolEl.ValueKind != JsonValueKind.String
+                || !string.Equals(protocolEl.GetString(), HandshakeFrame.ProtocolLiteral, StringComparison.Ordinal))
+            {
+                var observed = protocolEl.ValueKind == JsonValueKind.String
+                    ? protocolEl.GetString()
+                    : protocolEl.ValueKind.ToString();
+                _diagnostics(
+                    $"Bridge[event=schema_check_protocol_failed] phase=handshake observed={Truncate(observed, 80)} expected={HandshakeFrame.ProtocolLiteral}");
+                _diagnostics("Bridge[event=pipe_closed] phase=handshake stage=schema cause=protocol_literal");
+                return false;
+            }
+
+            // (2) secretVersion 必须是 u32 范围内的非负整数（Requirement 4.4）
+            if (!TryReadUInt32(root, "secretVersion", out var frameSecretVersion))
+            {
+                _diagnostics("Bridge[event=schema_check_secretVersion_failed] phase=handshake detail=missing_or_not_u32");
+                await RejectAndTraceAsync(pipe, "invalid_proof", "secretVersion_not_u32", ct).ConfigureAwait(false);
+                _handshakeRateLimiter.RecordFailure();
+                return false;
+            }
+
+            // (3) 取 nonce / timestampMs / clientKind 字段（DTO 反序列化）
+            HandshakeFrame frame;
+            try
+            {
+                frame = JsonSerializer.Deserialize<HandshakeFrame>(firstFrame);
+            }
+            catch (JsonException ex)
+            {
+                _diagnostics($"Bridge[event=schema_check_dto_failed] phase=handshake detail={Truncate(ex.Message, 200)}");
+                await RejectAndTraceAsync(pipe, "invalid_proof", "dto_deserialize", ct).ConfigureAwait(false);
+                _handshakeRateLimiter.RecordFailure();
+                return false;
+            }
+
+            if (frame == null
+                || string.IsNullOrEmpty(frame.Nonce)
+                || string.IsNullOrEmpty(frame.Proof))
+            {
+                _diagnostics(
+                    $"Bridge[event=schema_check_required_failed] phase=handshake nonce_empty={string.IsNullOrEmpty(frame?.Nonce)} proof_empty={string.IsNullOrEmpty(frame?.Proof)}");
+                await RejectAndTraceAsync(pipe, "invalid_proof", "nonce_or_proof_empty", ct).ConfigureAwait(false);
+                _handshakeRateLimiter.RecordFailure();
+                return false;
+            }
+
+            // 事件 5：json_parsed —— 把字段全部记录下来（除 proof / 共享密钥外），
+            //         便于现场对照 RustDesk 一侧 §6 时序的 [t2] 阶段
+            _diagnostics(
+                "Bridge[event=json_parsed] phase=handshake " +
+                $"protocol={frame.Protocol} secretVersion={frame.SecretVersion} " +
+                $"clientKind={frame.ClientKind} clientVersion={Truncate(frame.ClientVersion, 32)} " +
+                $"timestampMs={frame.TimestampMs} nonce_prefix={NoncePrefix(frame.Nonce, 8)}");
+
+            // 双 sanity check：DTO 解出的 SecretVersion 应当与 JsonDocument 解出的相同
+            if (frame.SecretVersion != frameSecretVersion)
+            {
+                _diagnostics(
+                    $"Bridge[event=schema_check_secretVersion_mismatch] phase=handshake dto={frame.SecretVersion} doc={frameSecretVersion}");
+                await RejectAndTraceAsync(pipe, "invalid_proof", "secretVersion_dto_doc_mismatch", ct).ConfigureAwait(false);
+                _handshakeRateLimiter.RecordFailure();
+                return false;
+            }
+
+            // (4) clientKind != "rustdesk" → deny（Requirement 4.3）
+            if (!string.Equals(frame.ClientKind, "rustdesk", StringComparison.Ordinal))
+            {
+                _diagnostics(
+                    $"Bridge[event=schema_check_clientKind_failed] phase=handshake observed={Truncate(frame.ClientKind, 32)}");
+                await RejectAndTraceAsync(pipe, "deny", "clientKind_not_rustdesk", ct).ConfigureAwait(false);
+                _handshakeRateLimiter.RecordFailure();
+                return false;
+            }
+
+            // (5) 时间窗（Requirement 4.6）
+            var nowMs = _clock.UtcNow.ToUnixTimeMilliseconds();
+            const long TimeWindowMs = 300_000;
+            var skewMs = nowMs - frame.TimestampMs;
+            if (Math.Abs(skewMs) > TimeWindowMs)
+            {
+                _diagnostics(
+                    $"Bridge[event=schema_check_timestamp_failed] phase=handshake skewMs={skewMs} window=±{TimeWindowMs}");
+                await RejectAndTraceAsync(pipe, "invalid_proof", $"timestamp_skew_{skewMs}ms", ct).ConfigureAwait(false);
+                _handshakeRateLimiter.RecordFailure();
+                return false;
+            }
+
+            // (6) secretVersion 是合法 u32 但与本机 active 不等 → secret_outdated（Requirement 4.5）
+            //     —— 同时打出 secret 是否已 loaded，避免「服务端没录入 active secret 时
+            //        本机 _activeVersion=0，正确的客户端发 secretVersion=1 反复被 reject」
+            //        百思不得其解（参见 controlled-side-handoff §9.Q4）
+            var providerVersion = _secretProvider.CurrentSecretVersion;
+            if (frame.SecretVersion != providerVersion)
+            {
+                var providerLoaded = (_secretProvider as VHDMounter.RustDeskBridge.Crypto.BridgeSecretClient)?.IsLoaded;
+                _diagnostics(
+                    $"Bridge[event=schema_check_secretVersion_negotiation_failed] phase=handshake " +
+                    $"frame={frame.SecretVersion} active={providerVersion} secret_loaded={providerLoaded}");
+                if (providerVersion == 0)
+                {
+                    _diagnostics(
+                        "Bridge[event=secret_not_loaded_warning] phase=handshake " +
+                        "msg=本机 BridgeSecretClient 还没成功拉取 active RustDeskClientSharedSecret，" +
+                        "所有握手帧将以 secret_outdated 被拒；请检查管理面是否已录入 active secret");
+                }
+                await RejectAndTraceAsync(pipe, "secret_outdated", $"frame_v{frame.SecretVersion}_vs_active_v{providerVersion}", ct).ConfigureAwait(false);
+                _handshakeRateLimiter.RecordFailure();
+                return false;
+            }
+
+            // (7) HMAC proof（Requirement 3.1 / 3.4）—— 在 nonce LRU 写入之前先校验，避免错误的 proof 占据 LRU 槽位
+            //     事件 7 / 8：hmac_input_built + hmac_compare_failed
+            var hmacInput = HmacVerifier.BuildHandshakeHmacInput(
+                frame.SecretVersion, frame.Nonce, frame.TimestampMs);
+            var hmacInputDigestHex = ShortSha256Hex(hmacInput);
+            _diagnostics(
+                $"Bridge[event=hmac_input_built] phase=handshake input_len={hmacInput.Length}B input_sha256_prefix={hmacInputDigestHex}");
+
+            if (!_hmac.VerifyHandshake(frame))
+            {
+                var expectedProof = _hmac.ComputeMacBase64(hmacInput);
+                _diagnostics(
+                    $"Bridge[event=hmac_compare_failed] phase=handshake " +
+                    $"observed_proof_prefix={ShortBase64Prefix(frame.Proof, 8)} " +
+                    $"expected_proof_prefix={ShortBase64Prefix(expectedProof, 8)}");
+                await RejectAndTraceAsync(pipe, "invalid_proof", "hmac_proof_mismatch", ct).ConfigureAwait(false);
+                _handshakeRateLimiter.RecordFailure();
+                return false;
+            }
+
+            // (8) nonce LRU（Requirement 4.7）
+            if (!_nonceLru.TryAdd(frame.SecretVersion, frame.Nonce))
+            {
+                _diagnostics(
+                    $"Bridge[event=nonce_lru_replay] phase=handshake nonce_prefix={NoncePrefix(frame.Nonce, 8)}");
+                await RejectAndTraceAsync(pipe, "invalid_proof", "nonce_replay", ct).ConfigureAwait(false);
+                _handshakeRateLimiter.RecordFailure();
+                return false;
+            }
+
+            // 全部通过：握手成功
+            session.MarkHandshaked(frame.SecretVersion);
+            var successWritten = await WriteHandshakeResponseAsync(pipe, HandshakeResponse.Success(), ct)
+                .ConfigureAwait(false);
+            _diagnostics(
+                $"Bridge[event=response_written] phase=handshake reason=ok written={successWritten}B " +
+                $"secretVersion={frame.SecretVersion} clientVersion={Truncate(frame.ClientVersion, 32)}");
+            return true;
+        }
+
+        private async Task RejectAndTraceAsync(
+            NamedPipeServerStream pipe, string reason, string detail, CancellationToken ct)
+        {
+            int written;
+            try
+            {
+                written = await WriteHandshakeResponseAsync(
+                    pipe, HandshakeResponse.Failure(reason), ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _diagnostics(
+                    $"Bridge[event=response_write_failed] phase=handshake reason={reason} detail={detail} " +
+                    $"err={Truncate(ex.Message, 200)}");
+                return;
+            }
+            _diagnostics(
+                $"Bridge[event=response_written] phase=handshake reason={reason} detail={detail} written={written}B");
+        }
+
+        private static async Task<int> WriteHandshakeResponseAsync(
+            NamedPipeServerStream pipe, HandshakeResponse response, CancellationToken ct)
+        {
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(response, ResponseSerializerOptions);
+            return await FrameCodec.WriteFrameAsync(pipe, bytes, ct).ConfigureAwait(false);
+        }
+
+        // ---------- 已握手帧路由 ----------
+
+        private async Task RunHandshakedLoopAsync(
+            NamedPipeServerStream pipe, BridgeSession session, CancellationToken ct)
+        {
+            try
+            {
+                while (!ct.IsCancellationRequested && pipe.IsConnected)
+                {
+                    byte[] frameBytes;
+                    try
+                    {
+                        frameBytes = await FrameCodec.ReadFrameAsync(pipe, ct).ConfigureAwait(false);
+                    }
+                    catch (EndOfStreamException)
+                    {
+                        // 对端在帧边界正常关闭 —— 已握手会话的正常退出路径
+                        return;
+                    }
+                    catch (InvalidDataException ex)
+                    {
+                        _diagnostics($"Bridge 帧外壳解析失败：{ex.Message}");
+                        return; // 协议错误关闭
+                    }
+                    catch (IOException) { return; /* 客户端断开 */ }
+
+                    using var doc = TryParseJsonDocument(frameBytes, out var parseFailure);
+                    if (doc == null)
+                    {
+                        _diagnostics($"Bridge 帧 JSON 解析失败：{parseFailure}");
+                        return;
+                    }
+
+                    var root = doc.RootElement;
+                    if (root.ValueKind != JsonValueKind.Object
+                        || !root.TryGetProperty("protocol", out var protocolEl)
+                        || protocolEl.ValueKind != JsonValueKind.String)
+                    {
+                        _diagnostics("Bridge 帧缺少 protocol 字段");
+                        return;
+                    }
+
+                    var protocol = protocolEl.GetString();
+                    switch (protocol)
+                    {
+                        case ReportFrame.ProtocolLiteral:
+                            if (!await HandleReportAsync(pipe, session, frameBytes, ct).ConfigureAwait(false))
+                            {
+                                return;
+                            }
+                            break;
+
+                        case LogFrame.ProtocolLiteral:
+                            HandleLog(frameBytes, session);
+                            break;
+
+                        case PeerApprovalFrame.ProtocolLiteral:
+                            if (!await HandlePeerApprovalAsync(pipe, session, frameBytes, ct).ConfigureAwait(false))
+                            {
+                                return;
+                            }
+                            break;
+
+                        default:
+                            _diagnostics(
+                                $"Bridge 已握手会话上收到未知 protocol={protocol} —— 视为协议错误");
+                            return;
+                    }
+                }
+            }
+            finally
+            {
+                _logDropCounter.NotifySessionEnded();
+            }
+        }
+
+        // ---------- Report 帧 ----------
+
+        private async Task<bool> HandleReportAsync(
+            NamedPipeServerStream pipe, BridgeSession session, byte[] frameBytes, CancellationToken ct)
+        {
+            // Requirement 5.1：HMAC 校验之前先做 schema 严格校验，但响应路径 / 时延应不可统计区分
+            ReportFrame frame;
+            try
+            {
+                frame = JsonSerializer.Deserialize<ReportFrame>(frameBytes);
+            }
+            catch (JsonException ex)
+            {
+                _diagnostics($"Report 帧反序列化失败：{ex.Message}");
+                return false; // 协议错误关闭
+            }
+
+            if (frame == null)
+            {
+                return false;
+            }
+
+            // Schema 校验
+            var schemaOk = frame.PasswordKind != null
+                && Array.IndexOf(ReportFrame.AllowedPasswordKinds, frame.PasswordKind) >= 0
+                && frame.Reason != null
+                && Array.IndexOf(ReportFrame.AllowedReasons, frame.Reason) >= 0
+                && !(string.Equals(frame.PasswordKind, ReportFrame.PasswordKindAbsent, StringComparison.Ordinal)
+                     && !string.IsNullOrEmpty(frame.Password));
+
+            if (!schemaOk)
+            {
+                await WriteReportAckAsync(pipe, ReportAck.Rejected(ReportAck.ReasonInvalidMac), ct).ConfigureAwait(false);
+                return true;
+            }
+
+            // Requirement 5.3：secretVersion 与会话握手时确认值不等
+            if (frame.SecretVersion != session.NegotiatedSecretVersion)
+            {
+                await WriteReportAckAsync(
+                    pipe, ReportAck.Rejected(ReportAck.ReasonSecretOutdated), ct).ConfigureAwait(false);
+                return true;
+            }
+
+            // HMAC 校验（Requirement 3.1 / 3.4）
+            if (!_hmac.VerifyReport(frame))
+            {
+                await WriteReportAckAsync(pipe, ReportAck.Rejected(ReportAck.ReasonInvalidMac), ct).ConfigureAwait(false);
+                return true;
+            }
+
+            // Session 内 nonce HashSet（Requirement 5.4 / 14.5）
+            if (!session.RecordReportNonce(frame.Nonce, out var overflow))
+            {
+                if (overflow)
+                {
+                    _diagnostics("Bridge session Report nonce HashSet 触达上限，关闭会话");
+                    return false;
+                }
+                await WriteReportAckAsync(pipe, ReportAck.Rejected(ReportAck.ReasonInvalidMac), ct).ConfigureAwait(false);
+                return true;
+            }
+
+            // Requirement 5.7：立即回 accepted；后续上行 / 入队失败都不影响 ack
+            await WriteReportAckAsync(pipe, ReportAck.Accepted(), ct).ConfigureAwait(false);
+
+            // 在 ack 后异步触发 LastReportedSnapshot.TryReplace + 入队
+            try
+            {
+                if (_lastReported.TryReplace(frame, out var requiresUpload, out var passwordSnapshot))
+                {
+                    if (requiresUpload && passwordSnapshot != null)
+                    {
+                        // Requirement 14.3：1 秒内同三元组最多 1 次上行
+                        if (_reportRateLimiter.TryAcquire(frame.RustDeskId, frame.PasswordKind, frame.Password))
+                        {
+                            var payload = new ReportPayload(
+                                frame.RustDeskId,
+                                frame.PasswordKind,
+                                passwordSnapshot, // ReportUploadQueue 内部会复制再抹零
+                                frame.ReportedAt,
+                                frame.SecretVersion);
+                            _reportQueue.Enqueue(payload);
+                        }
+                        else
+                        {
+                            // 1 秒内重复三元组：丢弃 passwordSnapshot 抹零（避免泄露）
+                            System.Security.Cryptography.CryptographicOperations.ZeroMemory(passwordSnapshot);
+                            _diagnostics(
+                                $"Report 上行被 1 秒同三元组速率限制（rustDeskId 已被脱敏），丢弃 passwordSnapshot");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _diagnostics($"Report 异步上行准备阶段异常（已忽略）：{ex.Message}");
+            }
+
+            return true;
+        }
+
+        private static async Task WriteReportAckAsync(
+            NamedPipeServerStream pipe, ReportAck ack, CancellationToken ct)
+        {
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(ack, ResponseSerializerOptions);
+            await FrameCodec.WriteFrameAsync(pipe, bytes, ct).ConfigureAwait(false);
+        }
+
+        // ---------- Log 帧 ----------
+
+        private void HandleLog(byte[] frameBytes, BridgeSession session)
+        {
+            // Requirement 9.3：HMAC / secretVersion / level schema 失败 → 静默丢弃 + drop +1
+            LogFrame frame;
+            try
+            {
+                frame = JsonSerializer.Deserialize<LogFrame>(frameBytes);
+            }
+            catch (JsonException ex)
+            {
+                _logDropCounter.Increment();
+                _diagnostics($"Log 帧反序列化失败：{ex.Message}");
+                return;
+            }
+
+            if (frame == null
+                || frame.SecretVersion != session.NegotiatedSecretVersion
+                || !_hmac.VerifyLog(frame))
+            {
+                _logDropCounter.Increment();
+                return;
+            }
+
+            // 通过校验 → LogIngestor.Ingest（仍要 secretVersion check 已经做过）
+            // level schema 非法时 LogIngestor 会返回 false，本类按 §9.3 静默丢弃 + drop +1
+            try
+            {
+                if (!_logs.Ingest(frame))
+                {
+                    _logDropCounter.Increment();
+                }
+            }
+            catch (Exception ex)
+            {
+                _logDropCounter.Increment();
+                _diagnostics($"Log 入队失败：{ex.Message}");
+            }
+        }
+
+        // ---------- PeerApproval 帧 ----------
+
+        private async Task<bool> HandlePeerApprovalAsync(
+            NamedPipeServerStream pipe, BridgeSession session, byte[] frameBytes, CancellationToken ct)
+        {
+            PeerApprovalFrame frame;
+            try
+            {
+                frame = JsonSerializer.Deserialize<PeerApprovalFrame>(frameBytes);
+            }
+            catch (JsonException ex)
+            {
+                _diagnostics($"PeerApproval 帧反序列化失败：{ex.Message}");
+                return false; // 协议错误关闭
+            }
+
+            if (frame == null)
+            {
+                return false;
+            }
+
+            // Requirement 7.3：secretVersion 不等 → rejected（不附 reason）
+            // Requirement 7.4：requestNonce 重放 → rejected（不附 reason）
+            // Requirement 7.5：controlledMachineId 不等 → rejected（不附 reason）
+            // 任一失败都按统一的 Rejected() 路径回，不暴露具体原因（决策点 3）
+
+            if (frame.SecretVersion != session.NegotiatedSecretVersion)
+            {
+                await WritePeerApprovalAsync(pipe, PeerApprovalResponse.Rejected(), ct).ConfigureAwait(false);
+                return true;
+            }
+
+            if (!_hmac.VerifyPeerApproval(frame))
+            {
+                await WritePeerApprovalAsync(pipe, PeerApprovalResponse.Rejected(), ct).ConfigureAwait(false);
+                return true;
+            }
+
+            if (!session.RecordPeerApprovalNonce(frame.RequestNonce, out var overflow))
+            {
+                if (overflow)
+                {
+                    _diagnostics("Bridge session PeerApproval nonce HashSet 触达上限，关闭会话");
+                    return false;
+                }
+                await WritePeerApprovalAsync(pipe, PeerApprovalResponse.Rejected(), ct).ConfigureAwait(false);
+                return true;
+            }
+
+            // controlledMachineId 不等 → rejected（PeerApprovalEvaluator 内部也做了这个检查，
+            // 这里早返回是为了不浪费 SnapshotStore 的查表开销）
+            if (!string.Equals(frame.ControlledMachineId, _thisMachineId, StringComparison.Ordinal))
+            {
+                await WritePeerApprovalAsync(pipe, PeerApprovalResponse.Rejected(), ct).ConfigureAwait(false);
+                return true;
+            }
+
+            // 走 PeerApprovalEvaluator（包含 IRegistrationGate / SnapshotStore.Evaluate / 决策点 3 reason 省略）
+            var response = _peerApprovals.Evaluate(frame, _thisMachineId);
+            await WritePeerApprovalAsync(pipe, response, ct).ConfigureAwait(false);
+            return true;
+        }
+
+        private static async Task WritePeerApprovalAsync(
+            NamedPipeServerStream pipe, PeerApprovalResponse response, CancellationToken ct)
+        {
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(response, ResponseSerializerOptions);
+            await FrameCodec.WriteFrameAsync(pipe, bytes, ct).ConfigureAwait(false);
+        }
+
+        // ---------- 内部辅助 ----------
+
+        /// <summary>
+        /// 事件 1 / 2：把客户端 PID + token SID + image basename + session id 打到 trace。
+        /// 失败时尽量打出 best-effort 字段（PID 通常能拿到，SID/image 可能失败）。
+        /// </summary>
+        private void EmitClientIdentityTrace(NamedPipeServerStream pipe, string phase)
+        {
+            try
+            {
+                var info = VHDMounter.RustDeskBridge.Pipe.PipeClientIdentity.TryQuery(pipe);
+                _diagnostics(
+                    $"Bridge[event=pipe_connect_accepted] phase={phase} " +
+                    $"client_pid={(info.Pid?.ToString() ?? "unknown")} " +
+                    $"client_image={(info.ImageBaseName ?? "unknown")} " +
+                    $"client_sid={(info.SidString ?? "unknown")} " +
+                    $"client_session={(info.SessionId?.ToString() ?? "unknown")} " +
+                    $"is_local_system={info.IsLocalSystem}" +
+                    (string.IsNullOrEmpty(info.LastError)
+                        ? string.Empty
+                        : $" identity_error={Truncate(info.LastError, 120)}"));
+            }
+            catch
+            {
+                // 诊断输出失败永远不应中断 session
+            }
+        }
+
+        private static string Truncate(string s, int maxLength)
+        {
+            if (string.IsNullOrEmpty(s)) return string.Empty;
+            return s.Length <= maxLength ? s : s.Substring(0, maxLength);
+        }
+
+        /// <summary>
+        /// 取 nonce 的前 N 个字符（小写 hex 形态），不暴露完整 nonce。
+        /// </summary>
+        private static string NoncePrefix(string nonce, int n)
+        {
+            if (string.IsNullOrEmpty(nonce)) return "(empty)";
+            return nonce.Length <= n ? nonce : nonce.Substring(0, n);
+        }
+
+        /// <summary>
+        /// base64 的前 N 个字符；仅给"对账"诊断用，不会暴露完整 mac。
+        /// </summary>
+        private static string ShortBase64Prefix(string base64, int n)
+        {
+            if (string.IsNullOrEmpty(base64)) return "(empty)";
+            return base64.Length <= n ? base64 : base64.Substring(0, n);
+        }
+
+        /// <summary>
+        /// 输入字节的 SHA-256 前 8 个 hex 字符。仅诊断用。
+        /// </summary>
+        private static string ShortSha256Hex(byte[] bytes)
+        {
+            if (bytes == null || bytes.Length == 0) return "(empty)";
+            var hash = System.Security.Cryptography.SHA256.HashData(bytes);
+            var hex = Convert.ToHexString(hash);
+            return hex.Substring(0, 8).ToLowerInvariant();
+        }
+
+        private static JsonDocument TryParseJsonDocument(byte[] bytes, out string failureMessage)
+        {
+            failureMessage = null;
+            try
+            {
+                return JsonDocument.Parse(bytes);
+            }
+            catch (JsonException ex)
+            {
+                failureMessage = ex.Message;
+                return null;
+            }
+        }
+
+        private static bool TryReadUInt32(JsonElement obj, string propertyName, out uint value)
+        {
+            value = 0;
+            if (!obj.TryGetProperty(propertyName, out var el)) return false;
+            if (el.ValueKind != JsonValueKind.Number) return false;
+            return el.TryGetUInt32(out value);
+        }
+    }
+}

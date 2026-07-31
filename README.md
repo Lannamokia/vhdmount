@@ -31,16 +31,21 @@
   - 会优先尝试重新启动 `VHDMounter_Maimoller.exe`，找不到时再回退到 `VHDMounter.exe`。
 
 - VHDMountAdminTools
-  - 离线生成更新签名密钥、`trusted_keys.pem`、`manifest.json`、`manifest.sig`。
+  - 独立 Windows WPF 桌面工具，离线生成更新签名密钥、`trusted_keys.pem`、`manifest.json`、`manifest.sig`。
   - 生成预配置注册证书包：`.pfx`、`.pem`、`.trust.json` 和可直接粘贴到客户端配置中的 `.client-config.ini` 片段。
-  - 默认生成的更新清单有效期为 3 天，默认 `minVersion` 为 `1.5.0`。
+  - 默认生成的更新清单有效期为 3 天，默认 `minVersion` 为 `1.7.0`。
+  - 当前版本的同等功能已迁移至 Flutter 管理客户端 Windows 桌面端的"离线工具"页（密钥生成、清单打包、证书包、软件部署打包），可直接在管理客户端内完成签名与打包，无需再单独运行此工具。
 
 - EVHDMountTester
   - 调试用命令行工具，验证 `encrypted-vhd-mount.exe` 挂载 EVHD 到指定挂载点，并可继续验证解密后 VHD 绑定到目标盘符（默认 `M:\`）。
 
 - vhd_mount_admin_flutter
-  - 新的管理客户端，负责初始化、登录、OTP 验证、机台管理、证书管理、审计查看和安全设置。
+  - 跨平台管理客户端，负责初始化、登录、OTP 验证、机台管理、证书管理、审计查看、部署管理和安全设置。
   - 当前工程已包含 Windows、Android 和 iOS 平台骨架；iOS 构建仍需 macOS + Xcode。
+  - 已集成 OTP 自动守卫：高敏操作触发时自动弹窗，验证成功后透明重试原始操作。
+  - 服务端支持多 TOTP 密钥架构；客户端在设置页提供"TOTP 密钥管理"区域用于添加 / 注销认证器密钥。
+  - Windows 桌面端集成"离线工具"页（仅在 `Platform.isWindows` 且已认证时显示），等价于 VHDMountAdminTools 的全部能力 + 软件部署本地打包器。
+  - 证书页面提供"生成证书"按钮（仅 Windows 桌面），生成成功后自动调用 `addTrustedCertificate` 导入服务端信任列表。
 
 ## 仓库结构
 
@@ -220,6 +225,12 @@ MachineLogUploadMaxSpoolBytes=52428800
 - OTP 绑定支持两步式轮换：
   - `POST /api/auth/otp/rotate/prepare`
   - `POST /api/auth/otp/rotate/complete`
+- 服务端支持多 TOTP 密钥架构：
+  - `totpKeys` 数组替代旧的单 `totpSecret` 字段，旧配置在加载时自动迁移为单元素数组（type 为 `authenticator`，名称 "初始认证器"）。
+  - 每个密钥包含 `id`、`name`、`type`（`authenticator`；历史 `biometric` 条目仍兼容存量数据但客户端不再生成新的）、`platform`、`secret`、`createdAt`、`lastUsedAt`。
+  - `verifyTotp` 遍历所有活跃密钥，任一匹配即视为成功，并更新该密钥的 `lastUsedAt`。
+  - 至少保留一个 `authenticator` 类型密钥，最后一个不可被注销。
+  - OTP 轮换（rotate）会全量重置为单个新 `authenticator` 密钥。
 - 机台日志链路已落地：服务端支持实时接收、分页查询和导出机台日志，并可配置日志保留策略。
 - 数据库结构通过 `migrations/001_*.sql`、`002_*.sql` 之类的版本文件管理；应用启动和 `npm run migrate` 走同一套迁移逻辑。
 
@@ -246,6 +257,9 @@ MachineLogUploadMaxSpoolBytes=52428800
 - `GET /api/auth/otp/status`
 - `POST /api/auth/otp/rotate/prepare`
 - `POST /api/auth/otp/rotate/complete`
+- `GET /api/auth/otp/keys`（列出当前活跃 TOTP 密钥，不含 secret，仅需登录态）
+- `POST /api/auth/otp/keys`（注册新密钥，type 为 `authenticator`；服务端仍接受 `biometric` 以兼容历史客户端，但当前 UI 不再生成此类型；仅创建时返回一次 `secret` + `otpauthUrl`，需 OTP step-up）
+- `DELETE /api/auth/otp/keys/:keyId`（注销指定密钥；保护最后一个 `authenticator` 类型密钥不被删除，需 OTP step-up）
 
 设置与机台日志：
 

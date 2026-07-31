@@ -39,10 +39,8 @@
     <Compile Remove="Program.cs" />
     <Compile Remove="VHDManager.cs" />
     <Compile Remove="VHDMounter.Tests\**\*.cs" />
-    <Compile Remove="VHDMounter.Tests.RustDeskBridge.MockController\**\*.cs" />
     <Compile Remove="Updater\**\*.cs" />
     <None Include="VHDMounter.Tests\**\*.cs" />
-    <None Include="VHDMounter.Tests.RustDeskBridge.MockController\**\*.cs" />
     <None Include="Updater\**\*.cs" />
   </ItemGroup>
 
@@ -60,6 +58,11 @@
   <ItemGroup>
     <Compile Remove="EVHDMountTester\**\*.cs" />
     <None Include="EVHDMountTester\**\*.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="VHDMounter.Tests.RustDeskBridge.MockController\**\*.cs" />
+    <None Include="VHDMounter.Tests.RustDeskBridge.MockController\**\*.cs" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(EnableHidMenuFeatures)' != 'true'">

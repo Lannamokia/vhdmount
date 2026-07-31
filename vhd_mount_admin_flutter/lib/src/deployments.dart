@@ -323,16 +323,17 @@ class _PackagesTab extends StatelessWidget {
               icon: const Icon(Icons.upload_file_rounded),
               label: const Text('上传部署包'),
             ),
-            OutlinedButton.icon(
-              onPressed: () async {
-                await showDialog<void>(
-                  context: context,
-                  builder: (context) => const LocalPackagerDialog(),
-                );
-              },
-              icon: const Icon(Icons.build_circle_rounded),
-              label: const Text('本地打包器'),
-            ),
+            if (Platform.isWindows)
+              OutlinedButton.icon(
+                onPressed: () async {
+                  await showDialog<void>(
+                    context: context,
+                    builder: (context) => const LocalPackagerDialog(),
+                  );
+                },
+                icon: const Icon(Icons.build_circle_rounded),
+                label: const Text('本地打包器'),
+              ),
             OutlinedButton.icon(
               onPressed: controller.loadDeploymentPackages,
               icon: const Icon(Icons.refresh_rounded),

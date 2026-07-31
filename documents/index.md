@@ -21,6 +21,8 @@
 | [Windows 客户端安装](./client-setup) | 管理员 | 客户端安装、配置、Shell Launcher、加固 |
 | [管理客户端安装](./admin-client) | 管理员 | Flutter 管理端安装与新功能入口 |
 | [管理者指南](./admin-guide) | 管理员 | 机台审批、证书管理、部署管理、OTP 规则 |
+| [RustDesk 远程控制桥接](./rustdesk-bridge-admin-guide) | 管理员 | RustDesk 可信主控端、Bridge Secret、上报密码读取 |
+| [离线更新器](./updater) | 管理员 | NX_INS USB 更新、清单签名、自动替换 |
 | [Maimoller HID 系统菜单](./maimoller) | 与maimoller手台配套使用的用户 | HID 面板、系统菜单、按键映射 |
 | [常见问题](./faq) | 所有人 | 常见故障与排查建议 |
 
@@ -34,8 +36,8 @@ VHD Mounter 是一套 VHD 挂载管理系统，包含以下组件：
 
 | 组件 | 说明 |
 |------|------|
-| **VHDSelectServer** | Node.js 管理服务端，负责机台注册、VHD 选择、日志收集 |
+| **VHDSelectServer** | Node.js 管理服务端，负责机台注册、VHD 选择、日志收集、远程部署 |
 | **VHDMounter** | Windows 客户端，扫描并挂载 VHD 到 `M:\`并启动游戏 |
 | **VHDMounter_Maimoller** | 增强版客户端，支持 Maimoller HID 系统菜单 |
-| **管理客户端** | Flutter 跨平台应用，用于服务端初始化和管理 |
+| **管理客户端** | Flutter 跨平台应用，用于服务端初始化、机台管理、证书管理、部署管理、离线签名打包（仅桌面） |
 

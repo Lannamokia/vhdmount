@@ -1,0 +1,77 @@
+{
+  "$comment": "Protocol §3 / §5.2 / §6.2 / §7.2 / §8.2 / §9.2 round-trip vectors. fixture-only test key (0xAB repeated 32 times) is NOT a real RustDeskClientSharedSecret. Both VHDMounter (C# HmacVerifier) and VHDSelectServer (Node.js) MUST reproduce the listed proof/mac strings byte-for-byte from the listed input bytes.",
+  "fixtureVersion": 1,
+  "secretHex": "abababababababababababababababababababababababababababababababab",
+  "secretVersion": 1,
+  "vectors": {
+    "handshake": {
+      "frame": {
+        "protocol": "VHDRustDeskBridgeHandshakeV1",
+        "secretVersion": 1,
+        "nonce": "4f1c2a8b39d0e7561f8a2b3c4d5e6f70",
+        "timestampMs": 1730000000000,
+        "clientKind": "rustdesk",
+        "clientVersion": "1.4.6"
+      },
+      "hmacInputAscii": "VHDRustDeskBridgeHandshakeV1\n1\n4f1c2a8b39d0e7561f8a2b3c4d5e6f70\n1730000000000",
+      "proofBase64": "L4OGPUpwIFb0khBbbfUBszS3FdNVuWc0k8p7XO+1CSQ="
+    },
+    "report": {
+      "frame": {
+        "protocol": "VHDRustDeskBridgeReportV1",
+        "secretVersion": 1,
+        "rustDeskId": "123456789",
+        "passwordKind": "temporary",
+        "password": "Hunter2!",
+        "reason": "startup",
+        "reportedAt": 1730000000000,
+        "nonce": "9a8b7c6d5e4f30210011223344556677"
+      },
+      "passwordSha256Hex": "607265682fb0f3a91201774321ada848cb027b10fe319d6dae730a1968f47abe",
+      "hmacInputAscii": "VHDRustDeskBridgeReportV1\n1\n123456789\ntemporary\n607265682fb0f3a91201774321ada848cb027b10fe319d6dae730a1968f47abe\nstartup\n1730000000000\n9a8b7c6d5e4f30210011223344556677",
+      "macBase64": "elHwEKrncbR+rHjEsyHVhvv/OCkS0Qzw+EnzuxydLiI="
+    },
+    "log": {
+      "frame": {
+        "protocol": "VHDRustDeskBridgeLogV1",
+        "secretVersion": 1,
+        "level": "warn",
+        "target": "rustdesk::server::connection",
+        "message": "controlled login from 192.0.2.1, password ok",
+        "timestampMs": 1730000000500
+      },
+      "messageSha256Hex": "c0ae75da2950b0a6b5feaf69ffbdc0120099eeef8ab1e17afcb2c7a16ccda0c7",
+      "hmacInputAscii": "VHDRustDeskBridgeLogV1\n1\nwarn\nrustdesk::server::connection\nc0ae75da2950b0a6b5feaf69ffbdc0120099eeef8ab1e17afcb2c7a16ccda0c7\n1730000000500",
+      "macBase64": "cElBkn0S2E603+zOpyooUzrWKCWuee+Aaj4H7hURjRA="
+    },
+    "peerApproval": {
+      "frame": {
+        "protocol": "VHDRustDeskBridgePeerApprovalV1",
+        "secretVersion": 1,
+        "controlledMachineId": "MACHINE-DEADBEEF",
+        "controllerId": "987654321",
+        "controllerName": "admin@ops",
+        "controllerPlatform": "Windows",
+        "controllerHwid": "aabbccddeeff00112233445566778899",
+        "peerSocketAddr": "192.0.2.1:51820",
+        "connectionType": "controlled",
+        "requestNonce": "0123456789abcdef0123456789abcdef",
+        "timestampMs": 1730000001000
+      },
+      "controllerNameSha256Hex": "bb9b48894d2b3ddae42b93f5a33153171dc1a6429f90ac8188dde266b4728a85",
+      "controllerHwidSha256Hex": "a820c04e6dceaf2071e870a32279b4399df2f5d2e549cce23e3358192aea1560",
+      "hmacInputAscii": "VHDRustDeskBridgePeerApprovalV1\n1\nMACHINE-DEADBEEF\n987654321\nbb9b48894d2b3ddae42b93f5a33153171dc1a6429f90ac8188dde266b4728a85\nWindows\na820c04e6dceaf2071e870a32279b4399df2f5d2e549cce23e3358192aea1560\n192.0.2.1:51820\ncontrolled\n0123456789abcdef0123456789abcdef\n1730000001000",
+      "macBase64": "B/AYKPLHK1JWCjETJke099O0sDv3AqT6Elxbg7yyZhw="
+    },
+    "revocation": {
+      "frame": {
+        "protocol": "VHDRustDeskBridgeRevocationV1",
+        "secretVersion": 1,
+        "reason": "denied",
+        "issuedAt": 1730000005000
+      },
+      "hmacInputAscii": "VHDRustDeskBridgeRevocationV1\n1\ndenied\n1730000005000",
+      "macBase64": "4OiplnSrXIkghLICFdAtm9lagUTEL6SmgysSYfaW/44="
+    }
+  }
+}

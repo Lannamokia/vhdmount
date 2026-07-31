@@ -1,0 +1,67 @@
+{
+  "$comment": "RFC 8785 JCS cross-language test fixture. Both VHDMounter (C# JcsCanonicalizer) and VHDSelectServer (jcs.js) MUST produce byte-identical canonical output. fixture_version is bumped on changes.",
+  "fixtureVersion": 1,
+  "cases": [
+    {
+      "name": "empty-object",
+      "input": {},
+      "expected": "{}"
+    },
+    {
+      "name": "empty-array",
+      "input": [],
+      "expected": "[]"
+    },
+    {
+      "name": "primitives",
+      "input": { "b": false, "t": true, "n": null, "i": 42, "s": "hello" },
+      "expected": "{\"b\":false,\"i\":42,\"n\":null,\"s\":\"hello\",\"t\":true}"
+    },
+    {
+      "name": "key-ordering-utf16-codeunit",
+      "input": { "z": 1, "a": 2, "m": 3 },
+      "expected": "{\"a\":2,\"m\":3,\"z\":1}"
+    },
+    {
+      "name": "nested-object-arrays",
+      "input": {
+        "outer": {
+          "inner": [3, 1, 2],
+          "another": null
+        },
+        "alpha": "first"
+      },
+      "expected": "{\"alpha\":\"first\",\"outer\":{\"another\":null,\"inner\":[3,1,2]}}"
+    },
+    {
+      "name": "control-character-escapes",
+      "input": { "s": "line\nfeed\ttab\"quote\\bs" },
+      "expected": "{\"s\":\"line\\nfeed\\ttab\\\"quote\\\\bs\"}"
+    },
+    {
+      "name": "unicode-emoji",
+      "input": { "s": "wonderful——🐾" },
+      "expected": "{\"s\":\"wonderful——🐾\"}"
+    },
+    {
+      "name": "number-zero",
+      "input": { "v": 0 },
+      "expected": "{\"v\":0}"
+    },
+    {
+      "name": "number-negative",
+      "input": { "v": -7 },
+      "expected": "{\"v\":-7}"
+    },
+    {
+      "name": "number-large-integer",
+      "input": { "v": 1730000000000 },
+      "expected": "{\"v\":1730000000000}"
+    },
+    {
+      "name": "number-decimal",
+      "input": { "v": 1.5 },
+      "expected": "{\"v\":1.5}"
+    }
+  ]
+}

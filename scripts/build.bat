@@ -191,6 +191,7 @@ exit /b
 if %BUILD_FLUTTER%==0 exit /b
 echo [5/6] Building Flutter Windows Client...
 pushd "%FLUTTER_DIR%"
+if not exist "build\native_assets\windows" mkdir "build\native_assets\windows"
 call flutter build windows
 if not %ERRORLEVEL%==0 (popd & echo   [x] Flutter build FAILED. & exit /b)
 popd

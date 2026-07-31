@@ -300,7 +300,7 @@ void main() {
     await tester.pumpWidget(AdminApp(controller: controller));
     await tester.pumpAndSettle();
 
-    expect(find.byType(DashboardSidebarButton), findsNWidgets(7));
+    expect(find.byType(DashboardSidebarButton), findsNWidgets(9));
     expect(find.text('审批、保护、EVHD'), findsOneWidget);
     expect(find.text('会话、分页、详情'), findsOneWidget);
     expect(find.byType(NavigationRail), findsNothing);
@@ -366,7 +366,7 @@ void main() {
     await tester.pumpWidget(AdminApp(controller: controller));
     await tester.pumpAndSettle();
 
-    expect(find.byType(NavigationBar), findsOneWidget);
+    expect(find.byType(MobileBottomNav), findsOneWidget);
     expect(find.byType(NavigationRail), findsNothing);
     expect(find.text('MACHINE-01'), findsOneWidget);
     expect(tester.takeException(), isNull);

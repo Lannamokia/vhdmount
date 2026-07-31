@@ -23,6 +23,15 @@ const {
 } = require('./machineLogServer');
 const { RegistrationAuthError, verifySignedRegistrationRequest } = require('./registrationAuth');
 const { SecurityStore } = require('./securityStore');
+const { TrustedControllerStore } = require('./trustedControllerStore');
+const { BridgeSecretStore } = require('./bridgeSecretStore');
+const { WrapKeyStore } = require('./wrapKeyStore');
+const { PolicySigningStore } = require('./policySigningStore');
+const { ReportStore } = require('./reportStore');
+const { createBridgeRoutes } = require('./bridgeRoutes');
+const { createTrustedControllerRoutes } = require('./trustedControllerRoutes');
+const { createRustDeskReportRoutes } = require('./rustDeskReportRoutes');
+const { createBridgeSecretRoutes } = require('./bridgeSecretRoutes');
 const {
     ValidationError,
     assertCursor,
@@ -291,6 +300,37 @@ async function createApp(options = {}) {
             runtime.database = null;
             runtime.databaseError = error;
             logger.error('启动时连接数据库失败:', error.message);
+        }
+    }
+
+    // RustDesk 桥相关存储（任务 15.5）：在数据库就绪后实例化，挂到 runtime 上让中间件 / 路由共享
+    runtime.trustedControllerStore = null;
+    runtime.bridgeSecretStore = null;
+    runtime.wrapKeyStore = null;
+    runtime.policySigningStore = null;
+    runtime.reportStore = null;
+    const bridgeWarn = (msg) => {
+        if (typeof logger.warn === 'function') logger.warn(msg);
+        else if (typeof logger.log === 'function') logger.log(msg);
+    };
+    if (runtime.database) {
+        runtime.trustedControllerStore = new TrustedControllerStore(runtime.database, logger);
+        runtime.bridgeSecretStore = new BridgeSecretStore(runtime.database, logger);
+        runtime.wrapKeyStore = new WrapKeyStore(runtime.database, logger);
+        runtime.policySigningStore = new PolicySigningStore(runtime.database, logger);
+        runtime.reportStore = new ReportStore(runtime.database, logger);
+
+        // 启动期钩子：服务端首次启动时生成 Bridge_Policy_Signing_Pubkey 初始密钥对（任务 14.4 / Requirement 15.10）
+        try {
+            await runtime.policySigningStore.ensureBridgePolicyKey();
+        } catch (error) {
+            logger.error('启动时初始化 Bridge_Policy_Signing_Pubkey 失败:', error.message);
+        }
+
+        try {
+            await runtime.trustedControllerStore.ensureLoaded();
+        } catch (error) {
+            bridgeWarn('启动时加载 trustedControllerStore watermark 失败: ' + error.message);
         }
     }
 
@@ -570,6 +610,23 @@ async function createApp(options = {}) {
                 runtime.sessionSecrets.unshift(config.sessionSecret);
             }
 
+            // RustDesk 桥存储（init/complete 路径）：与启动期保持同样的实例化顺序（任务 15.5）
+            runtime.trustedControllerStore = new TrustedControllerStore(runtime.database, logger);
+            runtime.bridgeSecretStore = new BridgeSecretStore(runtime.database, logger);
+            runtime.wrapKeyStore = new WrapKeyStore(runtime.database, logger);
+            runtime.policySigningStore = new PolicySigningStore(runtime.database, logger);
+            runtime.reportStore = new ReportStore(runtime.database, logger);
+            try {
+                await runtime.policySigningStore.ensureBridgePolicyKey();
+            } catch (err) {
+                logger.error('init/complete 后初始化 Bridge_Policy_Signing_Pubkey 失败:', err.message);
+            }
+            try {
+                await runtime.trustedControllerStore.ensureLoaded();
+            } catch (err) {
+                bridgeWarn('init/complete 后加载 trustedControllerStore watermark 失败: ' + err.message);
+            }
+
             const defaultVhdKeyword = req.body?.defaultVhdKeyword
                 ? assertVhdKeyword(req.body.defaultVhdKeyword)
                 : serviceSettingsStore.getDefaultVhdKeyword();
@@ -714,7 +771,8 @@ async function createApp(options = {}) {
 
     app.post('/api/auth/otp/verify', requireAuth, sensitiveLimiter, asyncHandler(async (req, res) => {
         const code = assertString(req.body?.code, 'code', 6, 12);
-        if (!securityStore.verifyTotp(code)) {
+        const otpResult = securityStore.verifyTotp(code);
+        if (!otpResult.verified) {
             runtime.writeAudit(req, {
                 type: 'auth.otp.verify',
                 actor: 'admin',
@@ -730,6 +788,7 @@ async function createApp(options = {}) {
             type: 'auth.otp.verify',
             actor: 'admin',
             result: 'success',
+            keyId: otpResult.keyId,
         });
 
         res.json({
@@ -756,7 +815,7 @@ async function createApp(options = {}) {
             ? assertString(req.body.accountName, 'accountName', 1, 128)
             : (runtime.securityConfig?.totpAccountName || 'admin');
 
-        if (!securityStore.verifyTotp(currentCode)) {
+        if (!securityStore.verifyTotp(currentCode).verified) {
             runtime.writeAudit(req, {
                 type: 'auth.otp.rotate.prepare',
                 actor: 'admin',
@@ -825,6 +884,81 @@ async function createApp(options = {}) {
             otpVerifiedUntil: req.session.otpVerifiedUntil,
         });
     }));
+
+    // --- TOTP 密钥管理 API ---
+
+    // 列出密钥仅返回元数据（id/name/type/platform/createdAt/lastUsedAt），
+    // 不含任何 secret，所以只要求登录态，不要求 OTP step-up。
+    // 进入设置页时即可正常拉取列表，避免给"日常浏览"操作带来 OTP 摩擦。
+    app.get('/api/auth/otp/keys', requireAuth, (req, res) => {
+        const keys = securityStore.listTotpKeys();
+        res.json({
+            success: true,
+            keys,
+        });
+    });
+
+    app.post('/api/auth/otp/keys', requireAuth, requireOtpStepUp, asyncHandler(async (req, res) => {
+        const name = assertString(req.body?.name, 'name', 1, 128);
+        const type = String(req.body?.type || '').trim();
+        if (type !== 'authenticator' && type !== 'biometric') {
+            throw createJsonError(400, 'type 必须为 authenticator 或 biometric');
+        }
+
+        let platform = null;
+        if (type === 'biometric') {
+            platform = String(req.body?.platform || '').trim();
+            const validPlatforms = ['windows-hello', 'face-id', 'android-biometric'];
+            if (!validPlatforms.includes(platform)) {
+                throw createJsonError(400, 'biometric 类型需要提供有效的 platform（windows-hello / face-id / android-biometric）');
+            }
+        }
+
+        const result = securityStore.addTotpKey({ name, type, platform });
+        runtime.securityConfig = securityStore.loadSecurityConfig();
+
+        runtime.writeAudit(req, {
+            type: 'auth.otp.keys.add',
+            actor: 'admin',
+            result: 'success',
+            keyId: result.id,
+            keyType: type,
+        });
+
+        res.status(201).json({
+            success: true,
+            ...result,
+        });
+    }));
+
+    app.delete('/api/auth/otp/keys/:keyId', requireAuth, requireOtpStepUp, asyncHandler(async (req, res) => {
+        const keyId = assertKeyId(req.params.keyId);
+        const result = securityStore.removeTotpKey(keyId);
+
+        if (!result.success) {
+            if (result.error === 'not_found') {
+                throw createJsonError(404, '未找到指定的 TOTP 密钥');
+            }
+            if (result.error === 'last_authenticator') {
+                throw createJsonError(409, '至少保留一个认证器类型的 TOTP 密钥');
+            }
+        }
+
+        runtime.securityConfig = securityStore.loadSecurityConfig();
+
+        runtime.writeAudit(req, {
+            type: 'auth.otp.keys.remove',
+            actor: 'admin',
+            result: 'success',
+            keyId,
+        });
+
+        res.json({
+            success: true,
+        });
+    }));
+
+    // --- 设置 API ---
 
     app.get('/api/settings/default-vhd', requireAuth, (req, res) => {
         res.json({
@@ -1627,6 +1761,40 @@ async function createApp(options = {}) {
     app.get('/api/deployments/packages/:id/download', deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.downloadPackage));
     app.get('/api/deployments/packages/:id/signature', deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.downloadSignature));
 
+    // ---------- RustDesk 桥相关路由（任务 15.5） ----------
+    // 机台端点：/api/machines/:machineId/rustdesk/* 接在 /api/machines/:machineId/deployments/* 之后
+    // admin 端点：/api/security/* 接在 /api/security/trusted-certificates/* 之后
+    function buildBridgeRouteDeps() {
+        return {
+            trustedControllerStore: runtime.trustedControllerStore,
+            bridgeSecretStore: runtime.bridgeSecretStore,
+            wrapKeyStore: runtime.wrapKeyStore,
+            policySigningStore: runtime.policySigningStore,
+            reportStore: runtime.reportStore,
+            requireAuth,
+            requireOtpStepUp,
+            requireDatabase,
+            writeAudit: (req, fields) => runtime.writeAudit(req, fields),
+        };
+    }
+
+    if (runtime.trustedControllerStore && runtime.bridgeSecretStore && runtime.wrapKeyStore
+        && runtime.policySigningStore && runtime.reportStore) {
+        const bridgeRoutes = createBridgeRoutes(buildBridgeRouteDeps());
+        app.use('/api/machines', bridgeRoutes.router);
+
+        const trustedControllerRoutes = createTrustedControllerRoutes(buildBridgeRouteDeps());
+        app.use('/api/security', trustedControllerRoutes.router);
+
+        const bridgeSecretRoutes = createBridgeSecretRoutes(buildBridgeRouteDeps());
+        app.use('/api/security', bridgeSecretRoutes.router);
+
+        const rustDeskReportRoutes = createRustDeskReportRoutes(buildBridgeRouteDeps());
+        app.use('/api/security', rustDeskReportRoutes.router);
+    } else {
+        bridgeWarn('RustDesk 桥路由未挂载：runtime 缺少 bridge 存储实例（数据库未就绪？）');
+    }
+
     app.get('/', (req, res) => {
         res.setHeader('Cache-Control', 'no-store');
         res.sendFile(CLIENT_DOWNLOAD_PAGE);
@@ -1701,7 +1869,7 @@ async function startServer(options = {}) {
 
         // Token 清理调度：每 10 分钟清理过期 token
         const { DeploymentStore } = require('./deploymentStore');
-        const deploymentStoreForCleanup = new DeploymentStore(configDir);
+        const deploymentStoreForCleanup = new DeploymentStore(runtime.configDir);
         runtime._tokenCleanupInterval = setInterval(async () => {
             try {
                 if (runtime.database) {

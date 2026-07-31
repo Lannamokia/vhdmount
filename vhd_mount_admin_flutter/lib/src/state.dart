@@ -1,5 +1,72 @@
 part of '../app.dart';
 
+/// 后台操作的状态枚举。
+enum BackgroundOperationStatus {
+  running,
+  completed,
+  failed,
+}
+
+/// 后台操作的类型枚举。
+enum BackgroundOperationType {
+  keyGeneration,
+  manifestPackaging,
+  certificateGeneration,
+  deploymentPackaging,
+}
+
+/// 表示一个后台操作的模型，用于在用户导航离开离线工具时持久化操作状态。
+class BackgroundOperation {
+  BackgroundOperation({
+    required this.type,
+    required this.status,
+    this.progress = 0.0,
+    this.step = '',
+    this.resultMessage,
+    this.isError = false,
+    DateTime? timestamp,
+  }) : timestamp = timestamp ?? DateTime.now();
+
+  final BackgroundOperationType type;
+  final BackgroundOperationStatus status;
+  final double progress;
+  final String step;
+  final String? resultMessage;
+  final bool isError;
+  final DateTime timestamp;
+
+  String get typeLabel {
+    switch (type) {
+      case BackgroundOperationType.keyGeneration:
+        return '密钥生成';
+      case BackgroundOperationType.manifestPackaging:
+        return '清单打包';
+      case BackgroundOperationType.certificateGeneration:
+        return '证书生成';
+      case BackgroundOperationType.deploymentPackaging:
+        return '部署打包';
+    }
+  }
+
+  BackgroundOperation copyWith({
+    BackgroundOperationStatus? status,
+    double? progress,
+    String? step,
+    String? resultMessage,
+    bool? isError,
+  }) {
+    return BackgroundOperation(
+      type: type,
+      status: status ?? this.status,
+      progress: progress ?? this.progress,
+      step: step ?? this.step,
+      resultMessage: resultMessage ?? this.resultMessage,
+      isError: isError ?? this.isError,
+      timestamp: timestamp,
+    );
+  }
+}
+
 class AppController extends ChangeNotifier {
   AppController({required this.api, ClientConfigStore? clientConfigStore})
     : clientConfigStore = clientConfigStore ?? FileClientConfigStore();
@@ -9,6 +76,117 @@ class AppController extends ChangeNotifier {
 
   Timer? _otpExpiryTimer;
   bool _clientConfigLoaded = false;
+  OtpHostHandler? _otpHost;
+
+  /// 注册一个全局 OTP 验证主机。当 [_runAction] 检测到 requireOtp 错误时，
+  /// 会通过该主机弹出验证对话框并在成功后透明重试。
+  ///
+  /// UI 层（通常是 [_OtpHostOverlay]）应在挂载时调用。
+  void attachOtpHost(OtpHostHandler handler) {
+    _otpHost = handler;
+  }
+
+  /// 卸载已注册的 OTP 验证主机（避免持有失效的 BuildContext）。
+  void detachOtpHost(OtpHostHandler handler) {
+    if (identical(_otpHost, handler)) {
+      _otpHost = null;
+    }
+  }
+
+  // ─── 后台操作持久化 ───────────────────────────────────────────────────────
+  final List<BackgroundOperation> backgroundOperations =
+      <BackgroundOperation>[];
+
+  /// 当前正在运行的操作（如果有）。
+  BackgroundOperation? get activeOperation {
+    for (final op in backgroundOperations) {
+      if (op.status == BackgroundOperationStatus.running) {
+        return op;
+      }
+    }
+    return null;
+  }
+
+  /// 最近完成或失败的操作结果（用于用户返回时显示）。
+  BackgroundOperation? get lastCompletedOperation {
+    for (int i = backgroundOperations.length - 1; i >= 0; i--) {
+      final op = backgroundOperations[i];
+      if (op.status == BackgroundOperationStatus.completed ||
+          op.status == BackgroundOperationStatus.failed) {
+        return op;
+      }
+    }
+    return null;
+  }
+
+  /// 启动一个后台操作。返回操作在列表中的索引，用于后续更新。
+  int startBackgroundOperation(BackgroundOperationType type, String step) {
+    final op = BackgroundOperation(
+      type: type,
+      status: BackgroundOperationStatus.running,
+      step: step,
+    );
+    backgroundOperations.add(op);
+    notifyListeners();
+    return backgroundOperations.length - 1;
+  }
+
+  /// 更新后台操作的进度。
+  void updateBackgroundOperationProgress(
+    int index,
+    double progress,
+    String step,
+  ) {
+    if (index < 0 || index >= backgroundOperations.length) return;
+    backgroundOperations[index] = backgroundOperations[index].copyWith(
+      progress: progress,
+      step: step,
+    );
+    notifyListeners();
+  }
+
+  /// 标记后台操作为完成。
+  void completeBackgroundOperation(int index, String resultMessage) {
+    if (index < 0 || index >= backgroundOperations.length) return;
+    backgroundOperations[index] = backgroundOperations[index].copyWith(
+      status: BackgroundOperationStatus.completed,
+      progress: 1.0,
+      step: '完成',
+      resultMessage: resultMessage,
+      isError: false,
+    );
+    notifyListeners();
+  }
+
+  /// 标记后台操作为失败。
+  void failBackgroundOperation(int index, String errorMessage) {
+    if (index < 0 || index >= backgroundOperations.length) return;
+    backgroundOperations[index] = backgroundOperations[index].copyWith(
+      status: BackgroundOperationStatus.failed,
+      step: '失败',
+      resultMessage: errorMessage,
+      isError: true,
+    );
+    notifyListeners();
+  }
+
+  /// 清除所有已完成/失败的后台操作记录。
+  void clearCompletedBackgroundOperations() {
+    backgroundOperations.removeWhere(
+      (op) => op.status != BackgroundOperationStatus.running,
+    );
+    notifyListeners();
+  }
+
+  /// 清除指定索引的后台操作记录。
+  void dismissBackgroundOperation(int index) {
+    if (index < 0 || index >= backgroundOperations.length) return;
+    if (backgroundOperations[index].status !=
+        BackgroundOperationStatus.running) {
+      backgroundOperations.removeAt(index);
+      notifyListeners();
+    }
+  }
 
   bool isLoading = true;
   bool isWorking = false;
@@ -40,6 +218,7 @@ class AppController extends ChangeNotifier {
   List<DeploymentPackage> deploymentPackages = <DeploymentPackage>[];
   List<DeploymentTask> deploymentTasks = <DeploymentTask>[];
   List<DeploymentRecord> deploymentRecords = <DeploymentRecord>[];
+  List<TotpKeyRecord> totpKeys = <TotpKeyRecord>[];
   String? deploymentSelectedMachineId;
   String? deploymentTaskStatusFilter;
   String deploymentSelectedTab = 'packages';
@@ -195,9 +374,30 @@ class AppController extends ChangeNotifier {
     errorMessage = null;
     notifyListeners();
     try {
-      return await action();
+      try {
+        return await action();
+      } on AdminApiException catch (error) {
+        // 服务端要求 OTP step-up：尝试通过 OTP 主机弹窗验证后透明重试一次
+        if (!error.requireOtp || _otpHost == null) {
+          rethrow;
+        }
+        final verified = await _otpHost!.requestVerification();
+        if (!verified) {
+          // 用户取消：抛出语义化异常给上层，避免显示通用错误
+          throw const OtpRequiredException('OTP 验证已取消');
+        }
+        // 验证成功后只重试一次，避免无限循环
+        errorMessage = null;
+        notifyListeners();
+        return await action();
+      }
     } catch (error) {
-      errorMessage = describeError(error);
+      // 取消语义不应作为错误显示
+      if (error is OtpRequiredException) {
+        errorMessage = null;
+      } else {
+        errorMessage = describeError(error);
+      }
       notifyListeners();
       rethrow;
     } finally {
@@ -719,6 +919,98 @@ class AppController extends ChangeNotifier {
   Future<void> triggerUninstall(String machineId, String recordId) async {
     await _runAction(() => api.triggerUninstall(machineId, recordId));
     await loadMachineDeploymentHistory(machineId);
+  }
+
+  Future<void> loadTotpKeys() async {
+    totpKeys = await _runAction(api.getTotpKeys);
+    notifyListeners();
+  }
+
+  Future<TotpKeyCreationResult> createTotpKey({
+    required String name,
+    required String type,
+    String? platform,
+  }) async {
+    final result = await _runAction(
+      () => api.createTotpKey(name: name, type: type, platform: platform),
+    );
+    await loadTotpKeys();
+    return result;
+  }
+
+  Future<void> deleteTotpKey(String keyId) async {
+    await _runAction(() => api.deleteTotpKey(keyId));
+    await loadTotpKeys();
+  }
+
+  // ─── RustDesk Bridge：可信主控端 + Bridge_Secret 版本元数据 ────────────────────
+  // 任务 17.1：扩展 AppState 数据模型 + load/upsert/delete + load/upload 方法。
+  // 写操作的 OTP step-up 由 _runAction 的统一拦截 + dialogs.dart 既有组件触发。
+
+  List<TrustedRustDeskController> trustedRustDeskControllers =
+      <TrustedRustDeskController>[];
+  List<BridgeSecretVersionMetadata> bridgeSecretVersions =
+      <BridgeSecretVersionMetadata>[];
+
+  Future<void> loadTrustedRustDeskControllers() async {
+    trustedRustDeskControllers =
+        await _runAction(api.getTrustedRustDeskControllers);
+    notifyListeners();
+  }
+
+  Future<void> upsertTrustedRustDeskController(
+    TrustedRustDeskControllerDraft draft,
+  ) async {
+    await _runAction(() => api.upsertTrustedRustDeskController(draft));
+    await loadTrustedRustDeskControllers();
+  }
+
+  Future<void> deleteTrustedRustDeskController(String id) async {
+    await _runAction(() => api.deleteTrustedRustDeskController(id));
+    await loadTrustedRustDeskControllers();
+  }
+
+  Future<void> loadBridgeSecretVersions() async {
+    bridgeSecretVersions = await _runAction(api.getBridgeSecretVersions);
+    notifyListeners();
+  }
+
+  Future<void> uploadBridgeSecret({
+    required BridgeSecretInputFormat format,
+    required List<int> rawBytes,
+    String? auditNote,
+  }) async {
+    await _runAction(
+      () => api.uploadBridgeSecret(
+        format: format,
+        rawBytes: rawBytes,
+        auditNote: auditNote,
+      ),
+    );
+    await loadBridgeSecretVersions();
+  }
+
+  // ─── RustDesk 上报记录（任务 17.x：管理面新 Tab） ─────────────────────────
+  // 机台通过 POST /api/machines/:machineId/rustdesk/report 把 RustDesk ID + 加密
+  // 后的密码上报；服务端用 K 解密落盘到 rustdesk_reports 表。本管理面读两条
+  // 端点：列表（不含明文）+ 单机 plaintext（OTP step-up）。
+
+  List<RustDeskReportSummary> rustDeskReports = <RustDeskReportSummary>[];
+
+  Future<void> loadRustDeskReports() async {
+    rustDeskReports = await _runAction(api.getRustDeskReports);
+    notifyListeners();
+  }
+
+  /// 读取单台机台的明文密码 + 完整上报摘要。OTP step-up 由 _runAction 的统一
+  /// 拦截透明触发；非空 [reason] 会写入审计行（与 EVHD 明文读取一致）。
+  Future<RustDeskReportPlaintext> readRustDeskReportPlaintext(
+    String machineId,
+    String reason,
+  ) async {
+    return _runAction(
+      () => api.readRustDeskReportPlaintext(machineId, reason),
+    );
   }
 
   @override
