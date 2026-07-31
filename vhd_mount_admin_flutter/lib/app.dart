@@ -20,6 +20,7 @@ part 'src/state.dart';
 part 'src/shell.dart';
 part 'src/dashboard.dart';
 part 'src/deployments.dart';
+part 'src/game_updates.dart';
 part 'src/machine_logs.dart';
 part 'src/dialogs.dart';
 part 'src/packager_service.dart';

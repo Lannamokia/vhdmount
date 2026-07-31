@@ -1119,6 +1119,8 @@ class DeploymentPackage {
         return '软件部署';
       case 'file-deploy':
         return '文件部署';
+      case 'game-option-deploy':
+        return '游戏内容更新';
       default:
         return type;
     }
@@ -1301,6 +1303,8 @@ class DeploymentRecord {
         return '软件部署';
       case 'file-deploy':
         return '文件部署';
+      case 'game-option-deploy':
+        return '游戏内容更新';
       default:
         return type;
     }

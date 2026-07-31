@@ -61,6 +61,12 @@ class DashboardScreen extends StatelessWidget {
         icon: Icons.rocket_launch_rounded,
         color: AppPalette.coral,
       ),
+      const DashboardDestinationSpec(
+        label: '游戏更新',
+        subtitle: 'option 内容下发',
+        icon: Icons.games_rounded,
+        color: AppPalette.mint,
+      ),
     ];
 
     Future<void> openOtpDialog() async {
@@ -149,6 +155,11 @@ class DashboardScreen extends StatelessWidget {
           SettingsView(controller: controller, embedInParentScroll: mobile),
           DeploymentsView(
             key: const Key('deployments_view'),
+            controller: controller,
+            embedInParentScroll: mobile,
+          ),
+          GameUpdatesView(
+            key: const Key('game_updates_view'),
             controller: controller,
             embedInParentScroll: mobile,
           ),

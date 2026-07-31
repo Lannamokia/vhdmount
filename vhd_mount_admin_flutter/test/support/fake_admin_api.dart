@@ -20,6 +20,8 @@ class FakeAdminApi implements AdminApi {
     this.machineLogSessions = const <MachineLogSession>[],
     this.machineLogEntries = const <MachineLogEntry>[],
     this.machineDeploymentHistory = const <String, List<DeploymentRecord>>{},
+    this.deploymentPackages = const <DeploymentPackage>[],
+    this.deploymentTasks = const <DeploymentTask>[],
     this.getOtpStatusResponse,
     this.verifyOtpResponse,
     this.prepareOtpRotationResponse,
@@ -44,6 +46,8 @@ class FakeAdminApi implements AdminApi {
   List<MachineLogSession> machineLogSessions;
   List<MachineLogEntry> machineLogEntries;
   Map<String, List<DeploymentRecord>> machineDeploymentHistory;
+  List<DeploymentPackage> deploymentPackages;
+  List<DeploymentTask> deploymentTasks;
   OtpStatus? getOtpStatusResponse;
   OtpStatus? verifyOtpResponse;
   InitializationPreparation? prepareOtpRotationResponse;
@@ -609,7 +613,7 @@ class FakeAdminApi implements AdminApi {
 
   @override
   Future<List<DeploymentPackage>> getDeploymentPackages() async =>
-      <DeploymentPackage>[];
+      deploymentPackages;
 
   @override
   Future<void> uploadDeploymentPackage({
@@ -634,7 +638,7 @@ class FakeAdminApi implements AdminApi {
     String? machineId,
     String? status,
   }) async =>
-      <DeploymentTask>[];
+      deploymentTasks;
 
   @override
   Future<void> createDeploymentTask(

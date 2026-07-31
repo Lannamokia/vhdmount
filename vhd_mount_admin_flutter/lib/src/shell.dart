@@ -296,6 +296,9 @@ class _AdminRootState extends State<AdminRoot> {
                 await controller.loadLogRetentionSettings();
               } else if (index == 5) {
                 await controller.loadDeploymentPackages();
+              } else if (index == 6) {
+                await controller.loadDeploymentPackages();
+                await controller.loadDeploymentTasks();
               }
             },
           );
