@@ -19,11 +19,12 @@ namespace VHDMounter.SoftwareDeploy
         public string createdAt { get; set; } = string.Empty;
         public string expiresAt { get; set; } = string.Empty;
         public string installScript { get; set; } = string.Empty;
-        public string uninstallScript { get; set; } = "uninstall.ps1";
+        public string uninstallScript { get; set; } = string.Empty;
         public bool requiresAdmin { get; set; }
         public DeployPreCheck preCheck { get; set; } = new();
 
         public bool IsSoftwareDeploy => string.Equals(type, "software-deploy", StringComparison.OrdinalIgnoreCase);
         public bool IsFileDeploy => string.Equals(type, "file-deploy", StringComparison.OrdinalIgnoreCase);
+        public bool IsGameOptionDeploy => string.Equals(type, "game-option-deploy", StringComparison.OrdinalIgnoreCase);
     }
 }

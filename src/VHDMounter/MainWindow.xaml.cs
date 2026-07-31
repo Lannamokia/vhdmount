@@ -400,6 +400,9 @@ namespace VHDMounter
                 // 保存当前游戏路径，用于菜单退出后重启
                 currentPackagePath = targetFolder;
 
+                // 游戏内容更新：挂载窗口内检查并下发 option 目录
+                await ApplyGameContentUpdateIfAvailable();
+
                 // 阶段：正在更新和启动游戏程序，请耐心等待
                 SetStage(UiStage.UpdateAndLaunch);
                 // 启动start.bat
@@ -615,17 +618,45 @@ namespace VHDMounter
             catch { }
         }
 
-        private (string serverUrl, string machineId) ReadDeployConfig()
+        private async Task ApplyGameContentUpdateIfAvailable()
+        {
+            try
+            {
+                var config = ReadDeployConfig();
+                if (string.IsNullOrWhiteSpace(config.serverUrl) || string.IsNullOrWhiteSpace(config.machineId))
+                {
+                    Trace.WriteLine("[GameContentUpdate] 缺少服务端地址或机台ID，跳过");
+                    return;
+                }
+
+                var trustedKeysPath = System.IO.Path.Combine(AppContext.BaseDirectory, "trusted_keys.pem");
+                if (!System.IO.File.Exists(trustedKeysPath))
+                {
+                    Trace.WriteLine("[GameContentUpdate] trusted_keys.pem 不存在，跳过");
+                    return;
+                }
+
+                using var updater = new SoftwareDeploy.GameContentUpdater(config.serverUrl, config.machineId, trustedKeysPath, AppContext.BaseDirectory, config.timeoutMinutes);
+                await updater.CheckAndApplyAsync(currentPackagePath, _appLifetimeToken);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[GameContentUpdate] 初始化更新器失败: {ex.Message}");
+            }
+        }
+
+        private (string serverUrl, string machineId, int timeoutMinutes) ReadDeployConfig()
         {
             try
             {
                 var configPath = System.IO.Path.Combine(AppContext.BaseDirectory, "vhdmonter_config.ini");
                 if (!System.IO.File.Exists(configPath))
-                    return ("", "");
+                    return ("", "", 10);
 
                 var lines = System.IO.File.ReadAllLines(configPath);
                 string serverUrl = "";
                 string machineId = "";
+                int timeoutMinutes = 10;
                 foreach (var line in lines)
                 {
                     var trimmed = line.Trim();
@@ -633,12 +664,17 @@ namespace VHDMounter
                         serverUrl = trimmed.Substring("ServerBaseUrl=".Length).Trim();
                     if (trimmed.StartsWith("MachineId="))
                         machineId = trimmed.Substring("MachineId=".Length).Trim();
+                    if (trimmed.StartsWith("GameContentUpdateTimeout="))
+                    {
+                        if (!int.TryParse(trimmed.Substring("GameContentUpdateTimeout=".Length).Trim(), out timeoutMinutes))
+                            timeoutMinutes = 10;
+                    }
                 }
-                return (serverUrl, machineId);
+                return (serverUrl, machineId, timeoutMinutes <= 0 ? 10 : timeoutMinutes);
             }
             catch
             {
-                return ("", "");
+                return ("", "", 10);
             }
         }
     }

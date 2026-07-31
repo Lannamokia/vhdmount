@@ -89,6 +89,16 @@ namespace VHDMounter.SoftwareDeploy
                     return $"不合法的脚本名: {manifest.uninstallScript}";
             }
 
+            if (manifest.IsGameOptionDeploy)
+            {
+                if (!string.IsNullOrWhiteSpace(manifest.targetPath))
+                    return "game-option-deploy 不允许指定 targetPath";
+                if (!string.IsNullOrWhiteSpace(manifest.installScript))
+                    return "game-option-deploy 不允许携带 installScript";
+                if (!string.IsNullOrWhiteSpace(manifest.uninstallScript))
+                    return "game-option-deploy 不允许携带 uninstallScript";
+            }
+
             return null;
         }
 

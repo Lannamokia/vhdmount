@@ -110,7 +110,7 @@ namespace VHDMounter.SoftwareDeploy
             }
 
             // 5. 校验类型
-            if (!manifest.IsSoftwareDeploy && !manifest.IsFileDeploy)
+            if (!manifest.IsSoftwareDeploy && !manifest.IsFileDeploy && !manifest.IsGameOptionDeploy)
             {
                 result.ErrorMessage = $"未知的部署类型: {manifest.type}";
                 Cleanup(extractDir);
