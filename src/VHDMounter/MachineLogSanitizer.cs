@@ -7,7 +7,7 @@ namespace VHDMounter
     internal static class MachineLogSanitizer
     {
         private static readonly Regex InlineSecretPattern = new Regex(
-            "(?i)(\\b(?:password|secret|token|authorization|ciphertext|totpsecret|totpcode|sessionsecret|evhdpassword|registrationcertificatepassword)\\b\\s*[:=]\\s*)([^\\s,;]+)",
+            "(?i)(\\b(?:password|secret|token|authorization|ciphertext|totpsecret|totpcode|sessionsecret|evhdpassword|registrationcertificatepassword)\\b\\s*[:=]\\s*)(\"[^\"]*\"|'[^']*'|[^\\s,;]+)",
             RegexOptions.Compiled);
 
         private static readonly Regex QuerySecretPattern = new Regex(
@@ -28,7 +28,7 @@ namespace VHDMounter
 
         // 2) RustDesk Bridge 字段（同上）：inline 形式（key=value 或 key: value）
         private static readonly Regex RustDeskBridgeInlineFieldsPattern = new Regex(
-            "(?i)(\\b(?:controllerName|controllerHwid|passwordCipher|wrapKeyCipher|authTag|mac|proof|signature)\\b\\s*[:=]\\s*)([^\\s,;]+)",
+            "(?i)(\\b(?:controllerName|controllerHwid|passwordCipher|wrapKeyCipher|authTag|mac|proof|signature)\\b\\s*[:=]\\s*)(\"[^\"]*\"|'[^']*'|[^\\s,;]+)",
             RegexOptions.Compiled);
 
         // 3) TPM 句柄字面量
