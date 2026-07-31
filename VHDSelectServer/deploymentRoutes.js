@@ -37,8 +37,8 @@ function assertPackageId(value) {
 
 function assertPackageType(value) {
     const type = String(value || '').trim();
-    if (!['software-deploy', 'file-deploy'].includes(type)) {
-        throw new ValidationError('type 必须是 software-deploy 或 file-deploy');
+    if (!['software-deploy', 'file-deploy', 'game-option-deploy'].includes(type)) {
+        throw new ValidationError('type 必须是 software-deploy、file-deploy 或 game-option-deploy');
     }
     return type;
 }
@@ -421,6 +421,62 @@ function buildDeploymentRoutes(options = {}) {
 
     // ---------- 机台接口 ----------
 
+    async function buildPendingTaskResponse(task, machine, runtime) {
+        // ZIP 与签名文件分别使用独立的 AES 参数，避免 CTR keystream 复用
+        const packageAesKey = crypto.randomBytes(32);
+        const packageIv = Buffer.concat([crypto.randomBytes(8), Buffer.alloc(8)]);
+        const packageAesKeyBase64 = packageAesKey.toString('base64');
+        const packageIvBase64 = packageIv.toString('base64');
+
+        const signatureAesKey = crypto.randomBytes(32);
+        const signatureIv = Buffer.concat([crypto.randomBytes(8), Buffer.alloc(8)]);
+        const signatureAesKeyBase64 = signatureAesKey.toString('base64');
+        const signatureIvBase64 = signatureIv.toString('base64');
+
+        // 用机台 RSA 公钥加密 AES 密钥
+        const keyCipher = encryptWithPublicKeyRSA(machine.pubkey_pem, packageAesKeyBase64);
+        const signatureKeyCipher = encryptWithPublicKeyRSA(machine.pubkey_pem, signatureAesKeyBase64);
+
+        const packageToken = await deploymentStore.createDownloadToken(runtime.database, {
+            taskId: task.taskId,
+            machineId: machine.machine_id,
+            packageId: task.packageId,
+            resourceType: 'package',
+            aesKey: packageAesKeyBase64,
+            aesIv: packageIvBase64,
+        });
+        const signatureToken = await deploymentStore.createDownloadToken(runtime.database, {
+            taskId: task.taskId,
+            machineId: machine.machine_id,
+            packageId: task.packageId,
+            resourceType: 'signature',
+            aesKey: signatureAesKeyBase64,
+            aesIv: signatureIvBase64,
+        });
+
+        return {
+            taskId: task.taskId,
+            packageId: task.packageId,
+            taskType: task.taskType,
+            packageName: task.packageName,
+            packageVersion: task.packageVersion,
+            packageType: task.packageType,
+            packageSize: task.packageSize,
+            packageSha256: (() => {
+                try {
+                    const pkgPath = deploymentStore.getPackageFilePath(task.packageId);
+                    return fs.existsSync(pkgPath) ? computeFileHash(pkgPath) : '';
+                } catch { return ''; }
+            })(),
+            downloadUrl: `/api/deployments/packages/${task.packageId}/download?token=${packageToken}&machineId=${encodeURIComponent(machine.machine_id)}&expires=${Date.now() + 3600000}`,
+            signatureUrl: `/api/deployments/packages/${task.packageId}/signature?token=${signatureToken}&machineId=${encodeURIComponent(machine.machine_id)}&expires=${Date.now() + 3600000}`,
+            keyCipher,
+            iv: packageIvBase64,
+            signatureKeyCipher,
+            signatureIv: signatureIvBase64,
+        };
+    }
+
     async function getPendingTasks(req, res) {
         const runtime = req.app.locals.runtime;
         const { machineId, machine } = await requireVerifiedMachineRequest(req);
@@ -432,60 +488,25 @@ function buildDeploymentRoutes(options = {}) {
         const tasks = [];
 
         for (const task of pendingTasks) {
-            // ZIP 与签名文件分别使用独立的 AES 参数，避免 CTR keystream 复用
-            const packageAesKey = crypto.randomBytes(32);
-            const packageIv = Buffer.concat([crypto.randomBytes(8), Buffer.alloc(8)]);
-            const packageAesKeyBase64 = packageAesKey.toString('base64');
-            const packageIvBase64 = packageIv.toString('base64');
+            tasks.push(await buildPendingTaskResponse(task, machine, runtime));
+        }
 
-            const signatureAesKey = crypto.randomBytes(32);
-            const signatureIv = Buffer.concat([crypto.randomBytes(8), Buffer.alloc(8)]);
-            const signatureAesKeyBase64 = signatureAesKey.toString('base64');
-            const signatureIvBase64 = signatureIv.toString('base64');
+        res.json({ success: true, tasks });
+    }
 
-            // 用机台 RSA 公钥加密 AES 密钥
-            const keyCipher = encryptWithPublicKeyRSA(machine.pubkey_pem, packageAesKeyBase64);
-            const signatureKeyCipher = encryptWithPublicKeyRSA(machine.pubkey_pem, signatureAesKeyBase64);
+    async function getPendingGameContentTasks(req, res) {
+        const runtime = req.app.locals.runtime;
+        const { machineId, machine } = await requireVerifiedMachineRequest(req);
+        await runtime.database.updateMachineLastSeen(machineId);
 
-            const packageToken = await deploymentStore.createDownloadToken(runtime.database, {
-                taskId: task.taskId,
-                machineId,
-                packageId: task.packageId,
-                resourceType: 'package',
-                aesKey: packageAesKeyBase64,
-                aesIv: packageIvBase64,
-            });
-            const signatureToken = await deploymentStore.createDownloadToken(runtime.database, {
-                taskId: task.taskId,
-                machineId,
-                packageId: task.packageId,
-                resourceType: 'signature',
-                aesKey: signatureAesKeyBase64,
-                aesIv: signatureIvBase64,
-            });
+        const pendingTasks = await deploymentStore.claimPendingTasks(runtime.database, machineId, {
+            leaseDurationSeconds: TASK_LEASE_SECONDS,
+            packageType: 'game-option-deploy',
+        });
+        const tasks = [];
 
-            tasks.push({
-                taskId: task.taskId,
-                packageId: task.packageId,
-                taskType: task.taskType,
-                packageName: task.packageName,
-                packageVersion: task.packageVersion,
-                packageType: task.packageType,
-                packageSize: task.packageSize,
-                packageSha256: (() => {
-                    try {
-                        const pkgPath = deploymentStore.getPackageFilePath(task.packageId);
-                        return fs.existsSync(pkgPath) ? computeFileHash(pkgPath) : '';
-                    } catch { return ''; }
-                })(),
-                downloadUrl: `/api/deployments/packages/${task.packageId}/download?token=${packageToken}&machineId=${encodeURIComponent(machineId)}&expires=${Date.now() + 3600000}`,
-                signatureUrl: `/api/deployments/packages/${task.packageId}/signature?token=${signatureToken}&machineId=${encodeURIComponent(machineId)}&expires=${Date.now() + 3600000}`,
-                keyCipher,
-                iv: packageIvBase64,
-                signatureKeyCipher,
-                signatureIv: signatureIvBase64,
-            });
-
+        for (const task of pendingTasks) {
+            tasks.push(await buildPendingTaskResponse(task, machine, runtime));
         }
 
         res.json({ success: true, tasks });
@@ -760,6 +781,7 @@ function buildDeploymentRoutes(options = {}) {
         deleteTask,
         listTasks,
         getPendingTasks,
+        getPendingGameContentTasks,
         reportTaskStatus,
         syncRecords,
         getMachineHistory,

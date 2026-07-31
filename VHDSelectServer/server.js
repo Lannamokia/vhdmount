@@ -1617,6 +1617,7 @@ async function createApp(options = {}) {
     app.delete('/api/deployments/tasks/:id', requireAuth, requireOtpStepUp, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.deleteTask));
 
     app.get('/api/machines/:machineId/deployments/pending', deploymentMachineLimiter, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.getPendingTasks));
+    app.get('/api/machines/:machineId/game-content/pending', deploymentMachineLimiter, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.getPendingGameContentTasks));
     app.post('/api/machines/:machineId/deployments/:taskId/status', deploymentMachineLimiter, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.reportTaskStatus));
     app.post('/api/machines/:machineId/deployments/sync', deploymentMachineLimiter, deploymentRoutes.requireDatabase, deploymentRoutes.asyncHandler(deploymentRoutes.syncRecords));
 

@@ -206,13 +206,22 @@ class DeploymentStore {
         });
     }
 
-    async claimPendingTasks(database, machineId, { leaseDurationSeconds = DEFAULT_TASK_LEASE_SECONDS } = {}) {
+    async claimPendingTasks(database, machineId, { leaseDurationSeconds = DEFAULT_TASK_LEASE_SECONDS, packageType = null } = {}) {
         return database.withTransaction(async (client) => {
+            const params = [machineId, leaseDurationSeconds];
+            const typeFilter = packageType
+                ? `AND p.type = $${params.length + 1}`
+                : "AND p.type IN ('software-deploy', 'file-deploy')";
+            if (packageType) {
+                params.push(packageType);
+            }
+
             const result = await client.query(`
                 SELECT t.*, p.name, p.version, p.type, p.file_size
                 FROM deployment_tasks t
                 JOIN deployment_packages p ON t.package_id = p.package_id
                 WHERE t.machine_id = $1
+                  ${typeFilter}
                   AND (
                         t.status = 'pending'
                         OR (
@@ -224,7 +233,7 @@ class DeploymentStore {
                   AND (t.scheduled_at IS NULL OR t.scheduled_at <= NOW())
                 ORDER BY t.created_at ASC
                 FOR UPDATE SKIP LOCKED
-            `, [machineId]);
+            `, params);
 
             const claimedTasks = [];
             for (const row of result.rows) {
