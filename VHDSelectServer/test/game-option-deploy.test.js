@@ -378,7 +378,8 @@ async function loginAndVerifyOtp(client, app) {
         .expect(200);
 
     const runtime = app.locals.runtime;
-    const secret = runtime.securityConfig.totpSecret;
+    const secret = runtime.securityConfig.totpSecret
+        || runtime.securityConfig.totpKeys?.[0]?.secret;
     await client
         .post('/api/auth/otp/verify')
         .send({ code: authenticator.generate(secret) })

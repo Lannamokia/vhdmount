@@ -7,6 +7,10 @@ const { authenticator } = require('otplib');
 const { ensureWritableDirectory, writeJsonAtomic } = require('./configStoreUtils');
 const { normalizeDbConfig } = require('./database');
 
+function generateKeyId() {
+    return 'key_' + crypto.randomBytes(8).toString('hex');
+}
+
 function normalizeOrigins(origins) {
     if (!Array.isArray(origins)) {
         return [];
@@ -71,7 +75,37 @@ class SecurityStore {
         if (!fs.existsSync(this.securityFile)) {
             throw new Error('安全配置文件不存在');
         }
-        return JSON.parse(fs.readFileSync(this.securityFile, 'utf8'));
+        const config = JSON.parse(fs.readFileSync(this.securityFile, 'utf8'));
+        if (this.migrateToMultiKey(config)) {
+            this.saveSecurityConfig(config);
+        }
+        return config;
+    }
+
+    /**
+     * 检测旧格式（存在 totpSecret 但无 totpKeys），自动迁移为多密钥数组。
+     * 返回 true 表示发生了迁移，需要保存。
+     */
+    migrateToMultiKey(config) {
+        if (config.totpKeys) {
+            return false;
+        }
+        if (!config.totpSecret) {
+            return false;
+        }
+
+        config.totpKeys = [{
+            id: generateKeyId(),
+            name: '初始认证器',
+            type: 'authenticator',
+            platform: null,
+            secret: config.totpSecret,
+            createdAt: config.initializedAt || new Date().toISOString(),
+            lastUsedAt: null,
+        }];
+
+        delete config.totpSecret;
+        return true;
     }
 
     saveSecurityConfig(config) {
@@ -144,7 +178,15 @@ class SecurityStore {
             initializedAt: new Date().toISOString(),
             sessionSecret: normalizedSecret,
             adminPasswordHash: bcrypt.hashSync(normalizedPassword, 12),
-            totpSecret: pending.totpSecret,
+            totpKeys: [{
+                id: generateKeyId(),
+                name: '初始认证器',
+                type: 'authenticator',
+                platform: null,
+                secret: pending.totpSecret,
+                createdAt: new Date().toISOString(),
+                lastUsedAt: null,
+            }],
             totpIssuer: pending.issuer,
             totpAccountName: pending.accountName,
             allowedOrigins: normalizeOrigins(allowedOrigins),
@@ -177,7 +219,16 @@ class SecurityStore {
 
     verifyTotp(code) {
         const config = this.loadSecurityConfig();
-        return authenticator.check(String(code || '').trim(), config.totpSecret);
+        const keys = config.totpKeys || [];
+        const normalizedCode = String(code || '').trim();
+        for (const key of keys) {
+            if (authenticator.check(normalizedCode, key.secret)) {
+                key.lastUsedAt = new Date().toISOString();
+                this.saveSecurityConfig(config);
+                return { verified: true, keyId: key.id, keyType: key.type };
+            }
+        }
+        return { verified: false };
     }
 
     createTotpBinding({ issuer, accountName, totpSecret } = {}) {
@@ -205,7 +256,16 @@ class SecurityStore {
             totpSecret,
         });
 
-        config.totpSecret = binding.totpSecret;
+        // OTP 轮换：替换所有现有密钥为一个新的 authenticator 类型密钥（全量重置）
+        config.totpKeys = [{
+            id: generateKeyId(),
+            name: '初始认证器',
+            type: 'authenticator',
+            platform: null,
+            secret: binding.totpSecret,
+            createdAt: new Date().toISOString(),
+            lastUsedAt: null,
+        }];
         config.totpIssuer = binding.issuer;
         config.totpAccountName = binding.accountName;
         config.updatedAt = new Date().toISOString();
@@ -215,6 +275,90 @@ class SecurityStore {
             ...binding,
             updatedAt: config.updatedAt,
         };
+    }
+
+    /**
+     * 列出所有活跃 TOTP 密钥（不含 secret 字段）。
+     */
+    listTotpKeys() {
+        const config = this.loadSecurityConfig();
+        const keys = config.totpKeys || [];
+        return keys.map(({ id, name, type, platform, createdAt, lastUsedAt }) => ({
+            id,
+            name,
+            type,
+            platform,
+            createdAt,
+            lastUsedAt,
+        }));
+    }
+
+    /**
+     * 注册新的 TOTP 密钥。
+     * @param {{ name: string, type: 'authenticator' | 'biometric', platform?: string }} params
+     * @returns {{ id, name, type, platform, secret, otpauthUrl, createdAt }}
+     */
+    addTotpKey({ name, type, platform }) {
+        const config = this.loadSecurityConfig();
+        const secret = authenticator.generateSecret();
+        const id = generateKeyId();
+        const createdAt = new Date().toISOString();
+        const issuer = config.totpIssuer || 'VHDMountServer';
+        const accountName = config.totpAccountName || 'admin';
+
+        const newKey = {
+            id,
+            name: String(name || '').trim(),
+            type,
+            platform: platform || null,
+            secret,
+            createdAt,
+            lastUsedAt: null,
+        };
+
+        if (!config.totpKeys) {
+            config.totpKeys = [];
+        }
+        config.totpKeys.push(newKey);
+        config.updatedAt = new Date().toISOString();
+        this.saveSecurityConfig(config);
+
+        return {
+            id,
+            name: newKey.name,
+            type,
+            platform: newKey.platform,
+            secret,
+            otpauthUrl: authenticator.keyuri(accountName, issuer, secret),
+            createdAt,
+        };
+    }
+
+    /**
+     * 注销指定的 TOTP 密钥。
+     * @param {string} keyId
+     * @returns {{ success: boolean, error?: string }}
+     */
+    removeTotpKey(keyId) {
+        const config = this.loadSecurityConfig();
+        const keys = config.totpKeys || [];
+        const index = keys.findIndex((key) => key.id === keyId);
+        if (index === -1) {
+            return { success: false, error: 'not_found' };
+        }
+
+        const targetKey = keys[index];
+        if (targetKey.type === 'authenticator') {
+            const authenticatorCount = keys.filter((key) => key.type === 'authenticator').length;
+            if (authenticatorCount <= 1) {
+                return { success: false, error: 'last_authenticator' };
+            }
+        }
+
+        keys.splice(index, 1);
+        config.updatedAt = new Date().toISOString();
+        this.saveSecurityConfig(config);
+        return { success: true };
     }
 
     listTrustedRegistrationCertificates() {
@@ -250,6 +394,7 @@ class SecurityStore {
 
 module.exports = {
     SecurityStore,
+    generateKeyId,
     normalizeOrigins,
     normalizeTrustedRegistrationCertificate,
 };
