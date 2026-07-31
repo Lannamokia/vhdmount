@@ -71,7 +71,24 @@ class SecurityStore {
         if (!fs.existsSync(this.securityFile)) {
             throw new Error('安全配置文件不存在');
         }
-        return JSON.parse(fs.readFileSync(this.securityFile, 'utf8'));
+        const config = JSON.parse(fs.readFileSync(this.securityFile, 'utf8'));
+        return this.migrateLegacyTotpKeys(config);
+    }
+
+    migrateLegacyTotpKeys(config) {
+        if (!config.totpKeys || !Array.isArray(config.totpKeys) || config.totpKeys.length === 0) {
+            return config;
+        }
+        if (config.totpSecret) {
+            delete config.totpKeys;
+            this.saveSecurityConfig(config);
+            return config;
+        }
+        config.totpSecret = config.totpKeys[0].secret;
+        delete config.totpKeys;
+        config.updatedAt = new Date().toISOString();
+        this.saveSecurityConfig(config);
+        return config;
     }
 
     saveSecurityConfig(config) {
