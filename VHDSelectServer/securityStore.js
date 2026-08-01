@@ -39,6 +39,26 @@ function normalizeTrustedRegistrationCertificate(input) {
     };
 }
 
+const TOTP_SECRET_PATTERN = /^[A-Z2-7]{8,128}$/;
+
+function normalizeTotpSecret(value) {
+    if (typeof value !== 'string') {
+        return null;
+    }
+
+    const normalized = value.replace(/\s+/g, '').trim().toUpperCase();
+    if (!TOTP_SECRET_PATTERN.test(normalized)) {
+        return null;
+    }
+
+    try {
+        authenticator.generate(normalized);
+        return normalized;
+    } catch {
+        return null;
+    }
+}
+
 class SecurityStore {
     constructor(configDir = process.env.CONFIG_PATH || __dirname) {
         this.configDir = configDir;
@@ -72,23 +92,76 @@ class SecurityStore {
             throw new Error('安全配置文件不存在');
         }
         const config = JSON.parse(fs.readFileSync(this.securityFile, 'utf8'));
+        if (!config || typeof config !== 'object' || Array.isArray(config)) {
+            throw new Error('安全配置格式无效');
+        }
         return this.migrateLegacyTotpKeys(config);
     }
 
     migrateLegacyTotpKeys(config) {
-        if (!config.totpKeys || !Array.isArray(config.totpKeys) || config.totpKeys.length === 0) {
+        const hasLegacyTotpKeys = Object.prototype.hasOwnProperty.call(config, 'totpKeys');
+        if (!hasLegacyTotpKeys) {
             return config;
         }
-        if (config.totpSecret) {
-            delete config.totpKeys;
-            this.saveSecurityConfig(config);
-            return config;
+
+        const candidates = [
+            config.totpSecret,
+            ...(Array.isArray(config.totpKeys)
+                ? config.totpKeys.map((entry) => entry && entry.secret)
+                : []),
+        ];
+        const totpSecret = candidates.map((candidate) => normalizeTotpSecret(candidate)).find(Boolean);
+        if (!totpSecret) {
+            throw new Error('旧版 TOTP 配置不存在有效密钥，原配置已保留');
         }
-        config.totpSecret = config.totpKeys[0].secret;
-        delete config.totpKeys;
-        config.updatedAt = new Date().toISOString();
-        this.saveSecurityConfig(config);
-        return config;
+
+        const migratedConfig = {
+            ...config,
+            totpSecret,
+            updatedAt: new Date().toISOString(),
+        };
+        delete migratedConfig.totpKeys;
+        return this.saveMigratedSecurityConfig(migratedConfig);
+    }
+
+    saveMigratedSecurityConfig(config) {
+        const suffix = `${Date.now()}-${process.pid}`;
+        const backupPath = `${this.securityFile}.pre-migrate-${suffix}.bak`;
+        const tempPath = `${this.securityFile}.migrate-${suffix}.tmp`;
+        let tempCreated = false;
+
+        try {
+            fs.copyFileSync(this.securityFile, backupPath, fs.constants.COPYFILE_EXCL);
+            try {
+                fs.chmodSync(backupPath, 0o600);
+            } catch {
+                // Windows ACLs are inherited from the containing directory.
+            }
+
+            fs.writeFileSync(tempPath, JSON.stringify(config, null, 2), {
+                encoding: 'utf8',
+                mode: 0o600,
+            });
+            tempCreated = true;
+
+            const written = JSON.parse(fs.readFileSync(tempPath, 'utf8'));
+            if (written.totpKeys !== undefined || normalizeTotpSecret(written.totpSecret) !== written.totpSecret) {
+                throw new Error('迁移后的 TOTP 配置校验失败');
+            }
+
+            fs.renameSync(tempPath, this.securityFile);
+            tempCreated = false;
+            return written;
+        } catch (error) {
+            if (tempCreated && fs.existsSync(tempPath)) {
+                try {
+                    fs.unlinkSync(tempPath);
+                } catch {
+                    // Preserve the original migration error.
+                }
+            }
+            throw new Error(`TOTP 配置迁移失败，原配置已保留: ${error.message}`);
+        }
     }
 
     saveSecurityConfig(config) {
@@ -267,6 +340,7 @@ class SecurityStore {
 
 module.exports = {
     SecurityStore,
+    normalizeTotpSecret,
     normalizeOrigins,
     normalizeTrustedRegistrationCertificate,
 };
