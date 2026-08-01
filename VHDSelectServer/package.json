@@ -28,7 +28,7 @@
     "helmet": "^8.1.0",
     "otplib": "^12.0.1",
     "pg": "^8.16.3",
-    "ws": "^8.18.3"
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "supertest": "^7.1.4"

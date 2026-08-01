@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const crypto = require('crypto');
 const test = require('node:test');
+const WebSocket = require('ws');
 
 const { authenticator } = require('otplib');
 const {
@@ -10,6 +11,49 @@ const {
     performMachineLogHandshake,
     registerApprovedMachine,
 } = require('./support/serverHarness');
+
+function waitForWebSocketOpen(ws) {
+    return new Promise((resolve, reject) => {
+        ws.once('open', resolve);
+        ws.once('error', reject);
+    });
+}
+
+function waitForWebSocketClose(ws) {
+    return new Promise((resolve) => {
+        ws.once('close', resolve);
+    });
+}
+
+async function waitForPendingConnectionCount(runtime, expected) {
+    const deadline = Date.now() + 1000;
+    while (Date.now() < deadline) {
+        if (runtime.machineLogPendingConnectionLimiter.total === expected) {
+            return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(runtime.machineLogPendingConnectionLimiter.total, expected);
+}
+
+test('机台日志 WebSocket 限制帧大小并释放认证前连接槽位', async (t) => {
+    const { app, runtime } = await createInitializedHarness(t);
+    const server = await createMachineLogTestServer(app, runtime);
+    t.after(async () => {
+        await closeMachineLogTestServer(server);
+    });
+
+    assert.ok(runtime.machineLogWebSocketServer.options.maxPayload > 0);
+    assert.ok(runtime.machineLogWebSocketServer.options.maxPayload <= 512 * 1024);
+
+    const ws = new WebSocket(`ws://127.0.0.1:${server.address().port}/ws/machine-log`);
+    await waitForWebSocketOpen(ws);
+    assert.equal(runtime.machineLogPendingConnectionLimiter.total, 1);
+
+    ws.close();
+    await waitForWebSocketClose(ws);
+    await waitForPendingConnectionCount(runtime, 0);
+});
 
 test('机台日志 WebSocket 握手按原始 ECDH shared secret 完成认证', async (t) => {
     const { app, client, runtime, totpSecret } = await createInitializedHarness(t);

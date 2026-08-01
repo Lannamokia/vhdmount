@@ -30,6 +30,10 @@ const MACHINE_LOG_MAX_FRAME_BYTES = Number(process.env.MACHINE_LOG_MAX_FRAME_BYT
 const MACHINE_LOG_MAX_BYTES_PER_DAY = Number(process.env.MACHINE_LOG_MAX_BYTES_PER_DAY || 64 * 1024 * 1024);
 const MACHINE_LOG_MAX_MACHINE_FRAMES_PER_MINUTE = Number(process.env.MACHINE_LOG_MAX_MACHINE_FRAMES_PER_MINUTE || 120);
 const MACHINE_LOG_MAX_IP_FRAMES_PER_MINUTE = Number(process.env.MACHINE_LOG_MAX_IP_FRAMES_PER_MINUTE || 240);
+const MACHINE_LOG_HANDSHAKE_TIMEOUT_MS = Number(process.env.MACHINE_LOG_HANDSHAKE_TIMEOUT_MS || 10 * 1000);
+const MACHINE_LOG_MAX_PENDING_CONNECTIONS = Number(process.env.MACHINE_LOG_MAX_PENDING_CONNECTIONS || 128);
+const MACHINE_LOG_MAX_PENDING_CONNECTIONS_PER_IP = Number(process.env.MACHINE_LOG_MAX_PENDING_CONNECTIONS_PER_IP || 16);
+const MACHINE_LOG_MAX_HANDSHAKE_MESSAGES = 3;
 
 const SENSITIVE_VALUE_PATTERNS = [
     /(password|token|authorization|ciphertext|sessionsecret|registrationcertificatepassword)\s*[:=]\s*([^\s,;]+)/ig,
@@ -234,6 +238,61 @@ function cleanupBootstrapCache(runtime) {
     }
 }
 
+function reservePendingConnection(runtime, remoteAddress, socket) {
+    if (!runtime.machineLogPendingConnectionLimiter) {
+        runtime.machineLogPendingConnectionLimiter = {
+            total: 0,
+            byAddress: new Map(),
+        };
+    }
+
+    const limiter = runtime.machineLogPendingConnectionLimiter;
+    const address = String(remoteAddress || 'unknown');
+    const addressCount = limiter.byAddress.get(address) || 0;
+    if (limiter.total >= MACHINE_LOG_MAX_PENDING_CONNECTIONS
+        || addressCount >= MACHINE_LOG_MAX_PENDING_CONNECTIONS_PER_IP) {
+        return null;
+    }
+
+    limiter.total += 1;
+    limiter.byAddress.set(address, addressCount + 1);
+    let released = false;
+
+    const release = () => {
+        if (released) {
+            return;
+        }
+        released = true;
+        limiter.total = Math.max(0, limiter.total - 1);
+        const currentCount = limiter.byAddress.get(address) || 0;
+        if (currentCount <= 1) {
+            limiter.byAddress.delete(address);
+        } else {
+            limiter.byAddress.set(address, currentCount - 1);
+        }
+        socket?.removeListener('close', release);
+    };
+
+    socket?.once('close', release);
+    return { release };
+}
+
+function rejectWebSocketUpgrade(socket) {
+    if (!socket || socket.destroyed) {
+        return;
+    }
+    try {
+        socket.end(
+            'HTTP/1.1 503 Service Unavailable\r\n'
+            + 'Connection: close\r\n'
+            + 'Content-Length: 0\r\n'
+            + '\r\n',
+        );
+    } catch {
+        socket.destroy();
+    }
+}
+
 function cleanupLogRateLimiters(runtime) {
     const now = Date.now();
     // 滑动窗口限流：删除已过窗口期的条目
@@ -427,7 +486,10 @@ function buildMachineLogTextExport(entries) {
 }
 
 function attachMachineLogWebSocketServer({ server, runtime, logger = console }) {
-    const wss = new WebSocketServer({ noServer: true });
+    const wss = new WebSocketServer({
+        noServer: true,
+        maxPayload: MACHINE_LOG_MAX_FRAME_BYTES,
+    });
     runtime.machineLogWebSocketServer = wss;
 
     function closeWithPolicyViolation(ws, reason = 'policy') {
@@ -438,12 +500,14 @@ function attachMachineLogWebSocketServer({ server, runtime, logger = console }) 
         }
     }
 
-    function createConnectionState(ws, request) {
+    function createConnectionState(ws, request, pendingConnection) {
         return {
             ws,
             request,
+            pendingConnection,
             pendingHandshake: null,
             handshakeComplete: false,
+            handshakeMessageCount: 0,
             closed: false,
             outboundFrameSeq: 0,
             acknowledgedSeq: 0,
@@ -463,9 +527,12 @@ function attachMachineLogWebSocketServer({ server, runtime, logger = console }) 
             clearTimeout(state.timeoutHandle);
         }
 
+        const timeoutMs = state.handshakeComplete
+            ? state.heartbeatTimeoutMs
+            : MACHINE_LOG_HANDSHAKE_TIMEOUT_MS;
         state.timeoutHandle = setTimeout(() => {
             closeWithPolicyViolation(state.ws, 'timeout');
-        }, state.heartbeatTimeoutMs);
+        }, timeoutMs);
 
         if (typeof state.timeoutHandle.unref === 'function') {
             state.timeoutHandle.unref();
@@ -483,6 +550,9 @@ function attachMachineLogWebSocketServer({ server, runtime, logger = console }) 
             state.timeoutHandle = null;
         }
 
+        state.pendingConnection?.release();
+        state.pendingConnection = null;
+
         const current = runtime.machineLogConnections.get(state.machineId || '');
         if (current?.ws === state.ws) {
             runtime.machineLogConnections.delete(state.machineId);
@@ -499,6 +569,11 @@ function attachMachineLogWebSocketServer({ server, runtime, logger = console }) 
                 connectionId: state.connectionId,
             });
         }
+    }
+
+    function releasePendingConnection(state) {
+        state.pendingConnection?.release();
+        state.pendingConnection = null;
     }
 
     async function sendEncryptedPayload(state, payload) {
@@ -766,12 +841,14 @@ function attachMachineLogWebSocketServer({ server, runtime, logger = console }) 
             state.handshakeComplete = true;
             state.authKey = state.pendingHandshake.authKey;
             state.sessionKey = state.pendingHandshake.sessionKey;
+            releasePendingConnection(state);
             runtime.machineLogConnections.set(state.machineId, {
                 ws: state.ws,
                 machineId: state.machineId,
                 sessionId: state.sessionId,
                 connectionId: state.connectionId,
             });
+            resetConnectionTimeout(state);
 
             state.ws.send(JSON.stringify({
                 type: 'server_finish',
@@ -784,14 +861,21 @@ function attachMachineLogWebSocketServer({ server, runtime, logger = console }) 
         throw new RegistrationAuthError('不支持的握手消息类型');
     }
 
-    wss.on('connection', (ws, request) => {
-        const state = createConnectionState(ws, request);
+    wss.on('connection', (ws, request, pendingConnection) => {
+        const state = createConnectionState(ws, request, pendingConnection);
         resetConnectionTimeout(state);
 
         ws.on('message', async (raw) => {
-            resetConnectionTimeout(state);
-
             try {
+                if (state.handshakeComplete) {
+                    resetConnectionTimeout(state);
+                } else {
+                    state.handshakeMessageCount += 1;
+                    if (state.handshakeMessageCount > MACHINE_LOG_MAX_HANDSHAKE_MESSAGES) {
+                        throw new RegistrationAuthError('握手消息数量超过上限');
+                    }
+                }
+
                 const rawText = Buffer.isBuffer(raw) ? raw.toString('utf8') : String(raw);
                 if (Buffer.byteLength(rawText, 'utf8') > MACHINE_LOG_MAX_FRAME_BYTES) {
                     throw new RegistrationAuthError('帧体积超过上限');
@@ -840,9 +924,25 @@ function attachMachineLogWebSocketServer({ server, runtime, logger = console }) 
                 return;
             }
 
-            wss.handleUpgrade(request, socket, head, (ws) => {
-                wss.emit('connection', ws, request);
-            });
+            const pendingConnection = reservePendingConnection(
+                runtime,
+                request.socket?.remoteAddress,
+                socket,
+            );
+            if (!pendingConnection) {
+                rejectWebSocketUpgrade(socket);
+                return;
+            }
+
+            try {
+                wss.handleUpgrade(request, socket, head, (ws) => {
+                    wss.emit('connection', ws, request, pendingConnection);
+                });
+            } catch (error) {
+                pendingConnection.release();
+                socket.destroy();
+                logger.warn('机台日志 WebSocket upgrade 失败:', error.message || error);
+            }
         } catch {
             socket.destroy();
         }
