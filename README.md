@@ -207,14 +207,17 @@ MachineLogUploadMaxSpoolBytes=52428800
 - 目标启动目录按 VHD 文件名决定：`SDHD` 对应 `bin`，其余默认查找 `package`。
 - 初次启动使用 `start.bat`；当检测到目标进程退出时，重启顺序为：`start_game.bat` 优先，`start.bat` 兜底。
 - 运行日志写入应用目录下的 `vhdmounter.log`，达到 10 MiB 后循环覆盖。
-- 若存在卷标为 `NXLOG` 的可移动设备，客户端会把最新日志复制到该设备根目录。
+- 若存在卷标为 `NXLOG`、已就绪的可移动设备，客户端约每 5 秒把当前 `vhdmounter.log` 覆盖复制到设备根目录。该流程不导出 spool、上传客户端日志、服务端历史或审计日志。
 
 ## 离线更新链路
 
 - `VHDMountAdminTools` 用于生成更新签名密钥、`trusted_keys.pem`、更新清单和注册证书包。
-- 主程序启动时会检查卷标为 `NX_INS` 的可移动设备，寻找 `manifest.json` / `manifest.sig`（支持根目录或 `updates/` 子目录）。
+- 主程序启动时会检查卷标为 `NX_INS`、已就绪的可移动设备，寻找 `manifest.json` / `manifest.sig`（支持根目录或 `updates/` 子目录，根目录优先）。清单引用的全部 payload 必须按相对路径一并放入介质。
+- 应用自更新依赖机台程序目录中的 `trusted_keys.pem`，并非持续热插拔轮询；BitLocker 介质需要先解锁。`app-update` 总 payload 上限为 1 GiB。
 - 验签通过后，更新文件会被复制到本地 `staging/` 目录，再拉起 `Updater.exe`。
 - `Updater` 完成替换后会写入 `update_done.flag`，并重新拉起当前可用的主程序变体。
+
+卷标是卷属性而非目录名，建议严格使用大写。设备必须被 Windows 识别为可移动磁盘；一个卷不能同时作为 `NX_INS` 和 `NXLOG`。Flutter 管理端的“导出原始文本”是在线服务端查询，当前只在对话框显示结果，不会自动写入 USB。
 
 ## 服务端当前状态
 
