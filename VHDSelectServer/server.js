@@ -1039,18 +1039,16 @@ async function createApp(options = {}) {
 
     app.get('/api/boot-image-select', requireInitialized, requireDatabase, asyncHandler(async (req, res) => {
         const machineId = assertMachineId(req.query.machineId);
-        const defaultVhdKeyword = serviceSettingsStore.getDefaultVhdKeyword();
-        let machine = await runtime.database.getMachine(machineId);
-
+        const machine = await runtime.database.getMachine(machineId);
         if (!machine) {
-            machine = await runtime.database.upsertMachine(machineId, false, defaultVhdKeyword);
+            throw createJsonError(404, '机台未注册');
         }
 
         await runtime.database.updateMachineLastSeen(machineId);
 
         res.json({
             success: true,
-            BootImageSelected: machine ? machine.vhd_keyword : defaultVhdKeyword,
+            BootImageSelected: machine.vhd_keyword,
             machineId,
             timestamp: new Date().toISOString(),
         });

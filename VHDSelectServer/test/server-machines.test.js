@@ -179,3 +179,32 @@ test('服务端会拒绝非法 machineId 输入', async (t) => {
 
     assert.match(response.body.error, /machineId/);
 });
+
+test('公开 VHD 查询不会自动创建未知机台', async (t) => {
+    const { client, fakeDatabase } = await createInitializedHarness(t);
+    const machineId = 'MACHINE-UNKNOWN-VHD';
+
+    const response = await client
+        .get('/api/boot-image-select')
+        .query({ machineId })
+        .expect(404);
+
+    assert.equal(response.body.success, false);
+    assert.equal(response.body.error, '机台未注册');
+    assert.equal(await fakeDatabase.getMachine(machineId), null);
+    assert.equal((await fakeDatabase.getAllMachines()).some((machine) => machine.machine_id === machineId), false);
+});
+
+test('公开 VHD 查询仍允许已登记机台匿名读取并更新在线时间', async (t) => {
+    const { client, fakeDatabase } = await createInitializedHarness(t);
+    const machineId = 'MACHINE-KNOWN-VHD';
+    await fakeDatabase.upsertMachine(machineId, false, 'SAFEBOOT');
+
+    const response = await client
+        .get('/api/boot-image-select')
+        .query({ machineId })
+        .expect(200);
+
+    assert.equal(response.body.BootImageSelected, 'SAFEBOOT');
+    assert.ok((await fakeDatabase.getMachine(machineId)).last_seen);
+});
