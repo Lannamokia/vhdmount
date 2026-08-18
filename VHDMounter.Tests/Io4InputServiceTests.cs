@@ -23,6 +23,7 @@ namespace VHDMounter.Tests
             Assert.Equal((byte)7, snapshot.CoinCount);
             Assert.True(snapshot.IsPressed(Io4Button.Service));
             Assert.True(snapshot.IsPressed(Io4Button.Test));
+            Assert.True(snapshot.IsPressed(Io4Button.P2Button4));
         }
 
         [Fact]
@@ -75,6 +76,9 @@ namespace VHDMounter.Tests
             Assert.Equal(Io4Constants.P1Button7Mask, Io4Constants.GetMask(Io4Button.P1Button7));
             Assert.Equal(Io4Constants.P1Button8Mask, Io4Constants.GetMask(Io4Button.P1Button8));
             Assert.Equal(Io4Constants.P1SelectMask, Io4Constants.GetMask(Io4Button.P1Select));
+            Assert.Equal(Io4Constants.P2Button4Mask, Io4Constants.GetPlayer2Mask(Io4Button.P2Button4));
+            Assert.Equal(Io4Constants.P2Button5Mask, Io4Constants.GetPlayer2Mask(Io4Button.P2Button5));
+            Assert.Equal(Io4Constants.P2SelectMask, Io4Constants.GetPlayer2Mask(Io4Button.P2Select));
         }
 
         [Fact]
@@ -129,6 +133,44 @@ namespace VHDMounter.Tests
             service.ProcessSnapshotForTesting(Io4InputSnapshot.Empty);
 
             Assert.Equal(new[] { 1, 2, 3, 4, 5, 6, 7, 8, 0, 9 }, digits);
+        }
+
+        [Fact]
+        public void NetworkEditorMapsPlayerTwoButtonFourAndFiveToShortLongAndBack()
+        {
+            var ticksPerMillisecond = Stopwatch.Frequency / 1000d;
+            long now = 0;
+            using var service = new Io4InputService(() => now)
+            {
+                InputMode = Io4InputRoutingMode.NetworkIpv4Edit,
+            };
+            var rawInputs = new List<Io4RawInputKind>();
+            var actions = new List<UiInputAction>();
+            service.RawInputRaised += (_, eventArgs) => rawInputs.Add(eventArgs.Kind);
+            service.ActionRaised += (_, eventArgs) => actions.Add(eventArgs.Action);
+
+            service.ProcessSnapshotForTesting(new Io4InputSnapshot(0, 0));
+
+            service.ProcessSnapshotForTesting(new Io4InputSnapshot(0, Io4Constants.P2Button4Mask));
+            now = (long)(500 * ticksPerMillisecond);
+            service.ProcessSnapshotForTesting(new Io4InputSnapshot(0, Io4Constants.P2Button4Mask));
+            service.ProcessSnapshotForTesting(Io4InputSnapshot.Empty);
+
+            now = (long)(1000 * ticksPerMillisecond);
+            service.ProcessSnapshotForTesting(new Io4InputSnapshot(0, Io4Constants.P2Button4Mask));
+            now = (long)(2001 * ticksPerMillisecond);
+            service.ProcessSnapshotForTesting(new Io4InputSnapshot(0, Io4Constants.P2Button4Mask));
+            service.ProcessSnapshotForTesting(Io4InputSnapshot.Empty);
+
+            service.ProcessSnapshotForTesting(new Io4InputSnapshot(0, Io4Constants.P2Button5Mask));
+            service.ProcessSnapshotForTesting(Io4InputSnapshot.Empty);
+
+            Assert.Equal(new[]
+            {
+                Io4RawInputKind.CoinShortPress,
+                Io4RawInputKind.CoinLongPressConfirm,
+            }, rawInputs);
+            Assert.Equal(new[] { UiInputAction.Back }, actions);
         }
 
         [Fact]

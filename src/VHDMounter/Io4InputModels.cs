@@ -19,6 +19,15 @@ namespace VHDMounter
         P1Button7,
         P1Button8,
         P1Select,
+        P2Button1,
+        P2Button2,
+        P2Button3,
+        P2Button4,
+        P2Button5,
+        P2Button6,
+        P2Button7,
+        P2Button8,
+        P2Select,
         Coin,
         Service,
         Test,
@@ -47,6 +56,15 @@ namespace VHDMounter
         public const ushort P1Button7Mask = 1 << 12;
         public const ushort P1Button8Mask = 1 << 11;
         public const ushort P1SelectMask = 1 << 1;
+        public const ushort P2Button1Mask = 1 << 2;
+        public const ushort P2Button2Mask = 1 << 3;
+        public const ushort P2Button3Mask = 1 << 0;
+        public const ushort P2Button4Mask = 1 << 15;
+        public const ushort P2Button5Mask = 1 << 14;
+        public const ushort P2Button6Mask = 1 << 13;
+        public const ushort P2Button7Mask = 1 << 12;
+        public const ushort P2Button8Mask = 1 << 11;
+        public const ushort P2SelectMask = 1 << 4;
         public const ushort ServiceSwitchMask = 1 << 6;
         public const ushort TestSwitchMask = 1 << 9;
 
@@ -65,7 +83,24 @@ namespace VHDMounter
             Io4Button.P1Button8,
         };
 
+        public static readonly Io4Button[] Player2Buttons =
+        {
+            Io4Button.P2Button1,
+            Io4Button.P2Button2,
+            Io4Button.P2Button3,
+            Io4Button.P2Button4,
+            Io4Button.P2Button5,
+            Io4Button.P2Button6,
+            Io4Button.P2Button7,
+            Io4Button.P2Button8,
+        };
+
         public static ushort GetMask(Io4Button button)
+        {
+            return GetPlayer1Mask(button);
+        }
+
+        public static ushort GetPlayer1Mask(Io4Button button)
         {
             switch (button)
             {
@@ -84,14 +119,41 @@ namespace VHDMounter
             }
         }
 
+        public static ushort GetPlayer2Mask(Io4Button button)
+        {
+            switch (button)
+            {
+                case Io4Button.P2Button1: return P2Button1Mask;
+                case Io4Button.P2Button2: return P2Button2Mask;
+                case Io4Button.P2Button3: return P2Button3Mask;
+                case Io4Button.P2Button4: return P2Button4Mask;
+                case Io4Button.P2Button5: return P2Button5Mask;
+                case Io4Button.P2Button6: return P2Button6Mask;
+                case Io4Button.P2Button7: return P2Button7Mask;
+                case Io4Button.P2Button8: return P2Button8Mask;
+                case Io4Button.P2Select: return P2SelectMask;
+                default: return 0;
+            }
+        }
+
         public static bool IsPlayer1Button(Io4Button button)
         {
             return button >= Io4Button.P1Button1 && button <= Io4Button.P1Button8;
         }
 
+        public static bool IsPlayer2Button(Io4Button button)
+        {
+            return button >= Io4Button.P2Button1 && button <= Io4Button.P2Button8;
+        }
+
         public static int GetPlayer1ButtonNumber(Io4Button button)
         {
             return IsPlayer1Button(button) ? (int)button + 1 : 0;
+        }
+
+        public static int GetPlayer2ButtonNumber(Io4Button button)
+        {
+            return IsPlayer2Button(button) ? (int)button - (int)Io4Button.P2Button1 + 1 : 0;
         }
     }
 
@@ -122,8 +184,22 @@ namespace VHDMounter
 
         public bool IsPressed(Io4Button button)
         {
-            var mask = Io4Constants.GetMask(button);
-            return mask != 0 && (Player1Switches & mask) != 0;
+            var player2Mask = Io4Constants.GetPlayer2Mask(button);
+            if (player2Mask != 0)
+            {
+                return (Player2Switches & player2Mask) != 0;
+            }
+
+            var player1Mask = Io4Constants.GetPlayer1Mask(button);
+            if (player1Mask != 0)
+            {
+                return (Player1Switches & player1Mask) != 0;
+            }
+
+            var systemMask = button == Io4Button.Service
+                ? Io4Constants.ServiceSwitchMask
+                : button == Io4Button.Test ? Io4Constants.TestSwitchMask : (ushort)0;
+            return systemMask != 0 && (Player1Switches & systemMask) != 0;
         }
     }
 

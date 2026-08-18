@@ -19,6 +19,8 @@ namespace VHDMounter
         private long lastCoinPulseTimestamp;
         private long? testHoldStartTimestamp;
         private bool testHoldConsumed;
+        private long? player2ConfirmHoldStartTimestamp;
+        private bool player2ConfirmHoldConsumed;
         private bool hasPreviousSnapshot;
         private bool disposed;
         private bool isMenuOpen;
@@ -95,6 +97,8 @@ namespace VHDMounter
 
                     inputMode = value;
                     ResetCoinState();
+                    ResetTestHoldState();
+                    ResetPlayer2ConfirmHoldState();
                 }
             }
         }
@@ -236,29 +240,43 @@ namespace VHDMounter
             snapshot ??= Io4InputSnapshot.Empty;
 
             var previous = previousSnapshot;
-            var newPresses = (ushort)(snapshot.Player1Switches & ~previous.Player1Switches);
+            var newPlayer1Presses = (ushort)(snapshot.Player1Switches & ~previous.Player1Switches);
+            var newPlayer2Presses = (ushort)(snapshot.Player2Switches & ~previous.Player2Switches);
 
             foreach (var button in Io4Constants.Player1Buttons)
             {
-                if ((newPresses & Io4Constants.GetMask(button)) != 0)
+                if ((newPlayer1Presses & Io4Constants.GetPlayer1Mask(button)) != 0)
                 {
                     RaiseButton(button);
                 }
             }
 
-            if ((newPresses & Io4Constants.P1SelectMask) != 0)
+            if ((newPlayer1Presses & Io4Constants.P1SelectMask) != 0)
             {
                 RaiseButton(Io4Button.P1Select);
             }
 
-            if ((newPresses & Io4Constants.ServiceSwitchMask) != 0)
+            if ((newPlayer1Presses & Io4Constants.ServiceSwitchMask) != 0)
             {
                 RaiseButton(Io4Button.Service);
             }
 
-            if ((newPresses & Io4Constants.TestSwitchMask) != 0)
+            if ((newPlayer1Presses & Io4Constants.TestSwitchMask) != 0)
             {
                 RaiseButton(Io4Button.Test);
+            }
+
+            foreach (var button in Io4Constants.Player2Buttons)
+            {
+                if ((newPlayer2Presses & Io4Constants.GetPlayer2Mask(button)) != 0)
+                {
+                    RaiseButton(button);
+                }
+            }
+
+            if ((newPlayer2Presses & Io4Constants.P2SelectMask) != 0)
+            {
+                RaiseButton(Io4Button.P2Select);
             }
 
             if (hasPreviousSnapshot)
@@ -270,11 +288,12 @@ namespace VHDMounter
             if (currentInputMode == Io4InputRoutingMode.NetworkIpv4Edit)
             {
                 ResetTestHoldState();
-                ProcessNetworkIpv4EditorSnapshot(newPresses);
+                ProcessNetworkIpv4EditorSnapshot(newPlayer1Presses, newPlayer2Presses, snapshot);
             }
             else
             {
-                ProcessNavigationSnapshot(newPresses, snapshot);
+                ResetPlayer2ConfirmHoldState();
+                ProcessNavigationSnapshot(newPlayer1Presses, snapshot);
             }
 
             previousSnapshot = snapshot;
@@ -337,28 +356,73 @@ namespace VHDMounter
             RaiseAction(UiInputAction.OpenServiceMenu, "TestHold1s");
         }
 
-        private void ProcessNetworkIpv4EditorSnapshot(ushort newPresses)
+        private void ProcessNetworkIpv4EditorSnapshot(ushort newPlayer1Presses, ushort newPlayer2Presses, Io4InputSnapshot snapshot)
         {
             for (var buttonNumber = 1; buttonNumber <= 8; buttonNumber++)
             {
                 var button = (Io4Button)(buttonNumber - 1);
-                if ((newPresses & Io4Constants.GetMask(button)) != 0)
+                if ((newPlayer1Presses & Io4Constants.GetPlayer1Mask(button)) != 0)
                 {
                     RaiseDigit(buttonNumber, $"P1Button{buttonNumber}");
                 }
             }
 
-            if ((newPresses & Io4Constants.TestSwitchMask) != 0)
+            if ((newPlayer1Presses & Io4Constants.TestSwitchMask) != 0)
             {
                 RaiseDigit(9, "Test");
             }
 
-            if ((newPresses & Io4Constants.ServiceSwitchMask) != 0)
+            if ((newPlayer1Presses & Io4Constants.ServiceSwitchMask) != 0)
             {
                 RaiseDigit(0, "Service");
             }
 
+            if ((newPlayer2Presses & Io4Constants.P2Button5Mask) != 0)
+            {
+                RaiseAction(UiInputAction.Back, "P2Button5");
+            }
+
+            ProcessPlayer2ConfirmHold(snapshot);
             FinalizeCoinActivityIfReleased();
+        }
+
+        private void ProcessPlayer2ConfirmHold(Io4InputSnapshot snapshot)
+        {
+            if (!snapshot.IsPressed(Io4Button.P2Button4))
+            {
+                if (player2ConfirmHoldStartTimestamp.HasValue)
+                {
+                    if (!player2ConfirmHoldConsumed)
+                    {
+                        RaiseRawInput(Io4RawInputKind.CoinShortPress, "P2Button4Short");
+                    }
+
+                    ResetPlayer2ConfirmHoldState();
+                }
+
+                return;
+            }
+
+            var now = timestampProvider();
+            if (!player2ConfirmHoldStartTimestamp.HasValue)
+            {
+                player2ConfirmHoldStartTimestamp = now;
+                player2ConfirmHoldConsumed = false;
+                return;
+            }
+
+            if (player2ConfirmHoldConsumed)
+            {
+                return;
+            }
+
+            if (ElapsedMilliseconds(player2ConfirmHoldStartTimestamp.Value, now) < Io4Constants.TestHoldMilliseconds)
+            {
+                return;
+            }
+
+            player2ConfirmHoldConsumed = true;
+            RaiseRawInput(Io4RawInputKind.CoinLongPressConfirm, "P2Button4Long");
         }
 
         private void ProcessCoinCounter(byte previousCount, byte currentCount)
@@ -501,6 +565,7 @@ namespace VHDMounter
             hasPreviousSnapshot = false;
             ResetCoinState();
             ResetTestHoldState();
+            ResetPlayer2ConfirmHoldState();
         }
 
         private void ResetCoinState()
@@ -513,6 +578,12 @@ namespace VHDMounter
         {
             testHoldStartTimestamp = null;
             testHoldConsumed = false;
+        }
+
+        private void ResetPlayer2ConfirmHoldState()
+        {
+            player2ConfirmHoldStartTimestamp = null;
+            player2ConfirmHoldConsumed = false;
         }
 
         private void ThrowIfDisposed()
