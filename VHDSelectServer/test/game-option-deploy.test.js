@@ -102,8 +102,8 @@ function createFakeDatabase() {
             }
             if (sql.includes("t.status IN ('downloading', 'running')") || sql.includes("t.status = 'pending'")) {
                 const hasDefaultTypeFilter = sql.includes("p.type IN ('software-deploy', 'file-deploy')");
-                const hasSingleTypeFilter = sql.includes('p.type = $3');
-                const packageTypeFilter = hasSingleTypeFilter ? params[2] : null;
+                const hasSingleTypeFilter = sql.includes('p.type = $2');
+                const packageTypeFilter = hasSingleTypeFilter ? params[1] : null;
                 const claimable = Array.from(tasks.values())
                     .filter((task) => {
                         if (task.machine_id !== params[0]) {

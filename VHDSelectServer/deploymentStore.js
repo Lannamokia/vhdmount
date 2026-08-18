@@ -221,12 +221,18 @@ class DeploymentStore {
 
     async claimPendingTasks(database, machineId, { leaseDurationSeconds = DEFAULT_TASK_LEASE_SECONDS, packageType = null } = {}) {
         return database.withTransaction(async (client) => {
-            const params = [machineId, leaseDurationSeconds];
+            // The SELECT only binds values used by its WHERE clause.  The lease
+            // duration belongs to the subsequent UPDATE and must not be passed
+            // here; PostgreSQL rejects both unused parameters and a placeholder
+            // whose type cannot be inferred (the game-content path used to hit
+            // both errors because it generated p.type = $3 while binding only
+            // the machine/type values that the SELECT actually needs).
+            const selectParams = [machineId];
             const typeFilter = packageType
-                ? `AND p.type = $${params.length + 1}`
+                ? `AND p.type = $${selectParams.length + 1}`
                 : "AND p.type IN ('software-deploy', 'file-deploy')";
             if (packageType) {
-                params.push(packageType);
+                selectParams.push(packageType);
             }
 
             const result = await client.query(`
@@ -246,7 +252,7 @@ class DeploymentStore {
                   AND (t.scheduled_at IS NULL OR t.scheduled_at <= NOW())
                 ORDER BY t.created_at ASC
                 FOR UPDATE SKIP LOCKED
-            `, params);
+            `, selectParams);
 
             const claimedTasks = [];
             for (const row of result.rows) {
