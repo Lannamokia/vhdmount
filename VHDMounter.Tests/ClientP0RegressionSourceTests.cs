@@ -16,6 +16,15 @@ namespace VHDMounter.Tests
         }
 
         [Fact]
+        public void DualDisplayMirror_MarshalsRefreshToOwningDispatcher()
+        {
+            var source = ReadSource("src/VHDMounter/MainWindow.DualDisplayFeatures.cs");
+
+            Assert.Contains("if (!Dispatcher.CheckAccess())", source, StringComparison.Ordinal);
+            Assert.Contains("Dispatcher.InvokeAsync(RefreshSecondaryDisplayMirror)", source, StringComparison.Ordinal);
+        }
+
+        [Fact]
         public void MainWindow_PropagatesAppLifetimeTokenIntoEvhdMountFlow()
         {
             var source = ReadSource("src/VHDMounter/MainWindow.xaml.cs");

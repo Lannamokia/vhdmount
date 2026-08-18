@@ -61,6 +61,12 @@ namespace VHDMounter
 
         private void RefreshSecondaryDisplayMirror()
         {
+            if (!Dispatcher.CheckAccess())
+            {
+                Dispatcher.InvokeAsync(RefreshSecondaryDisplayMirror);
+                return;
+            }
+
             if (secondaryDisplayMirrorCoordinator == null || !IsLoaded)
             {
                 return;
