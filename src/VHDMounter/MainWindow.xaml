@@ -60,7 +60,7 @@
         </Style>
     </Window.Resources>
     
-    <Grid>
+    <Grid x:Name="DisplaySurfaceRoot">
         <Grid.RowDefinitions>
             <RowDefinition Height="7*"/>
             <RowDefinition Height="9*"/>

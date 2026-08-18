@@ -50,6 +50,7 @@ namespace VHDMounter
             Trace.WriteLine("MAINWINDOW: ctor begin");
             InitializeComponent();
             Trace.WriteLine("MAINWINDOW: InitializeComponent completed");
+            InitializeDualDisplayMirror();
 
             Loaded += (_, __) => Trace.WriteLine($"MAINWINDOW: Loaded IsVisible={IsVisible} State={WindowState} ShowInTaskbar={ShowInTaskbar} Topmost={Topmost}");
             ContentRendered += (_, __) => Trace.WriteLine($"MAINWINDOW: ContentRendered IsVisible={IsVisible} State={WindowState} ActualSize={ActualWidth}x{ActualHeight}");
@@ -546,6 +547,7 @@ namespace VHDMounter
 #if FEATURE_HID_MENU
             DisposeFeatureServices();
 #endif
+            DisposeDualDisplayMirror();
 
             base.OnClosed(e);
         }
@@ -736,6 +738,7 @@ namespace VHDMounter
             {
                 DeployStatusText.Text = message;
                 DeployOverlay.Visibility = Visibility.Visible;
+                RefreshSecondaryDisplayMirror();
             }
             catch { }
         }
@@ -745,6 +748,7 @@ namespace VHDMounter
             try
             {
                 DeployOverlay.Visibility = Visibility.Collapsed;
+                RefreshSecondaryDisplayMirror();
             }
             catch { }
         }

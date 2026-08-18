@@ -86,6 +86,7 @@ namespace VHDMounter
         private void SetWindowHiddenForGame(bool hidden)
         {
             isWindowHiddenForGame = hidden;
+            RefreshSecondaryDisplayMirror();
             if (!hidden)
             {
                 overlayActivationContext = null;
@@ -96,6 +97,7 @@ namespace VHDMounter
         {
             isWindowHiddenForGame = false;
             overlayActivationContext = null;
+            RefreshSecondaryDisplayMirror();
         }
 
         private async Task<bool> HandleOverlayInputAsync(UiInputAction action)
@@ -206,6 +208,7 @@ namespace VHDMounter
             ServiceMenuOverlay.Visibility = System.Windows.Visibility.Visible;
             SyncFeatureInputState();
             RenderOverlay();
+            RefreshSecondaryDisplayMirror();
         }
 
         private async Task CloseServiceMenuAsync()
@@ -223,6 +226,7 @@ namespace VHDMounter
             ServiceMenuOverlay.Visibility = System.Windows.Visibility.Collapsed;
             SyncFeatureInputState();
             RenderOverlay();
+            RefreshSecondaryDisplayMirror();
 
             vhdManager.IsMenuOpen = false;
 
