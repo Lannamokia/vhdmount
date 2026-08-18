@@ -1,15 +1,21 @@
 using System;
+using System.Diagnostics;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
-using System.Windows.Shapes;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 
 namespace VHDMounter
 {
     internal sealed class SecondaryDisplayMirrorWindow : Window, ISecondaryDisplayMirrorWindow
     {
-        private readonly Rectangle mirrorSurface;
-        private readonly VisualBrush mirrorBrush;
+        private readonly Visual sourceVisual;
+        private readonly Image mirrorSurface;
+        private readonly DispatcherTimer refreshTimer;
+        private RenderTargetBitmap renderBitmap;
+        private bool renderFailureLogged;
         private bool disposed;
 
         public SecondaryDisplayMirrorWindow(Visual sourceVisual)
@@ -18,6 +24,8 @@ namespace VHDMounter
             {
                 throw new ArgumentNullException(nameof(sourceVisual));
             }
+
+            this.sourceVisual = sourceVisual;
 
             WindowStyle = WindowStyle.None;
             ResizeMode = ResizeMode.NoResize;
@@ -30,19 +38,28 @@ namespace VHDMounter
             Background = Brushes.Black;
             Opacity = 0;
 
-            mirrorBrush = new VisualBrush(sourceVisual)
+            mirrorSurface = new Image
             {
                 Stretch = Stretch.Fill,
-                AlignmentX = AlignmentX.Center,
-                AlignmentY = AlignmentY.Center,
-            };
-            mirrorSurface = new Rectangle
-            {
-                Fill = mirrorBrush,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
                 IsHitTestVisible = false,
                 Focusable = false,
             };
-            Content = mirrorSurface;
+
+            var mirrorHost = new Grid
+            {
+                Background = Brushes.White,
+                IsHitTestVisible = false,
+            };
+            mirrorHost.Children.Add(mirrorSurface);
+            Content = mirrorHost;
+
+            refreshTimer = new DispatcherTimer(DispatcherPriority.Render, Dispatcher)
+            {
+                Interval = TimeSpan.FromMilliseconds(66),
+            };
+            refreshTimer.Tick += OnRefreshTimerTick;
         }
 
         public DisplayMonitorBounds CurrentMonitor { get; private set; }
@@ -80,6 +97,9 @@ namespace VHDMounter
                 monitor.Height,
                 NativeMethods.SwpNoActivate | NativeMethods.SwpShowWindow);
             Opacity = 1;
+
+            RefreshSnapshot();
+            refreshTimer.Start();
         }
 
         void ISecondaryDisplayMirrorWindow.Hide()
@@ -98,6 +118,8 @@ namespace VHDMounter
             {
                 base.Hide();
             }
+
+            refreshTimer.Stop();
         }
 
         public void Dispose()
@@ -108,11 +130,83 @@ namespace VHDMounter
             }
 
             disposed = true;
+            refreshTimer.Stop();
+            refreshTimer.Tick -= OnRefreshTimerTick;
             HideMirror();
 
             Close();
-            mirrorBrush.Visual = null;
+            mirrorSurface.Source = null;
+            renderBitmap = null;
             CurrentMonitor = null;
+        }
+
+        private void OnRefreshTimerTick(object sender, EventArgs e)
+        {
+            if (!disposed && base.IsVisible)
+            {
+                RefreshSnapshot();
+            }
+        }
+
+        private void RefreshSnapshot()
+        {
+            if (disposed || sourceVisual == null ||
+                (sourceVisual is UIElement sourceElement && !sourceElement.IsVisible))
+            {
+                return;
+            }
+
+            if (!TryGetSourceSize(out var width, out var height))
+            {
+                return;
+            }
+
+            try
+            {
+                var pixelWidth = Math.Max(1, (int)Math.Ceiling(width));
+                var pixelHeight = Math.Max(1, (int)Math.Ceiling(height));
+                if (renderBitmap == null ||
+                    renderBitmap.PixelWidth != pixelWidth ||
+                    renderBitmap.PixelHeight != pixelHeight)
+                {
+                    renderBitmap = new RenderTargetBitmap(
+                        pixelWidth,
+                        pixelHeight,
+                        96,
+                        96,
+                        PixelFormats.Pbgra32);
+                }
+
+                renderBitmap.Render(sourceVisual);
+                mirrorSurface.Source = renderBitmap;
+                renderFailureLogged = false;
+            }
+            catch (Exception ex)
+            {
+                if (!renderFailureLogged)
+                {
+                    Trace.WriteLine($"DISPLAY_MIRROR_SNAPSHOT_FAILED: {ex.Message}");
+                    renderFailureLogged = true;
+                }
+            }
+        }
+
+        private bool TryGetSourceSize(out double width, out double height)
+        {
+            width = 0;
+            height = 0;
+            if (sourceVisual is FrameworkElement element)
+            {
+                width = element.ActualWidth;
+                height = element.ActualHeight;
+                if (width <= 0 || height <= 0)
+                {
+                    width = element.RenderSize.Width;
+                    height = element.RenderSize.Height;
+                }
+            }
+
+            return width > 0 && height > 0;
         }
     }
 }
