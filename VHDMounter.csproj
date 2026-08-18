@@ -71,6 +71,8 @@
     <Compile Remove="src\VHDMounter\MainWindow.SystemSettingsFeatures.cs" />
     <Compile Remove="src\VHDMounter\MaimollerInputModels.cs" />
     <Compile Remove="src\VHDMounter\MaimollerInputService.cs" />
+    <Compile Remove="src\VHDMounter\Io4InputModels.cs" />
+    <Compile Remove="src\VHDMounter\Io4InputService.cs" />
     <Compile Remove="src\VHDMounter\NativeMethods.cs" />
     <Compile Remove="src\VHDMounter\NetworkConfigurationModels.cs" />
     <Compile Remove="src\VHDMounter\NetworkConfigurationService.cs" />

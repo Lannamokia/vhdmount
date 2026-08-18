@@ -22,6 +22,7 @@ namespace VHDMounter
         private readonly WindowActivationService windowActivationService = new WindowActivationService();
         private SystemInfoService systemInfoService;
         private MaimollerInputService maimollerInputService;
+        private Io4InputService io4InputService;
         private OverlayState currentOverlayState = OverlayState.None;
         private int selectedMenuIndex;
         private int currentSystemInfoPageIndex;
@@ -34,7 +35,7 @@ namespace VHDMounter
         private void InitializeFeatureServices()
         {
             OverlayItemsControl.ItemsSource = overlayLines;
-            OverlayFooterText.Text = "Coin 长按 15 秒或 F12 可打开系统菜单";
+            OverlayFooterText.Text = "Coin 长按 15 秒、IO4 Service/Test 或 F12 可打开系统菜单";
 
             systemInfoService = new SystemInfoService();
             systemInfoService.SnapshotUpdated += OnSystemInfoSnapshotUpdated;
@@ -44,6 +45,12 @@ namespace VHDMounter
             maimollerInputService.ActionRaised += OnMaimollerActionRaised;
             maimollerInputService.RawInputRaised += OnMaimollerRawInputRaised;
             maimollerInputService.Start();
+
+            io4InputService = new Io4InputService();
+            io4InputService.ButtonPressed += OnIo4ButtonPressed;
+            io4InputService.ActionRaised += OnIo4ActionRaised;
+            io4InputService.RawInputRaised += OnIo4RawInputRaised;
+            io4InputService.Start();
 
             SyncFeatureInputState();
             RenderOverlay();
@@ -57,6 +64,15 @@ namespace VHDMounter
                 maimollerInputService.RawInputRaised -= OnMaimollerRawInputRaised;
                 maimollerInputService.Dispose();
                 maimollerInputService = null;
+            }
+
+            if (io4InputService != null)
+            {
+                io4InputService.ButtonPressed -= OnIo4ButtonPressed;
+                io4InputService.ActionRaised -= OnIo4ActionRaised;
+                io4InputService.RawInputRaised -= OnIo4RawInputRaised;
+                io4InputService.Dispose();
+                io4InputService = null;
             }
 
             if (systemInfoService != null)
@@ -310,6 +326,57 @@ namespace VHDMounter
             Dispatcher.InvokeAsync(async () => await HandleOverlayRawInputAsync(e));
         }
 
+        private void OnIo4ActionRaised(object sender, Io4ActionEventArgs e)
+        {
+            Dispatcher.InvokeAsync(async () => await HandleInputActionAsync(e.Action));
+        }
+
+        private void OnIo4RawInputRaised(object sender, Io4RawInputEventArgs e)
+        {
+            Dispatcher.InvokeAsync(async () => await HandleOverlayRawInputAsync(
+                new MaimollerRawInputEventArgs(
+                    ConvertIo4RawInputKind(e.Kind),
+                    e.Source,
+                    e.Digit)));
+        }
+
+        private void OnIo4ButtonPressed(object sender, Io4ButtonEventArgs e)
+        {
+            if (e.Button != Io4Button.Service && e.Button != Io4Button.Test)
+            {
+                return;
+            }
+
+            Dispatcher.InvokeAsync(async () =>
+            {
+                // In the IPv4 editor the IO4 receiver emits Service/Test as
+                // raw digits. Do not route the low-level edge a second time.
+                if (isServiceMenuOpen && currentOverlayState == OverlayState.NetworkIpv4Edit)
+                {
+                    return;
+                }
+
+                // IO4 system buttons are entry controls for this machine's service UI.
+                // The receiver performs edge detection before raising this event.
+                await HandleInputActionAsync(UiInputAction.OpenServiceMenu);
+            });
+        }
+
+        private static MaimollerRawInputKind ConvertIo4RawInputKind(Io4RawInputKind kind)
+        {
+            switch (kind)
+            {
+                case Io4RawInputKind.Digit:
+                    return MaimollerRawInputKind.Digit;
+                case Io4RawInputKind.CoinShortPress:
+                    return MaimollerRawInputKind.CoinShortPress;
+                case Io4RawInputKind.CoinLongPressConfirm:
+                    return MaimollerRawInputKind.CoinLongPressConfirm;
+                default:
+                    return MaimollerRawInputKind.None;
+            }
+        }
+
         private void OnSystemInfoSnapshotUpdated(SystemInfoSnapshot snapshot)
         {
             latestSystemInfoSnapshot = snapshot ?? SystemInfoSnapshot.Empty;
@@ -323,16 +390,26 @@ namespace VHDMounter
 
         private void SyncFeatureInputState()
         {
-            if (maimollerInputService == null)
+            var isEditorOpen = isServiceMenuOpen && currentOverlayState == OverlayState.NetworkIpv4Edit;
+            var ignoreMenuOpenRequests = isPowerActionPending || currentStage == UiStage.Error;
+
+            if (maimollerInputService != null)
             {
-                return;
+                maimollerInputService.IsMenuOpen = isServiceMenuOpen;
+                maimollerInputService.IgnoreMenuOpenRequests = ignoreMenuOpenRequests;
+                maimollerInputService.InputMode = isEditorOpen
+                    ? MaimollerInputRoutingMode.NetworkIpv4Edit
+                    : MaimollerInputRoutingMode.Navigation;
             }
 
-            maimollerInputService.IsMenuOpen = isServiceMenuOpen;
-            maimollerInputService.IgnoreMenuOpenRequests = isPowerActionPending || currentStage == UiStage.Error;
-            maimollerInputService.InputMode = isServiceMenuOpen && currentOverlayState == OverlayState.NetworkIpv4Edit
-                ? MaimollerInputRoutingMode.NetworkIpv4Edit
-                : MaimollerInputRoutingMode.Navigation;
+            if (io4InputService != null)
+            {
+                io4InputService.IsMenuOpen = isServiceMenuOpen;
+                io4InputService.IgnoreMenuOpenRequests = ignoreMenuOpenRequests;
+                io4InputService.InputMode = isEditorOpen
+                    ? Io4InputRoutingMode.NetworkIpv4Edit
+                    : Io4InputRoutingMode.Navigation;
+            }
         }
 
         private void RenderOverlay()
