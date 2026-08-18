@@ -90,7 +90,6 @@ namespace VHDMounter.Tests
                 (Io4Constants.P1Button3Mask, UiInputAction.Down),
                 (Io4Constants.P1Button4Mask, UiInputAction.Confirm),
                 (Io4Constants.P1Button5Mask, UiInputAction.Back),
-                (Io4Constants.P1SelectMask, UiInputAction.Confirm),
             };
 
             foreach (var (mask, action) in expected)
@@ -154,7 +153,7 @@ namespace VHDMounter.Tests
         }
 
         [Fact]
-        public void RepeatedCoinCounterChangesCanTriggerTheOneSecondEditorLongPress()
+        public void RepeatedCoinCounterChangesStillProduceOnlyOneShortPressAfterRelease()
         {
             var ticksPerMillisecond = Stopwatch.Frequency / 1000d;
             long now = 0;
@@ -176,7 +175,7 @@ namespace VHDMounter.Tests
             now = (long)(1200 * ticksPerMillisecond);
             service.ProcessSnapshotForTesting(new Io4InputSnapshot(0, 0, 21));
 
-            Assert.Equal(new[] { Io4RawInputKind.CoinLongPressConfirm }, rawInputs);
+            Assert.Equal(new[] { Io4RawInputKind.CoinShortPress }, rawInputs);
         }
 
         [Fact]
@@ -201,7 +200,7 @@ namespace VHDMounter.Tests
         }
 
         [Fact]
-        public void RepeatedCoinCounterChangesCanTriggerTheFifteenSecondMenuHold()
+        public void CoinCounterDoesNotOpenTheMenuInNavigationMode()
         {
             var ticksPerMillisecond = Stopwatch.Frequency / 1000d;
             long now = 0;
@@ -217,7 +216,33 @@ namespace VHDMounter.Tests
                 service.ProcessSnapshotForTesting(new Io4InputSnapshot(0, 0, (byte)count));
             }
 
-            Assert.Contains(UiInputAction.OpenServiceMenu, actions);
+            Assert.DoesNotContain(UiInputAction.OpenServiceMenu, actions);
+        }
+
+        [Fact]
+        public void TestLongPressOpensTheMenuOnceWhileShortPressDoesNot()
+        {
+            var ticksPerMillisecond = Stopwatch.Frequency / 1000d;
+            long now = 0;
+            using var service = new Io4InputService(() => now);
+            var actions = new List<UiInputAction>();
+            service.ActionRaised += (_, eventArgs) => actions.Add(eventArgs.Action);
+
+            service.ProcessSnapshotForTesting(new Io4InputSnapshot(0, 0));
+            service.ProcessSnapshotForTesting(new Io4InputSnapshot(Io4Constants.TestSwitchMask, 0));
+            now = (long)(500 * ticksPerMillisecond);
+            service.ProcessSnapshotForTesting(new Io4InputSnapshot(Io4Constants.TestSwitchMask, 0));
+            service.ProcessSnapshotForTesting(Io4InputSnapshot.Empty);
+            Assert.Empty(actions);
+
+            now = (long)(1000 * ticksPerMillisecond);
+            service.ProcessSnapshotForTesting(new Io4InputSnapshot(Io4Constants.TestSwitchMask, 0));
+            now = (long)(2001 * ticksPerMillisecond);
+            service.ProcessSnapshotForTesting(new Io4InputSnapshot(Io4Constants.TestSwitchMask, 0));
+            service.ProcessSnapshotForTesting(new Io4InputSnapshot(Io4Constants.TestSwitchMask, 0));
+            service.ProcessSnapshotForTesting(Io4InputSnapshot.Empty);
+
+            Assert.Equal(new[] { UiInputAction.OpenServiceMenu }, actions);
         }
     }
 }

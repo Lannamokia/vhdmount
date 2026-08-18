@@ -17,7 +17,8 @@ namespace VHDMounter
         private Io4InputSnapshot previousSnapshot = Io4InputSnapshot.Empty;
         private long? coinActivityStartTimestamp;
         private long lastCoinPulseTimestamp;
-        private bool coinLongPressConsumed;
+        private long? testHoldStartTimestamp;
+        private bool testHoldConsumed;
         private bool hasPreviousSnapshot;
         private bool disposed;
         private bool isMenuOpen;
@@ -268,18 +269,19 @@ namespace VHDMounter
             var currentInputMode = InputMode;
             if (currentInputMode == Io4InputRoutingMode.NetworkIpv4Edit)
             {
+                ResetTestHoldState();
                 ProcessNetworkIpv4EditorSnapshot(newPresses);
             }
             else
             {
-                ProcessNavigationSnapshot(newPresses);
+                ProcessNavigationSnapshot(newPresses, snapshot);
             }
 
             previousSnapshot = snapshot;
             hasPreviousSnapshot = true;
         }
 
-        private void ProcessNavigationSnapshot(ushort newPresses)
+        private void ProcessNavigationSnapshot(ushort newPresses, Io4InputSnapshot snapshot)
         {
             if ((newPresses & Io4Constants.P1Button6Mask) != 0)
             {
@@ -301,15 +303,38 @@ namespace VHDMounter
                 RaiseAction(UiInputAction.Back, "P1Button5");
             }
 
-            // maimai's ninth 1P input is the physical select/start key. Treat
-            // it as a confirm alias so a cabinet without a dedicated Button 4
-            // can still operate the service pages.
-            if ((newPresses & Io4Constants.P1SelectMask) != 0)
+            ProcessTestHold(snapshot);
+            FinalizeCoinActivityIfReleased();
+        }
+
+        private void ProcessTestHold(Io4InputSnapshot snapshot)
+        {
+            if (!snapshot.IsPressed(Io4Button.Test))
             {
-                RaiseAction(UiInputAction.Confirm, "P1Select");
+                ResetTestHoldState();
+                return;
             }
 
-            FinalizeCoinActivityIfReleased();
+            var now = timestampProvider();
+            if (!testHoldStartTimestamp.HasValue)
+            {
+                testHoldStartTimestamp = now;
+                testHoldConsumed = false;
+                return;
+            }
+
+            if (testHoldConsumed || IsMenuOpen || IgnoreMenuOpenRequests)
+            {
+                return;
+            }
+
+            if (ElapsedMilliseconds(testHoldStartTimestamp.Value, now) < Io4Constants.TestHoldMilliseconds)
+            {
+                return;
+            }
+
+            testHoldConsumed = true;
+            RaiseAction(UiInputAction.OpenServiceMenu, "TestHold1s");
         }
 
         private void ProcessNetworkIpv4EditorSnapshot(ushort newPresses)
@@ -373,30 +398,10 @@ namespace VHDMounter
             if (!coinActivityStartTimestamp.HasValue)
             {
                 coinActivityStartTimestamp = now;
-                coinLongPressConsumed = false;
             }
 
             RaiseButton(Io4Button.Coin);
             lastCoinPulseTimestamp = now;
-            var currentInputMode = InputMode;
-            var elapsedMilliseconds = ElapsedMilliseconds(coinActivityStartTimestamp.Value, now);
-
-            if (currentInputMode == Io4InputRoutingMode.NetworkIpv4Edit)
-            {
-                if (!coinLongPressConsumed && elapsedMilliseconds >= Io4Constants.NetworkEditorCoinHoldMilliseconds)
-                {
-                    coinLongPressConsumed = true;
-                    RaiseRawInput(Io4RawInputKind.CoinLongPressConfirm, "CoinHold1s");
-                }
-            }
-            else if (!coinLongPressConsumed &&
-                     !IsMenuOpen &&
-                     !IgnoreMenuOpenRequests &&
-                     elapsedMilliseconds >= Io4Constants.CoinHoldSeconds * 1000L)
-            {
-                coinLongPressConsumed = true;
-                RaiseAction(UiInputAction.OpenServiceMenu, "CoinHold15s");
-            }
         }
 
         private void FinalizeCoinActivityIfReleased()
@@ -416,7 +421,7 @@ namespace VHDMounter
 
         private void FinalizeCoinActivity()
         {
-            if (InputMode == Io4InputRoutingMode.NetworkIpv4Edit && !coinLongPressConsumed)
+            if (InputMode == Io4InputRoutingMode.NetworkIpv4Edit)
             {
                 RaiseRawInput(Io4RawInputKind.CoinShortPress, "CoinShort");
             }
@@ -495,13 +500,19 @@ namespace VHDMounter
             previousSnapshot = Io4InputSnapshot.Empty;
             hasPreviousSnapshot = false;
             ResetCoinState();
+            ResetTestHoldState();
         }
 
         private void ResetCoinState()
         {
             coinActivityStartTimestamp = null;
             lastCoinPulseTimestamp = 0;
-            coinLongPressConsumed = false;
+        }
+
+        private void ResetTestHoldState()
+        {
+            testHoldStartTimestamp = null;
+            testHoldConsumed = false;
         }
 
         private void ThrowIfDisposed()

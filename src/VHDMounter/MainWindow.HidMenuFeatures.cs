@@ -35,7 +35,7 @@ namespace VHDMounter
         private void InitializeFeatureServices()
         {
             OverlayItemsControl.ItemsSource = overlayLines;
-            OverlayFooterText.Text = "Coin 长按 15 秒、IO4 Service/Test 或 F12 可打开系统菜单";
+            OverlayFooterText.Text = "Maimoller Coin 长按 15 秒、IO4 Test 长按 1 秒或 F12 可打开系统菜单";
 
             systemInfoService = new SystemInfoService();
             systemInfoService.SnapshotUpdated += OnSystemInfoSnapshotUpdated;
@@ -47,7 +47,6 @@ namespace VHDMounter
             maimollerInputService.Start();
 
             io4InputService = new Io4InputService();
-            io4InputService.ButtonPressed += OnIo4ButtonPressed;
             io4InputService.ActionRaised += OnIo4ActionRaised;
             io4InputService.RawInputRaised += OnIo4RawInputRaised;
             io4InputService.Start();
@@ -68,7 +67,6 @@ namespace VHDMounter
 
             if (io4InputService != null)
             {
-                io4InputService.ButtonPressed -= OnIo4ButtonPressed;
                 io4InputService.ActionRaised -= OnIo4ActionRaised;
                 io4InputService.RawInputRaised -= OnIo4RawInputRaised;
                 io4InputService.Dispose();
@@ -338,28 +336,6 @@ namespace VHDMounter
                     ConvertIo4RawInputKind(e.Kind),
                     e.Source,
                     e.Digit)));
-        }
-
-        private void OnIo4ButtonPressed(object sender, Io4ButtonEventArgs e)
-        {
-            if (e.Button != Io4Button.Service && e.Button != Io4Button.Test)
-            {
-                return;
-            }
-
-            Dispatcher.InvokeAsync(async () =>
-            {
-                // In the IPv4 editor the IO4 receiver emits Service/Test as
-                // raw digits. Do not route the low-level edge a second time.
-                if (isServiceMenuOpen && currentOverlayState == OverlayState.NetworkIpv4Edit)
-                {
-                    return;
-                }
-
-                // IO4 system buttons are entry controls for this machine's service UI.
-                // The receiver performs edge detection before raising this event.
-                await HandleInputActionAsync(UiInputAction.OpenServiceMenu);
-            });
         }
 
         private static MaimollerRawInputKind ConvertIo4RawInputKind(Io4RawInputKind kind)

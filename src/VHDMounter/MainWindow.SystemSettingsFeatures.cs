@@ -584,7 +584,7 @@ namespace VHDMounter
             OverlayPageIndicatorText.Text = networkEditorStatusMessage;
             OverlayFooterText.Text = BuildNetworkEditorFooterText();
             NetworkEditorAdapterText.Text = networkIpv4EditorState == null ? string.Empty : networkIpv4EditorState.GetActiveSegmentDescriptor();
-            NetworkEditorHintText.Text = "Coin 短按切换下一段，连续短按三次返回，长按 1 秒应用。";
+            NetworkEditorHintText.Text = "Coin 短按切换下一段，连续短按三次返回；IO4 仅支持 Coin 短按，不能用 Coin 长按保存。";
             NetworkEditorFieldsItemsControl.ItemsSource = networkIpv4EditorState?.BuildFieldDisplays() ?? Array.Empty<NetworkEditorFieldDisplay>();
         }
 
@@ -688,7 +688,7 @@ namespace VHDMounter
             {
                 NetworkEditorViewStatus.Applying => "正在应用网络设置，请勿断电或拔出网线。",
                 NetworkEditorViewStatus.Applied => "配置已生效，Coin 短按切段，连续短按三次返回。",
-                _ => "Coin 在 20 个输入段中循环切换，连续短按三次返回，长按 1 秒应用。",
+                _ => "Coin 在 20 个输入段中循环切换，连续短按三次返回；IO4 仅支持短按。",
             };
         }
 

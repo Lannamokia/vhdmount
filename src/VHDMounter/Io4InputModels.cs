@@ -50,8 +50,7 @@ namespace VHDMounter
         public const ushort ServiceSwitchMask = 1 << 6;
         public const ushort TestSwitchMask = 1 << 9;
 
-        public const int CoinHoldSeconds = 15;
-        public const int NetworkEditorCoinHoldMilliseconds = 1000;
+        public const int TestHoldMilliseconds = 1000;
         public const int CoinReleaseGapMilliseconds = 100;
 
         public static readonly Io4Button[] Player1Buttons =
