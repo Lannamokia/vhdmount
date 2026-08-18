@@ -83,20 +83,22 @@ EnableLogUpload=false
 
 ---
 
-## Maimoller HID 系统菜单（仅限增强版）
+## 系统维护菜单（仅限增强版）
 
-使用 `VHDMounter_Maimoller.exe` 时，可通过 Maimoller 操控面板访问系统菜单。
+使用 `VHDMounter_Maimoller.exe` 时，可通过 Maimoller 或 IO4 操控面板访问系统菜单。
 
 简要操作：
 
 | 操作 | 按键 |
 |------|------|
-| 打开菜单 | Coin 长按 15 秒 |
-| 上/下切换 | 6 号键 / 3 号键 |
-| 确认 | 4 号键 |
-| 返回/关闭 | 5 号键 |
+| 操作 | Maimoller | IO4 |
+|------|-----------|-----|
+| 打开菜单 | Coin 长按 15 秒 | Test 长按 1 秒 |
+| 上/下切换 | Button 6 / Button 3 | P1 Button 6 / P1 Button 3 |
+| 确认 | Button 4 | P1 Button 4 |
+| 返回/关闭 | Button 5 | P1 Button 5 |
 
-完整功能说明、HID 数据包格式、数字编辑模式、故障排查等详情请参阅 [Maimoller HID 系统菜单指南](maimoller)。
+完整功能说明、IPv4 编辑方式和故障排查请参阅[系统维护菜单操作指南](maimoller)。
 
 ---
 

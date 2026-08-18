@@ -23,7 +23,7 @@
 | [管理者指南](./admin-guide) | 管理员 | 机台审批、证书管理、部署管理、`NX_INS` 更新与 `NXLOG` 日志取回 |
 | [RustDesk 远程控制桥接](./rustdesk-bridge-admin-guide) | 管理员 | RustDesk 可信主控端、Bridge Secret、上报密码读取 |
 | [离线更新器](./updater) | 管理员 | `NX_INS` 可移动盘更新、清单签名、自动替换 |
-| [Maimoller HID 系统菜单](./maimoller) | 与maimoller手台配套使用的用户 | HID 面板、系统菜单、按键映射 |
+| [系统维护菜单操作指南](./maimoller) | 使用 Maimoller 或 IO4 的机台用户 | 系统菜单、网络设置、按键映射 |
 | [常见问题](./faq) | 所有人 | 常见故障与排查建议 |
 
 </div>
