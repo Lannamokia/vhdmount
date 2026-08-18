@@ -69,7 +69,7 @@ namespace VHDMounter
 
                     if (state == RegistrationState.NotRegistered)
                     {
-                        statusCallback?.Invoke("请联系管理员注册机台，正等待注册结果回传");
+                        statusCallback?.Invoke("正在提交机台注册请求...");
 
                         // 遵守退避间隔，避免触发服务端限流
                         if (_nextRegistrationAttempt.HasValue && DateTimeOffset.UtcNow < _nextRegistrationAttempt.Value)
@@ -82,15 +82,24 @@ namespace VHDMounter
                         var submitted = await SubmitRegistrationAsync(baseUrl, machineId, pubPem, ct);
                         if (!submitted)
                         {
+                            statusCallback?.Invoke("机台注册请求提交失败，稍后重试");
                             // 提交失败，等 5 秒后重新探测
                             await Task.Delay(5000, ct);
                             continue;
                         }
                         CurrentState = RegistrationState.Submitted;
+                        statusCallback?.Invoke("机台注册请求已提交，等待管理员审批");
                     }
 
                     // 已提交或未审批，继续阻塞等待
-                    statusCallback?.Invoke("请联系管理员注册机台，正等待注册结果回传");
+                    if (CurrentState == RegistrationState.Submitted)
+                    {
+                        statusCallback?.Invoke("机台注册请求已提交，等待管理员审批");
+                    }
+                    else
+                    {
+                        statusCallback?.Invoke("暂时无法确认机台注册状态，正在重试");
+                    }
                     await Task.Delay(2000, ct);
                 }
 
@@ -123,17 +132,6 @@ namespace VHDMounter
                 var body = await response.Content.ReadAsStringAsync(ct);
                 var (errorCode, errorMessage) = ParseErrorPayload(body);
 
-                if ((int)response.StatusCode == 400)
-                {
-                    // 优先识别结构化错误码；服务端尚未升级时回退到中文/英文关键词
-                    if (string.Equals(errorCode, "MACHINE_NOT_REGISTERED", StringComparison.OrdinalIgnoreCase)
-                        || ContainsNotRegisteredHint(errorMessage))
-                    {
-                        return RegistrationState.NotRegistered;
-                    }
-                    return RegistrationState.Submitted;
-                }
-
                 if ((int)response.StatusCode == 429)
                 {
                     // 探针被限流时退避，避免每 2 秒一次轮询持续触发限流
@@ -144,8 +142,7 @@ namespace VHDMounter
                     return RegistrationState.Unknown; // 让上层重新探测
                 }
 
-                // 403（未审批/已吊销）或其他错误，统一视为已提交但尚未通过
-                return RegistrationState.Submitted;
+                return ClassifyProbeResponse((int)response.StatusCode, errorCode, errorMessage);
             }
             catch (TaskCanceledException) when (ct.IsCancellationRequested)
             {
@@ -185,6 +182,30 @@ namespace VHDMounter
             return errorMessage.Contains("未注册公钥")
                 || errorMessage.Contains("not registered", StringComparison.OrdinalIgnoreCase)
                 || errorMessage.Contains("未注册", StringComparison.Ordinal);
+        }
+
+        private static RegistrationState ClassifyProbeResponse(
+            int statusCode, string errorCode, string errorMessage)
+        {
+            // 旧服务端对未知机台返回 404；兼容识别为尚未注册，确保仍会提交公钥。
+            if (statusCode == 404)
+            {
+                return RegistrationState.NotRegistered;
+            }
+
+            if (statusCode == 400
+                && (string.Equals(errorCode, "MACHINE_NOT_REGISTERED", StringComparison.OrdinalIgnoreCase)
+                    || ContainsNotRegisteredHint(errorMessage)))
+            {
+                return RegistrationState.NotRegistered;
+            }
+
+            if (statusCode == 403)
+            {
+                return RegistrationState.Submitted;
+            }
+
+            return RegistrationState.Unknown;
         }
 
         /// <summary>

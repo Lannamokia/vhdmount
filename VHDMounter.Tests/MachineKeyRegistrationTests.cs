@@ -69,6 +69,27 @@ namespace VHDMounter.Tests
             Assert.True(result);
         }
 
+        [Theory]
+        [InlineData(404, null, null, MachineKeyRegistration.RegistrationState.NotRegistered)]
+        [InlineData(400, "MACHINE_NOT_REGISTERED", "missing key", MachineKeyRegistration.RegistrationState.NotRegistered)]
+        [InlineData(400, null, "机台未注册公钥", MachineKeyRegistration.RegistrationState.NotRegistered)]
+        [InlineData(403, null, "机台密钥未审批", MachineKeyRegistration.RegistrationState.Submitted)]
+        [InlineData(500, null, "server error", MachineKeyRegistration.RegistrationState.Unknown)]
+        public void ClassifyProbeResponse_MapsRegistrationStates(
+            int statusCode,
+            string? errorCode,
+            string? errorMessage,
+            MachineKeyRegistration.RegistrationState expected)
+        {
+            var result = (MachineKeyRegistration.RegistrationState)InvokePrivateStatic(
+                "ClassifyProbeResponse",
+                statusCode,
+                errorCode,
+                errorMessage);
+
+            Assert.Equal(expected, result);
+        }
+
         [Fact]
         public void ResetStateForTests_ClearsCachedStateAndBackoff()
         {

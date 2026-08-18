@@ -438,8 +438,10 @@ class MachinesView extends StatelessWidget {
                 const SizedBox(height: 10),
                 Text('Key ID: ${machine.keyId ?? '未注册'}'),
                 Text('最后在线: ${machine.lastSeen ?? '未知'}'),
+                if (machine.publicKeyFingerprint != null)
+                  Text('机台公钥指纹: ${machine.publicKeyFingerprint}'),
                 if (machine.registrationCertFingerprint != null)
-                  Text('注册证书: ${machine.registrationCertFingerprint}'),
+                  Text('注册证书指纹: ${machine.registrationCertFingerprint}'),
                 const SizedBox(height: 16),
                 Wrap(
                   spacing: 10,

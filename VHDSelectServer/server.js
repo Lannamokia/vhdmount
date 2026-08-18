@@ -1369,15 +1369,20 @@ async function createApp(options = {}) {
         const machineId = assertMachineId(req.query.machineId);
         const machine = await runtime.database.getMachine(machineId);
 
-        if (!machine) {
+        if (!machine || !machine.pubkey_pem) {
+            if (machine) {
+                await runtime.database.updateMachineLastSeen(machineId);
+            }
             runtime.writeAudit(req, {
                 type: 'machine.log-bootstrap.read',
                 actor: 'machine',
                 result: 'failure',
                 machineId,
-                reason: '机台不存在',
+                reason: machine ? '机台未注册公钥' : '机台不存在',
             });
-            throw createJsonError(404, '机台不存在');
+            throw createJsonError(400, '机台未注册公钥', {
+                errorCode: 'MACHINE_NOT_REGISTERED',
+            });
         }
 
         await runtime.database.updateMachineLastSeen(machineId);
@@ -1404,17 +1409,6 @@ async function createApp(options = {}) {
             });
             throw createJsonError(403, '机台密钥未审批');
         }
-        if (!machine.pubkey_pem) {
-            runtime.writeAudit(req, {
-                type: 'machine.log-bootstrap.read',
-                actor: 'machine',
-                result: 'failure',
-                machineId,
-                reason: '机台未注册公钥',
-            });
-            throw createJsonError(400, '机台未注册公钥');
-        }
-
         const bootstrap = createMachineLogBootstrap(machineId, machine.pubkey_pem, encryptWithPublicKeyRSA);
         runtime.machineLogBootstrapCache.set(bootstrap.bootstrapId, bootstrap);
         runtime.writeAudit(req, {
@@ -1747,6 +1741,7 @@ async function createApp(options = {}) {
             res.status(error.statusCode || statusCode).json({
                 success: false,
                 error: error.message,
+                ...(error.errorCode ? { errorCode: error.errorCode } : {}),
             });
             return;
         }
@@ -1764,6 +1759,7 @@ async function createApp(options = {}) {
         res.status(statusCode).json({
             success: false,
             error: statusCode >= 500 ? (error.message || '服务器内部错误') : error.message,
+            ...(error.errorCode ? { errorCode: error.errorCode } : {}),
             ...(error.initializeRequired ? { initializeRequired: true } : {}),
             ...(error.requireAuth ? { requireAuth: true } : {}),
         });

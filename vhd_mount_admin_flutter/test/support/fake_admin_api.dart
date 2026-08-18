@@ -103,6 +103,7 @@ class FakeAdminApi implements AdminApi {
     String? keyId,
     String? keyType,
     String? registrationCertFingerprint,
+    String? publicKeyFingerprint,
     int? logRetentionActiveDaysOverride,
     bool keepRetentionOverride = true,
     String? lastSeen,
@@ -119,6 +120,8 @@ class FakeAdminApi implements AdminApi {
       keyType: keyType ?? machine.keyType,
       registrationCertFingerprint:
           registrationCertFingerprint ?? machine.registrationCertFingerprint,
+      publicKeyFingerprint:
+          publicKeyFingerprint ?? machine.publicKeyFingerprint,
       logRetentionActiveDaysOverride: keepRetentionOverride
           ? logRetentionActiveDaysOverride ?? machine.logRetentionActiveDaysOverride
           : logRetentionActiveDaysOverride,
@@ -218,6 +221,7 @@ class FakeAdminApi implements AdminApi {
         keyId: null,
         keyType: null,
         registrationCertFingerprint: null,
+        publicKeyFingerprint: null,
         logRetentionActiveDaysOverride: null,
         lastSeen: null,
       ),

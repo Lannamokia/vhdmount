@@ -17,6 +17,7 @@ const {
     attachMachineLogWebSocketServer,
     MACHINE_LOG_PROTOCOL_VERSION,
 } = require('../../machineLogServer');
+const { calculatePublicKeyFingerprint } = require('../../database');
 const { createApp } = require('../../server');
 
 const TEST_REGISTRATION_CERT_PEM = `-----BEGIN CERTIFICATE-----
@@ -105,6 +106,7 @@ function createFakeDatabase() {
         return {
             ...record,
             evhd_password_configured: evhdPasswords.has(machineId) && Boolean(evhdPasswords.get(machineId)),
+            public_key_fingerprint: calculatePublicKeyFingerprint(record.pubkey_pem),
         };
     }
 

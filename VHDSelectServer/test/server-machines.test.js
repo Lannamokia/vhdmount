@@ -83,6 +83,35 @@ test('机台 ID 保留原始大小写并支持按机台筛选审计日志', asyn
     assert.ok(auditResponse.body.entries.every((entry) => entry.machineId === 'Machine-Mixed-01'));
 });
 
+test('日志 bootstrap 会明确要求未知或无公钥机台提交注册', async (t) => {
+    const { client, fakeDatabase } = await createInitializedHarness(t);
+
+    const unknownResponse = await client
+        .get('/api/machine-log-bootstrap')
+        .query({ machineId: 'MACHINE-UNKNOWN-REG' })
+        .expect(400);
+
+    assert.equal(unknownResponse.body.errorCode, 'MACHINE_NOT_REGISTERED');
+
+    const machineId = 'MACHINE-WITHOUT-KEY';
+    await fakeDatabase.upsertMachine(machineId, false, 'SAFEBOOT');
+
+    const pendingResponse = await client
+        .get('/api/machine-log-bootstrap')
+        .query({ machineId })
+        .expect(400);
+
+    assert.equal(pendingResponse.body.errorCode, 'MACHINE_NOT_REGISTERED');
+
+    await fakeDatabase.revokeMachineKey(machineId);
+    const resetResponse = await client
+        .get('/api/machine-log-bootstrap')
+        .query({ machineId })
+        .expect(400);
+
+    assert.equal(resetResponse.body.errorCode, 'MACHINE_NOT_REGISTERED');
+});
+
 test('机台注册必须使用可信证书签名且拒绝 nonce 重放', async (t) => {
     const { client, totpSecret } = await createInitializedHarness(t);
     const machineId = 'Machine-Reg';
@@ -115,6 +144,17 @@ test('机台注册必须使用可信证书签名且拒绝 nonce 重放', async (
         .expect(401);
 
     await client.post('/api/auth/login').send({ password: 'ComplexPassword123!' }).expect(200);
+
+    const expectedPublicKeyFingerprint = crypto.createHash('sha256')
+        .update(machineKeyPair.publicKey.export({ type: 'spki', format: 'der' }))
+        .digest('hex')
+        .toUpperCase();
+    const machinesResponse = await client.get('/api/machines').expect(200);
+    const registeredMachine = machinesResponse.body.machines.find(
+        (machine) => machine.machine_id === machineId,
+    );
+    assert.equal(registeredMachine.public_key_fingerprint, expectedPublicKeyFingerprint);
+
     await client.post('/api/auth/otp/verify').send({ code: authenticator.generate(totpSecret) }).expect(200);
     await client.post(`/api/machines/${machineId}/approve`).send({ approved: true }).expect(200);
     await client

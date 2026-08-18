@@ -34,6 +34,7 @@ MachineRecord _machine(
     keyId: 'key-$machineId',
     keyType: 'RSA',
     registrationCertFingerprint: 'ABC123',
+    publicKeyFingerprint: 'DEF456',
     logRetentionActiveDaysOverride: logRetentionActiveDaysOverride,
     lastSeen: '2026-04-03T08:00:00Z',
   );
@@ -50,6 +51,39 @@ void _resetViewport(WidgetTester tester) {
 }
 
 void main() {
+  test('MachineRecord parses machine public key fingerprint separately', () {
+    final machine = MachineRecord.fromJson(const <String, dynamic>{
+      'machine_id': 'MACHINE-01',
+      'registration_cert_fingerprint': 'CERT123',
+      'public_key_fingerprint': 'PUB456',
+    });
+
+    expect(machine.registrationCertFingerprint, 'CERT123');
+    expect(machine.publicKeyFingerprint, 'PUB456');
+  });
+
+  testWidgets('machine card shows public key and registration certificate fingerprints', (
+    tester,
+  ) async {
+    _setDesktopViewport(tester, const Size(1600, 960));
+    addTearDown(() => _resetViewport(tester));
+
+    final controller = AppController(
+      api: FakeAdminApi(
+        serverStatus: _readyServerStatus,
+        authStatus: _authenticatedStatus,
+        machines: <MachineRecord>[_machine('MACHINE-01')],
+      ),
+      clientConfigStore: FakeClientConfigStore(),
+    );
+
+    await tester.pumpWidget(AdminApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    expect(find.text('机台公钥指纹: DEF456'), findsOneWidget);
+    expect(find.text('注册证书指纹: ABC123'), findsOneWidget);
+  });
+
   testWidgets('opening audit from machine card preserves machine filter', (
     tester,
   ) async {

@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const { Pool } = require('pg');
 
 const { runSchemaMigrations } = require('./schemaMigrations');
@@ -109,6 +110,20 @@ function normalizeDbConfig(rawConfig = {}) {
     };
 }
 
+function calculatePublicKeyFingerprint(pubkeyPem) {
+    if (typeof pubkeyPem !== 'string' || !pubkeyPem.trim()) {
+        return null;
+    }
+
+    try {
+        const publicKey = crypto.createPublicKey(pubkeyPem);
+        const spkiDer = publicKey.export({ type: 'spki', format: 'der' });
+        return crypto.createHash('sha256').update(spkiDer).digest('hex').toUpperCase();
+    } catch {
+        return null;
+    }
+}
+
 function mapMachineRow(row) {
     if (!row) {
         return null;
@@ -116,6 +131,7 @@ function mapMachineRow(row) {
 
     return {
         ...row,
+        public_key_fingerprint: calculatePublicKeyFingerprint(row.pubkey_pem),
         log_retention_active_days_override: row.log_retention_active_days_override == null
             ? null
             : Number(row.log_retention_active_days_override),
@@ -1044,6 +1060,7 @@ function createDatabase(rawConfig, logger = console) {
 
 module.exports = {
     assertMachineLogTimeZone,
+    calculatePublicKeyFingerprint,
     createDatabase,
     DEFAULT_MACHINE_LOG_RUNTIME_SETTINGS,
     formatLogDay,

@@ -697,6 +697,7 @@ class MachineRecord {
     required this.keyId,
     required this.keyType,
     required this.registrationCertFingerprint,
+    this.publicKeyFingerprint,
     required this.logRetentionActiveDaysOverride,
     required this.lastSeen,
   });
@@ -710,6 +711,7 @@ class MachineRecord {
   final String? keyId;
   final String? keyType;
   final String? registrationCertFingerprint;
+  final String? publicKeyFingerprint;
   final int? logRetentionActiveDaysOverride;
   final String? lastSeen;
 
@@ -725,6 +727,7 @@ class MachineRecord {
       keyType: json['key_type'] as String?,
       registrationCertFingerprint:
           json['registration_cert_fingerprint'] as String?,
+      publicKeyFingerprint: json['public_key_fingerprint'] as String?,
       logRetentionActiveDaysOverride:
           (json['log_retention_active_days_override'] as num?)?.toInt(),
       lastSeen: json['last_seen'] as String?,

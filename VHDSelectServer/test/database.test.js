@@ -1,12 +1,27 @@
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const test = require('node:test');
 
 const {
     assertMachineLogTimeZone,
+    calculatePublicKeyFingerprint,
     formatLogDay,
     normalizeMachineLogRuntimeSettings,
     normalizeMachineLogTimeZone,
 } = require('../database');
+
+test('calculatePublicKeyFingerprint 使用规范 SPKI DER 计算 SHA-256', () => {
+    const keyPair = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const publicKeyPem = keyPair.publicKey.export({ type: 'spki', format: 'pem' });
+    const expected = crypto.createHash('sha256')
+        .update(keyPair.publicKey.export({ type: 'spki', format: 'der' }))
+        .digest('hex')
+        .toUpperCase();
+
+    assert.equal(calculatePublicKeyFingerprint(publicKeyPem), expected);
+    assert.equal(calculatePublicKeyFingerprint(null), null);
+    assert.equal(calculatePublicKeyFingerprint('not-a-public-key'), null);
+});
 
 test('normalizeMachineLogTimeZone 仅接受 IANA 时区并回退到默认值', () => {
     assert.equal(normalizeMachineLogTimeZone('Asia/Shanghai'), 'Asia/Shanghai');
