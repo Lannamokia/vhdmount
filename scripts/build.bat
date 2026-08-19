@@ -190,11 +190,39 @@ exit /b
 :build_flutter
 if %BUILD_FLUTTER%==0 exit /b
 echo [5/6] Building Flutter Windows Client...
-pushd "%FLUTTER_DIR%"
-if not exist "build\native_assets\windows" mkdir "build\native_assets\windows"
+set "FLUTTER_ASCII_DRIVE="
+set "FLUTTER_MAPPED_ROOT="
+set "FLUTTER_BUILD_EXIT=0"
+
+REM Flutter 3.44's Windows toolchain can corrupt non-ASCII project paths when
+REM MSBuild invokes tool_backend.dart. Build through a temporary ASCII drive
+REM mapped to the repository root so both PROJECT_DIR and CMake paths stay
+REM representable to every process in the chain.
+for %%d in (Q R S T U V W X Y Z) do (
+    if not defined FLUTTER_ASCII_DRIVE if not exist "%%d:\" (
+        subst %%d: "%ROOT_DIR%" >nul 2>&1
+        if not errorlevel 1 (
+            set "FLUTTER_ASCII_DRIVE=%%d:"
+            set "FLUTTER_MAPPED_ROOT=%%d:\"
+        )
+    )
+)
+
+if not defined FLUTTER_ASCII_DRIVE (
+    echo   [x] Flutter build FAILED: no free drive letter for ASCII path mapping.
+    exit /b
+)
+
+pushd "%FLUTTER_MAPPED_ROOT%\vhd_mount_admin_flutter"
+call flutter clean
+if not %ERRORLEVEL%==0 (popd & subst %FLUTTER_ASCII_DRIVE% /d >nul 2>&1 & echo   [x] Flutter clean FAILED. & exit /b)
+call flutter pub get
+if not %ERRORLEVEL%==0 (popd & subst %FLUTTER_ASCII_DRIVE% /d >nul 2>&1 & echo   [x] Flutter pub get FAILED. & exit /b)
 call flutter build windows
-if not %ERRORLEVEL%==0 (popd & echo   [x] Flutter build FAILED. & exit /b)
+set "FLUTTER_BUILD_EXIT=%ERRORLEVEL%"
 popd
+subst %FLUTTER_ASCII_DRIVE% /d >nul 2>&1
+if not %FLUTTER_BUILD_EXIT%==0 (echo   [x] Flutter build FAILED. & exit /b)
 
 set "FLUTTER_TEMP_BUILD=%TEMP%\vhd_flutter_build_%RANDOM%"
 mkdir "%FLUTTER_TEMP_BUILD%"
