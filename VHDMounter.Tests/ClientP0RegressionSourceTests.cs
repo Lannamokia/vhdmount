@@ -25,6 +25,17 @@ namespace VHDMounter.Tests
         }
 
         [Fact]
+        public void SecondaryDisplayMirror_RendersEachFrameIntoFreshBitmap()
+        {
+            var source = ReadSource("src/VHDMounter/SecondaryDisplayMirrorWindow.cs");
+
+            Assert.Contains("var snapshot = new RenderTargetBitmap", source, StringComparison.Ordinal);
+            Assert.Contains("snapshot.Render(sourceVisual)", source, StringComparison.Ordinal);
+            Assert.Contains("snapshot.Freeze()", source, StringComparison.Ordinal);
+            Assert.DoesNotContain("private RenderTargetBitmap renderBitmap", source, StringComparison.Ordinal);
+        }
+
+        [Fact]
         public void MainWindow_PropagatesAppLifetimeTokenIntoEvhdMountFlow()
         {
             var source = ReadSource("src/VHDMounter/MainWindow.xaml.cs");

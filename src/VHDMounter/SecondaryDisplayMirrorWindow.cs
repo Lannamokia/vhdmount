@@ -14,7 +14,6 @@ namespace VHDMounter
         private readonly Visual sourceVisual;
         private readonly Image mirrorSurface;
         private readonly DispatcherTimer refreshTimer;
-        private RenderTargetBitmap renderBitmap;
         private bool renderFailureLogged;
         private bool disposed;
 
@@ -136,7 +135,6 @@ namespace VHDMounter
 
             Close();
             mirrorSurface.Source = null;
-            renderBitmap = null;
             CurrentMonitor = null;
         }
 
@@ -165,20 +163,20 @@ namespace VHDMounter
             {
                 var pixelWidth = Math.Max(1, (int)Math.Ceiling(width));
                 var pixelHeight = Math.Max(1, (int)Math.Ceiling(height));
-                if (renderBitmap == null ||
-                    renderBitmap.PixelWidth != pixelWidth ||
-                    renderBitmap.PixelHeight != pixelHeight)
-                {
-                    renderBitmap = new RenderTargetBitmap(
-                        pixelWidth,
-                        pixelHeight,
-                        96,
-                        96,
-                        PixelFormats.Pbgra32);
-                }
-
-                renderBitmap.Render(sourceVisual);
-                mirrorSurface.Source = renderBitmap;
+                // RenderTargetBitmap.Render appends the visual to the existing
+                // bitmap; it does not clear the previous frame. Reusing one
+                // instance therefore makes every update draw another copy of
+                // the UI on top of the last one (visible as stacked text on
+                // the secondary display). Always render into a fresh bitmap.
+                var snapshot = new RenderTargetBitmap(
+                    pixelWidth,
+                    pixelHeight,
+                    96,
+                    96,
+                    PixelFormats.Pbgra32);
+                snapshot.Render(sourceVisual);
+                snapshot.Freeze();
+                mirrorSurface.Source = snapshot;
                 renderFailureLogged = false;
             }
             catch (Exception ex)
