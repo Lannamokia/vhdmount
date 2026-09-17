@@ -771,7 +771,13 @@ namespace VHDMounter
                     return;
                 }
 
-                using var updater = new SoftwareDeploy.GameContentUpdater(config.serverUrl, config.machineId, trustedKeysPath, AppContext.BaseDirectory, config.timeoutMinutes);
+                using var updater = new SoftwareDeploy.GameContentUpdater(
+                    config.serverUrl,
+                    config.machineId,
+                    trustedKeysPath,
+                    AppContext.BaseDirectory,
+                    config.timeoutMinutes,
+                    config.optionUpdatePath);
                 await updater.CheckAndApplyAsync(currentPackagePath, _appLifetimeToken);
             }
             catch (Exception ex)
@@ -780,36 +786,41 @@ namespace VHDMounter
             }
         }
 
-        private (string serverUrl, string machineId, int timeoutMinutes) ReadDeployConfig()
+        private (string serverUrl, string machineId, int timeoutMinutes, string optionUpdatePath) ReadDeployConfig()
         {
             try
             {
                 var configPath = System.IO.Path.Combine(AppContext.BaseDirectory, "vhdmonter_config.ini");
                 if (!System.IO.File.Exists(configPath))
-                    return ("", "", 10);
+                    return ("", "", 10, "");
 
-                var lines = System.IO.File.ReadAllLines(configPath);
-                string serverUrl = "";
-                string machineId = "";
-                int timeoutMinutes = 10;
-                foreach (var line in lines)
+                var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                IniLineParser.ParseInto(
+                    configPath,
+                    values,
+                    message => Trace.WriteLine($"[Config] {message}"));
+
+                values.TryGetValue("ServerBaseUrl", out var serverUrl);
+                values.TryGetValue("MachineId", out var machineId);
+                values.TryGetValue("GameContentUpdateTimeout", out var timeoutValue);
+                values.TryGetValue("GameOptionUpdatePath", out var optionUpdatePath);
+
+                var timeoutMinutes = 10;
+                if (!string.IsNullOrWhiteSpace(timeoutValue) &&
+                    (!int.TryParse(timeoutValue, out timeoutMinutes) || timeoutMinutes <= 0))
                 {
-                    var trimmed = line.Trim();
-                    if (trimmed.StartsWith("ServerBaseUrl="))
-                        serverUrl = trimmed.Substring("ServerBaseUrl=".Length).Trim();
-                    if (trimmed.StartsWith("MachineId="))
-                        machineId = trimmed.Substring("MachineId=".Length).Trim();
-                    if (trimmed.StartsWith("GameContentUpdateTimeout="))
-                    {
-                        if (!int.TryParse(trimmed.Substring("GameContentUpdateTimeout=".Length).Trim(), out timeoutMinutes))
-                            timeoutMinutes = 10;
-                    }
+                    timeoutMinutes = 10;
                 }
-                return (serverUrl, machineId, timeoutMinutes <= 0 ? 10 : timeoutMinutes);
+
+                return (
+                    serverUrl ?? string.Empty,
+                    machineId ?? string.Empty,
+                    timeoutMinutes,
+                    optionUpdatePath?.Trim() ?? string.Empty);
             }
             catch
             {
-                return ("", "", 10);
+                return ("", "", 10, "");
             }
         }
     }

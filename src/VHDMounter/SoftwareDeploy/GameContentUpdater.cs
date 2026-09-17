@@ -24,11 +24,18 @@ namespace VHDMounter.SoftwareDeploy
         private readonly DeployHistoryStore _historyStore;
         private readonly string _appVersion;
         private readonly string _keyId;
+        private readonly string _configuredOptionUpdatePath;
         private const string UA_PREFIX = "VHDMount/";
         private const int DEFAULT_TIMEOUT_MINUTES = 10;
         private bool _disposed;
 
-        public GameContentUpdater(string serverUrl, string machineId, string trustedKeysPath, string baseDir, int timeoutMinutes = DEFAULT_TIMEOUT_MINUTES)
+        public GameContentUpdater(
+            string serverUrl,
+            string machineId,
+            string trustedKeysPath,
+            string baseDir,
+            int timeoutMinutes = DEFAULT_TIMEOUT_MINUTES,
+            string optionUpdatePath = "")
         {
             _serverUrl = serverUrl.TrimEnd('/');
             _machineId = machineId;
@@ -39,6 +46,7 @@ namespace VHDMounter.SoftwareDeploy
             _downloader = new DeployDownloader();
             _historyStore = new DeployHistoryStore(baseDir);
             _keyId = DeployRequestSigner.BuildDefaultKeyId(machineId);
+            _configuredOptionUpdatePath = optionUpdatePath?.Trim() ?? string.Empty;
 
             var version = Assembly.GetExecutingAssembly().GetName().Version;
             _appVersion = version != null ? $"{version.Major}.{version.Minor}.{version.Build}" : "1.0.0";
@@ -58,9 +66,11 @@ namespace VHDMounter.SoftwareDeploy
                 return;
             }
 
-            if (!ValidateOptionTargetPath(currentPackagePath, out var optionPath))
+            if (!ValidateOptionTargetPath(currentPackagePath, _configuredOptionUpdatePath, out var optionPath))
             {
-                Trace.WriteLine($"[GameContentUpdater] 目标 option 路径不合法: {currentPackagePath}");
+                Trace.WriteLine(
+                    $"[GameContentUpdater] 目标 option 路径不合法: current={currentPackagePath}, " +
+                    $"configured={_configuredOptionUpdatePath}");
                 return;
             }
 
@@ -357,36 +367,66 @@ namespace VHDMounter.SoftwareDeploy
 
         internal static bool ValidateOptionTargetPath(string currentPackagePath, out string optionPath)
         {
+            return ValidateOptionTargetPath(currentPackagePath, string.Empty, out optionPath);
+        }
+
+        internal static bool ValidateOptionTargetPath(
+            string currentPackagePath,
+            string configuredOptionUpdatePath,
+            out string optionPath)
+        {
             optionPath = string.Empty;
             try
             {
-                if (!Path.IsPathRooted(currentPackagePath))
-                    return false;
+                var hasConfiguredPath = !string.IsNullOrWhiteSpace(configuredOptionUpdatePath);
+                var targetPath = hasConfiguredPath
+                    ? configuredOptionUpdatePath.Trim()
+                    : Path.Combine(currentPackagePath, "option");
 
                 // 拒绝路径中的 .. 穿越
-                if (currentPackagePath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                if (targetPath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
                     .Contains("..", StringComparer.Ordinal))
                     return false;
 
-                string fullCurrent = Path.GetFullPath(currentPackagePath);
-                if (!fullCurrent.StartsWith(@"M:\", StringComparison.OrdinalIgnoreCase))
+                if (!Path.IsPathRooted(targetPath))
                     return false;
 
-                optionPath = Path.GetFullPath(Path.Combine(fullCurrent, "option"));
-                string currentWithSep = fullCurrent.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-                if (!optionPath.StartsWith(currentWithSep, StringComparison.OrdinalIgnoreCase))
+                var fullTarget = Path.GetFullPath(targetPath);
+                if (!fullTarget.StartsWith(@"M:\", StringComparison.OrdinalIgnoreCase))
                     return false;
 
-                if (!string.Equals(Path.GetFileName(optionPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)), "option", StringComparison.OrdinalIgnoreCase))
+                var targetRoot = Path.GetPathRoot(fullTarget);
+                if (string.IsNullOrWhiteSpace(targetRoot) ||
+                    string.Equals(
+                        fullTarget.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                        targetRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                        StringComparison.OrdinalIgnoreCase))
                     return false;
 
-                if (Directory.Exists(optionPath))
+                if (!hasConfiguredPath)
                 {
-                    var info = new DirectoryInfo(optionPath);
+                    if (!Path.IsPathRooted(currentPackagePath))
+                        return false;
+
+                    var fullCurrent = Path.GetFullPath(currentPackagePath);
+                    if (!fullCurrent.StartsWith(@"M:\", StringComparison.OrdinalIgnoreCase))
+                        return false;
+
+                    var currentWithSep = fullCurrent.TrimEnd(
+                        Path.DirectorySeparatorChar,
+                        Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                    if (!fullTarget.StartsWith(currentWithSep, StringComparison.OrdinalIgnoreCase))
+                        return false;
+                }
+
+                if (Directory.Exists(fullTarget))
+                {
+                    var info = new DirectoryInfo(fullTarget);
                     if ((info.Attributes & FileAttributes.ReparsePoint) == FileAttributes.ReparsePoint)
                         return false;
                 }
 
+                optionPath = fullTarget;
                 return true;
             }
             catch

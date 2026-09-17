@@ -118,6 +118,66 @@ namespace VHDMounter.Tests
         }
 
         [Fact]
+        public void ValidateOptionTargetPath_UsesConfiguredAbsoluteOptionPathWithArbitraryLeafName()
+        {
+            bool ok = GameContentUpdater.ValidateOptionTargetPath(
+                @"M:\package",
+                @"M:\custom-content\A001",
+                out string optionPath);
+
+            Assert.True(ok);
+            Assert.Equal(@"M:\custom-content\A001", optionPath);
+        }
+
+        [Fact]
+        public void ValidateOptionTargetPath_BlankConfiguredPathKeepsLegacyDefault()
+        {
+            bool ok = GameContentUpdater.ValidateOptionTargetPath(
+                @"M:\package",
+                string.Empty,
+                out string optionPath);
+
+            Assert.True(ok);
+            Assert.Equal(@"M:\package\option", optionPath);
+        }
+
+        [Fact]
+        public void ValidateOptionTargetPath_RejectsConfiguredDriveRoot()
+        {
+            bool ok = GameContentUpdater.ValidateOptionTargetPath(
+                @"M:\package",
+                @"M:\",
+                out string optionPath);
+
+            Assert.False(ok);
+            Assert.Equal(string.Empty, optionPath);
+        }
+
+        [Fact]
+        public void ValidateOptionTargetPath_RejectsConfiguredPathOutsideMDrive()
+        {
+            bool ok = GameContentUpdater.ValidateOptionTargetPath(
+                @"M:\package",
+                @"C:\game\option",
+                out string optionPath);
+
+            Assert.False(ok);
+            Assert.Equal(string.Empty, optionPath);
+        }
+
+        [Fact]
+        public void ValidateOptionTargetPath_RejectsConfiguredTraversal()
+        {
+            bool ok = GameContentUpdater.ValidateOptionTargetPath(
+                @"M:\package",
+                @"M:\package\..\option",
+                out string optionPath);
+
+            Assert.False(ok);
+            Assert.Equal(string.Empty, optionPath);
+        }
+
+        [Fact]
         public void ResolveContentSourceDirectory_PrefersPayload()
         {
             string extractDir = Path.Combine(_tempDir, "extract");
